@@ -1,0 +1,101 @@
+---
+name: charles-flow
+description: Charles's development loop — Claude Code orchestrates, Codex lanes do the exploring and the typing, and an isolated reviewer grades the result. Use whenever work in a repo with a .charles.toml means building a feature, fixing a bug, or hunting for improvements; also when the user says "use the flow", "dispatch a fleet", "codex fleet", or names the feature/debug/polish flow. Not for repos that have not opted in.
+---
+
+# The flow
+
+Claude Code is the orchestrator and never the implementer. Exploration and
+implementation go out to Codex lanes; grading goes to an isolated reviewer.
+
+**Gate:** this only applies in a repo with a `.charles.toml` at its root. If
+there isn't one, say so and offer `/charlesdr13:init` — do not silently apply
+the flow, and do not silently skip it either.
+
+## Lanes
+
+| Role | Lane | Model | Sandbox |
+|---|---|---|---|
+| Explore | `--lane explore` | deepseek-v4-flash @ max | read-only |
+| Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
+| Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
+
+Exploration is where fan-out pays, and deepseek at cents per task means 5
+explorers cost less than being wrong once. Implementation lands in the repo, so
+it gets the expensive lane. You may override with a stated reason — "this
+exploration needs to reason about a subtle ordering bug, using luna" is fine;
+switching lanes silently is not.
+
+Fleet sizes: 3 explorers / 1 implementer / 1 reviewer by default, capped at
+`max_fleet` in `.charles.toml`. More than one implementer requires the plan to
+declare the slices disjoint, and then each gets a `treehouse` worktree.
+
+Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
+agents — several in one message to run them concurrently.
+
+## Flow 1 — feature
+
+1. **Brainstorm.** Use `superpowers:brainstorming`. **Override its terminal
+   state:** it ends by invoking `writing-plans`; here it ends by handing the
+   design to the grill. Do not invoke `writing-plans`.
+2. **Explore.** 3+ `codex-explorer` agents in parallel, each on a different
+   angle — prior art in this repo, the integration points, the failure modes,
+   what a competing design would look like. Synthesise their reports yourself;
+   do not hand the raw reports to the user.
+3. **Grill.** `grill-rounds`, 2-3 rounds. Round 1 is adversarial and automated;
+   what survives comes to the user as one batched round.
+4. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
+5. **Implement.** `codex-implementer`.
+6. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
+   implementer's output.
+7. **Debug loop.** Run the green command. Not green → `charlesdr13:debug` flow.
+   Cap **3 cycles**, then stop and hand the user the state. Do not grind.
+
+## Flow 2 — debug
+
+1. `diagnosing-bugs` for the discipline — build the feedback loop first.
+2. Explore fleet on the failing behaviour. Each explorer gets the repro and is
+   asked for a cause **plus** the `file:line` evidence trail, never a patch.
+3. Ground to truth: confirm the cause yourself against source before fixing.
+4. `codex-implementer` for the fix.
+5. Verify: run the green command and paste the output. Same 3-cycle cap.
+
+## Flow 3 — polish
+
+1. Explore fleet asked for gaps, must-haves, and quality-of-life wins — one
+   explorer per lens, not three asked the same question.
+2. Brainstorm the shortlist with the user.
+3. Grill (`grill-rounds`).
+4. `codex-implementer`.
+5. Verify.
+
+## The ground-truth gate
+
+A hard gate, not a checklist to wave at. All three, before any implementation:
+
+1. **Claims are sourced.** Every factual claim in the plan cites `file:line` in
+   this repo. Unsourced claims get verified or deleted — extrapolating from a
+   package name is not verification.
+2. **Baseline is green.** Run the green command from `.charles.toml` *before*
+   touching anything. If it is already red, you are about to attribute an
+   existing failure to your change.
+3. **Prior art checked.** Search `nexus_search` and the vault wiki. If the thing
+   already exists, building it again is the most expensive possible outcome.
+
+## Proof protocol
+
+A step is not done until you have the output. `"47 passed, 0 failed"`, not
+"tests pass". `"312 lines"`, not "file written". Assertions without output are
+how a loop convinces itself it is finished.
+
+## Failure handling
+
+A lane failure is a hard stop after one cross-lane retry (the wrapper does this
+for you). **Never fall back to doing the work inline.** A fallback that fires on
+any error turns "always dispatch" into "dispatch when convenient", which is the
+same as not having the system at all. Report the failure and let the user decide.
+
+## Artifacts
+
+- Plan and grill verdict → `docs/specs/YYYY-MM-DD-<topic>.md`, committed.
+- Codex transcripts, gate output, hook state → `.charles/`, gitignored.
