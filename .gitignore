@@ -1,3 +1,6 @@
 .charles/
 *.jsonl
 .test-tmp/
+
+# tasks-axi backlog: run-generated scratch, not a repo artifact
+backlog.md
