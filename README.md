@@ -44,12 +44,37 @@ answered from source before implementation starts.
 
 ---
 
+## Requirements
+
+This wraps tools it does not ship. Before installing:
+
+- **[Codex CLI](https://github.com/openai/codex)** on PATH, authenticated.
+- **A `luna` Codex profile** at `~/.codex/luna.config.toml` — this is the
+  primary engine, and without it nothing dispatches:
+
+  ```toml
+  model = "gpt-5.6-luna"
+  model_reasoning_effort = "max"
+  ```
+
+- **`jq`**, or both hooks fail open and silently allow everything.
+- **Optional — the deepseek fallback.** It shells out to a `codex-ds.sh`
+  wrapper at `~/.claude/skills/codex-deepseek/scripts/codex-ds.sh`, which is
+  **not included in this repo**. Without it you lose the fallback engine, not a
+  lane; `doctor` reports this as WARN rather than FAIL. Point `DS_SCRIPT` in
+  `scripts/codex-run.sh` at your own wrapper if you have one.
+- **Optional — `treehouse`** (a pre-warmed git-worktree pool for parallel agents) for
+  parallel implementers. Serial implementation works without it.
+
+Run `/charlesdr-dev-loop:doctor` after install; it tells you exactly which of
+these is missing and what each one costs you.
+
 ## Install
 
 As a plugin, which is the normal path:
 
 ```bash
-/plugin marketplace add ~/MACH4_2/charlesdr-dev-loop
+/plugin marketplace add charlesdr13/charlesdr-dev-loop
 /plugin install charlesdr-dev-loop@charlesdr-dev-loop
 ```
 
@@ -201,9 +226,10 @@ distinguishes FAIL (a dead lane) from WARN (a degraded capability).
 
 This plugin is mostly other people's ideas, arranged for one person's workflow.
 
-[**loop-engineer**](https://github.com/LeadGrowGTM/loop-engineer) is where the
-two load-bearing ideas come from: the proof protocol, and grading in a context
-that never saw the maker. Its four-agent harness solves the unattended case;
+[**loop-engineer**](https://github.com/LeadGrowGTM/loop-engineer) by
+**Mitchell Keller ([@MitchellkellerLG](https://github.com/MitchellkellerLG))**
+is where the two load-bearing ideas come from: the proof protocol, and grading
+in a context that never saw the maker. Its four-agent harness solves the unattended case;
 this solves the supervised one, and borrows without depending. No runtime link
 between them — the ideas travelled, the code did not.
 

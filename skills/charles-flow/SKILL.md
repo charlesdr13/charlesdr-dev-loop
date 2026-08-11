@@ -93,8 +93,9 @@ A hard gate, not a checklist to wave at. All three, before any implementation:
 2. **Baseline is green.** Run the green command from `.charles.toml` *before*
    touching anything. If it is already red, you are about to attribute an
    existing failure to your change.
-3. **Prior art checked.** Search `nexus_search` and the vault wiki. If the thing
-   already exists, building it again is the most expensive possible outcome.
+3. **Prior art checked.** Search the repo, then whatever knowledge base this
+   team keeps (a wiki, an ADR directory, a KG tool if one is configured). If the
+   thing already exists, building it again is the most expensive possible outcome.
 
 ## Proof protocol
 
