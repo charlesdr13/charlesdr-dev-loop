@@ -120,6 +120,11 @@ only on success, so a killed lane leaves nothing and a waiter cannot tell
 "$SCRIPTS/lane-status.sh"     # 0 RUNNING · 1 DONE · 2 DEAD
 ```
 
+**Never hand-roll the wait.** `while pgrep -f codex-run; do sleep 30; done`
+never exits — `pgrep -f` matches the loop's own command line. Observed running
+36 minutes against zero dispatches, with several such loops keeping each other
+alive. `lane-status.sh` skips its own pid and parent before deciding.
+
 DEAD means over: record `FAILED`, do not wait, do not re-dispatch on top of it.
 A dispatch that exceeded its own `--timeout` reports rc=124; one with no marker
 at all was SIGKILLed, which nothing can trap, which is precisely why liveness is

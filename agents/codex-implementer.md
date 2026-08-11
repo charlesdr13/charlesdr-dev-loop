@@ -127,6 +127,24 @@ Ask the process instead:
 - **exit 2 DEAD** — no process, no result. It is over. Report `FAILED` and stop.
 
 Three checks maximum, `sleep 300` between them, then `FAILED` regardless.
+
+**Never hand-roll a wait loop.** This one is real, observed running for over
+half an hour against zero dispatches:
+
+```bash
+while pgrep -f codex-run > /dev/null; do sleep 30; done   # NEVER EXITS
+```
+
+`pgrep -f` matches the loop's *own command line*, which contains the string it
+is searching for. It finds itself, so the condition is always true. Several such
+loops also find each other and become mutually immortal. The same applies to
+`until [ -s file ] && grep -q FINAL file` — it waits forever for content that a
+killed dispatch will never write.
+
+`lane-status.sh` exists precisely because this is hard to get right: it skips
+its own pid, its parent, and any other status check before deciding anything is
+alive. Use it. Do not write your own.
+
 Never re-dispatch on top of a RUNNING lane: the original keeps writing and you
 get two engines racing, which is how a tree gets corrupted.
 
