@@ -46,7 +46,7 @@ of the review.
 `codex-run.sh` prints a receipt line to stderr on every dispatch:
 
 ```
-— codex/gpt-5.6-luna · effort=max · sandbox=read-only · raw: /path/run.jsonl
+— codex/gpt-5.6-sol · effort=medium · isolated · raw: /path/run.jsonl
 ```
 
 **Return that line verbatim in your report.** A report without it is discarded

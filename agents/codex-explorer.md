@@ -57,7 +57,7 @@ wearing a codex label is a lie.
 `codex-run.sh` prints a receipt line to stderr on every dispatch:
 
 ```
-— codex/gpt-5.6-luna · effort=max · sandbox=read-only · raw: /path/run.jsonl
+— codex/gpt-5.6-luna · effort=max · fast_mode=on · sandbox=read-only · raw: /path/run.jsonl
 ```
 
 **Return that line verbatim in your report.** A report without it is discarded

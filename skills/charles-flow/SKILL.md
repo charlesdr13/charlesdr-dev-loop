@@ -20,6 +20,10 @@ the flow, and do not silently skip it either.
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
 
+Add `--fast` (or `--effort high`) when latency matters more than the last
+increment of rigour — scoped lookups, "where is X", a sanity check. Keep `max`
+for anything where a plausible-but-wrong answer is expensive.
+
 **luna at max is the primary engine for every dispatch.** deepseek-v4-flash is
 the fallback: the wrapper retries on it automatically when luna fails, and you
 can force it with `--engine deepseek` when you deliberately want a wide cheap

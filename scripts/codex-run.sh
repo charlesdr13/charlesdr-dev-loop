@@ -15,14 +15,19 @@
 # transcript gets talked into agreeing with it. Enforced here, not by prompt.
 #
 # Usage:
-#   codex-run.sh --lane explore   [--dir D] [--engine E] [--timeout N] "task"
-#   codex-run.sh --lane implement [--dir D] [--engine E] [--read-only] [--resume] "task"
+#   codex-run.sh --lane explore   [--dir D] [--engine E] [--effort max|high|medium] [--fast] "task"
+#   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--read-only] "task"
 #   codex-run.sh --lane review    --dir D --plan FILE [--files a,b] "task"
+#
+# --fast is shorthand for --effort high. fast_mode is enabled explicitly on the
+# luna engine and disabled on the review lane, so it applies to luna only.
 
 set -euo pipefail
 
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
+EFFORT="max"         # luna reasoning effort: max | high | medium. high is markedly
+                     # faster and is Codex's own default; max is the quality ceiling.
 DIR="$PWD"
 SANDBOX="workspace-write"
 RESUME=0
@@ -33,12 +38,14 @@ FALLBACK=1
 STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
 DS_SCRIPT="$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
 
-usage() { sed -n '2,20p' "$0"; exit 2; }
+usage() { sed -n '2,24p' "$0"; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane)      LANE="$2"; shift 2 ;;
     --engine)    ENGINE="$2"; shift 2 ;;
+    --effort)    EFFORT="$2"; shift 2 ;;
+    --fast)      EFFORT="high"; shift ;;
     --dir)       DIR="$2"; shift 2 ;;
     --plan)      PLAN="$2"; shift 2 ;;
     --files)     FILES="$2"; shift 2 ;;
@@ -99,9 +106,13 @@ clear_touched() {
 run_luna() {
   local args
   if [ "$RESUME" -eq 1 ]; then
-    args=(-p luna exec resume --last --skip-git-repo-check --json -o "$RUN.last")
+    args=(-p luna exec resume --last --skip-git-repo-check --enable fast_mode --json -o "$RUN.last")
   else
-    args=(-p luna exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR" --json -o "$RUN.last")
+    # fast_mode is globally default-on; state it here so "fast on luna only" is
+    # literally true rather than inherited, and pin effort explicitly.
+    args=(-p luna exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
+          --enable fast_mode -c model_reasoning_effort="$EFFORT"
+          --json -o "$RUN.last")
   fi
   # </dev/null: codex reads stdin when it is not a tty and blocks forever
   ( cd "$DIR" && timeout "$TIMEOUT" codex "${args[@]}" "$TASK
@@ -109,7 +120,7 @@ run_luna() {
 $GUARD" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   local rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
-  echo "— codex/gpt-5.6-luna · effort=max · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  echo "— codex/gpt-5.6-luna · effort=$EFFORT · fast_mode=on · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
   return $rc
 }
 
@@ -186,7 +197,8 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
 
   set +e
   ( cd "$box" && timeout "$TIMEOUT" codex exec --skip-git-repo-check \
-      -s read-only -C "$box" -c model_reasoning_effort=medium \
+      -s read-only -C "$box" -m gpt-5.6-sol -c model_reasoning_effort=medium \
+      --disable fast_mode \
       --json -o "$RUN.last" "$prompt" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   rc=$?
   set -e

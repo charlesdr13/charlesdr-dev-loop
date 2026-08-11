@@ -206,6 +206,14 @@ luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
 fallback, tried automatically when luna fails, or forced with `--engine deepseek`
 for a deliberately wide, cheap sweep.
 
+**Speed.** `--fast` is shorthand for `--effort high`; `--effort max|high|medium`
+sets it directly. Codex's `fast_mode` feature is globally on by default, so it is
+enabled explicitly on luna and disabled on the review lane — that way "fast on
+luna only" is literally true rather than inherited. Effort is the lever that
+actually moves latency: a repo sweep at `max` ran 698s, a smaller one at `high`
+ran 101s. Those were different questions, so treat it as a direction, not a
+benchmark.
+
 ```bash
 scripts/codex-run.sh --lane explore   --dir REPO "why does the refresh path 401?"
 scripts/codex-run.sh --lane implement --dir REPO "add the RangeError guard from the plan"
