@@ -204,6 +204,34 @@ else
 fi
 export HOME="$HOME_ORIG"
 
+# --- receipt verification -----------------------------------------------------
+# "A report without a receipt is discarded" was documented and enforced by
+# nothing. This checks the dispatch log an agent cannot forge.
+VR="$(cd "$(dirname "$0")/.." && pwd)/scripts/verify-receipt.sh"
+VD="$BOX/receipts"; mkdir -p "$VD/.charles"
+
+bash "$VR" "$VD" >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  no dispatch log -> report rejected"; pass=$((pass+1)); } \
+             || { echo "  FAIL  empty dispatch log should reject"; fail=$((fail+1)); }
+
+printf '%s\n' '{"ts":"2026-08-11T07:00:00Z","lane":"implement","engine":"luna","model":"m","rc":143,"run":"/x","task":"t"}' > "$VD/.charles/dispatches.jsonl"
+bash "$VR" "$VD" --since 99999 >/dev/null 2>&1
+[ $? -eq 2 ] && { echo "  PASS  killed dispatch (rc=143) is not a valid receipt"; pass=$((pass+1)); } \
+             || { echo "  FAIL  rc=143 should not count as success"; fail=$((fail+1)); }
+
+printf '%s\n' '{"ts":"2026-08-11T07:01:00Z","lane":"implement","engine":"luna","model":"m","rc":0,"run":"/y","task":"t"}' >> "$VD/.charles/dispatches.jsonl"
+bash "$VR" "$VD" --since 99999 >/dev/null 2>&1
+[ $? -eq 0 ] && { echo "  PASS  successful dispatch accepted"; pass=$((pass+1)); } \
+             || { echo "  FAIL  successful dispatch should be accepted"; fail=$((fail+1)); }
+
+bash "$VR" "$VD" --lane review --since 99999 >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  a different lane's receipt does not count"; pass=$((pass+1)); } \
+             || { echo "  FAIL  lane filter should reject"; fail=$((fail+1)); }
+
+bash "$VR" "$VD" --since 5 >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  a stale receipt does not count"; pass=$((pass+1)); } \
+             || { echo "  FAIL  time window should reject"; fail=$((fail+1)); }
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

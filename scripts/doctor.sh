@@ -63,6 +63,18 @@ else
   # exists because that surprise has now cost three separate debugging detours.
   [ "$drift" -eq 0 ] && say OK "installed v$VER matches this repo" \
     || say FAIL "$drift file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+
+  # The codex-run symlink is only refreshed by the SessionStart hook, so a
+  # reinstall leaves it pointing at the previous version until the next session.
+  want="$CACHE/scripts/codex-run.sh"
+  have="$(readlink -f "$(command -v codex-run 2>/dev/null)" 2>/dev/null)"
+  if [ -z "$have" ]; then
+    say WARN "codex-run not on PATH — starts working after one new session, or run hooks/link-dispatcher.sh"
+  elif [ "$have" = "$(readlink -f "$want")" ]; then
+    say OK "codex-run -> installed v$VER"
+  else
+    say FAIL "codex-run points at $have, not v$VER — restart the session or re-run hooks/link-dispatcher.sh"
+  fi
 fi
 
 echo

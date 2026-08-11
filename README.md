@@ -304,9 +304,13 @@ them at session start; otherwise they live in `RUN.md`.
 Alongside this, `codex-run.sh` appends a receipt for every dispatch to
 `.charles/dispatches.jsonl` — lane, engine, model, exit code. It is written by
 the script, so a lane that fails records itself with no cooperation from any
-model. That log is also what makes the receipt rule enforceable: every agent must
-return the `— codex/<model> · …` line, and a report without one is discarded as
-having never run a lane at all.
+model. That log is what makes the receipt rule enforceable. `scripts/verify-receipt.sh`
+reads it and exits 0 (a lane ran), 1 (nothing ran — discard the report), or 2
+(dispatches exist but all failed, e.g. `rc=143` when the harness killed one).
+
+The pasted receipt line in a report is a courtesy: an agent can type it without
+running anything. The dispatch log is written by the wrapper itself and cannot be
+forged from inside a report, so that is what gets checked.
 
 ## The hooks
 

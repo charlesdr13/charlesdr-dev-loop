@@ -92,10 +92,26 @@ Close only when every item is resolved AND the flow reached its final phase. A
 run that died at phase 3 with no open items is abandoned, not finished — leave
 it open. `/charlesdr-dev-loop:resolve` picks up from there.
 
-**Discard any agent report with no receipt line.** Every codex agent must return
-the `— codex/<model> · …` line the wrapper prints. Missing receipt means the
-lane did not run and the agent answered from its own head — treat the report as
-absent, and record a `FAILED` item.
+**Verify the receipt mechanically — do not eyeball it.** After every agent
+returns, run:
+
+```bash
+# resolve from the symlink the SessionStart hook made, not from a variable
+VERIFY="$(dirname "$(readlink -f "$(command -v codex-run)")")/verify-receipt.sh"
+"$VERIFY" "$(pwd)" --lane <explore|implement|review> --since 1800
+```
+
+- exit 0 — a lane really ran; the report is admissible
+- exit 1 — nothing ran. The agent answered from its own head. Discard the report
+  entirely and record a `FAILED` item. Do not argue with it, do not keep the
+  "useful parts" — an unrun lane's findings are unsourced by construction.
+- exit 2 — dispatches exist but all failed. `rc=143` means the harness killed it
+  mid-flight. The work is incomplete, not done.
+
+The pasted `— codex/<model> · …` line is still required in the report, but it is
+a courtesy for you to read: an agent can type that line without running anything.
+`.charles/dispatches.jsonl` is written by the wrapper itself and cannot be forged
+from inside a report, which is why the check reads that instead.
 
 ## Flow 1 — feature
 
