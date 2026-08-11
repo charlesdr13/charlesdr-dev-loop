@@ -143,9 +143,9 @@ You do not have to type them. In an opted-in repo the flow triggers on intent �
 
 ---
 
-## The hook
+## The hooks
 
-`PreToolUse` on `Edit|Write|MultiEdit`. In an opted-in repo, on a code file, it
+**Edits** — `PreToolUse` on `Edit|Write|MultiEdit`. In an opted-in repo, on a code file, it
 asks you to dispatch instead when an edit touches at least `inline_lines`, or
 when you have touched at least `inline_files` distinct files since the last
 dispatch. The file counter matters more than the line counter: a three-file
@@ -153,6 +153,13 @@ change is a feature, even when each edit is small.
 
 Always allowed: new files, non-code extensions, repos without `.charles.toml`,
 and everything when `CHARLES_INLINE_OK=1`.
+
+**Subagents** — `PreToolUse` on `Agent|Task`. Stopping Claude from typing the
+code achieves nothing if it can hand the same work to one of its own subagents
+instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
+language specialist in an opted-in repo asks you to use a codex lane instead.
+It is a denylist of agents that do repo code work — `google-drive`,
+`claude-code-guide` and the rest are none of this hook's business.
 
 **Known hole, on purpose.** Writes through Bash (`sed -i`, heredocs, `tee`) are
 not intercepted. Matching those would fire on every `bun test > out.log` and the
@@ -181,7 +188,7 @@ convinces itself it is finished.
 ## Test
 
 ```bash
-bash scripts/selftest.sh   # 8 assertions on the hook's allow/ask branches
+bash scripts/selftest.sh   # 16 assertions across both hooks' allow/ask branches
 bash scripts/doctor.sh     # every lane, every dependency, this repo's config
 ```
 

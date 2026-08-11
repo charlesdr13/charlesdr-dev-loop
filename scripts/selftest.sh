@@ -59,6 +59,31 @@ check "3rd file trips file threshold" ask \
 check "counter cleared after dispatch" allow \
   "$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
 
+# --- subagent routing hook ----------------------------------------------------
+SUBHOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-subagents.sh"
+
+scheck() { # scheck NAME EXPECT SUBAGENT_TYPE CWD
+  local name="$1" expect="$2" out decision
+  out="$(jq -nc --arg s "$3" --arg c "$4" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
+  if [ -z "$out" ]; then decision=allow
+  else decision="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null)"; fi
+  if [ "$decision" = "$expect" ]; then
+    echo "  PASS  $name (expected $expect)"; pass=$((pass+1))
+  else
+    echo "  FAIL  $name — expected $expect, got $decision"; echo "        $out"; fail=$((fail+1))
+  fi
+}
+
+echo
+scheck "opted-out repo, general-purpose" allow general-purpose "$BOX/plain"
+scheck "codex-explorer is the right thing" allow codex-explorer "$BOX/repo"
+scheck "codex-implementer is the right thing" allow codex-implementer "$BOX/repo"
+scheck "google-drive is not code work"  allow google-drive "$BOX/repo"
+scheck "Explore must route to a lane"    ask Explore "$BOX/repo"
+scheck "general-purpose must route"      ask general-purpose "$BOX/repo"
+scheck "python-pro must route"           ask python-pro "$BOX/repo"
+scheck "feature-dev:code-explorer routes" ask "feature-dev:code-explorer" "$BOX/repo"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

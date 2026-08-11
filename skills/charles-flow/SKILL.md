@@ -36,6 +36,13 @@ declare the slices disjoint, and then each gets a `treehouse` worktree.
 Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
 agents — several in one message to run them concurrently.
 
+**These are the only subagents that do code work here.** Do not spawn `Explore`,
+`general-purpose`, `Plan`, `feature-dev:*` or a language specialist to
+investigate or write code in an opted-in repo — that is the same bypass as
+editing inline, just wearing a hat. A hook will stop you, but the rule is the
+skill's, not the hook's. Non-code agents (`google-drive`, `claude-code-guide`)
+are unaffected.
+
 **Skill-only install** (no plugin, so no agents): call the dispatcher directly
 as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
 in sequence rather than fanning out agents, so keep fleets small.
