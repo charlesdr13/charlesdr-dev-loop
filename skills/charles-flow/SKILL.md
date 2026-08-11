@@ -43,6 +43,11 @@ the very most. Nothing enforces that ceiling — it is judgment, and at luna-at-
 prices a 5-wide sweep is not free. More than one implementer requires the plan to
 declare the slices disjoint, and then each gets a `treehouse` worktree.
 
+**This is now enforced, not advised.** A second `implement` dispatch on a
+directory that already has one refuses with exit 4. Give the second one its own
+worktree (`treehouse get`) or wait. Two writers on one tree interleave edits and
+the loser is overwritten silently — observed live, not hypothetical.
+
 Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
 agents — several in one message to run them concurrently.
 

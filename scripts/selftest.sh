@@ -136,6 +136,41 @@ fi
 
 rcheck "outcome promoted to committed plan" "Run outcome" cat "$RT/docs/specs/p.md"
 
+# --- concurrent-writer lock ---------------------------------------------------
+# A fake `codex` on PATH lets us produce a process whose cmdline matches what the
+# lock greps for, without dispatching anything real.
+RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
+LOCKDIR="$BOX/locktest"; mkdir -p "$LOCKDIR/bin"
+printf '#!/usr/bin/env bash\nsleep 25\n' > "$LOCKDIR/bin/codex"; chmod +x "$LOCKDIR/bin/codex"
+
+( PATH="$LOCKDIR/bin:$PATH"; timeout 25 codex -C "$LOCKDIR" -s workspace-write >/dev/null 2>&1 ) &
+decoy=$!
+sleep 1
+
+out="$(PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" "second writer" 2>&1)"; rc=$?
+if [ "$rc" -eq 4 ] && grep -q 'REFUSING' <<<"$out"; then
+  echo "  PASS  second writer on the same tree is refused"; pass=$((pass+1))
+else
+  echo "  FAIL  second writer should have been refused (rc=$rc)"; fail=$((fail+1))
+fi
+
+out="$(CHARLES_ALLOW_CONCURRENT_WRITES=1 PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" --timeout 2 "override" 2>&1)"
+if grep -q 'override set' <<<"$out"; then
+  echo "  PASS  explicit override is honoured"; pass=$((pass+1))
+else
+  echo "  FAIL  override should have been honoured"; fail=$((fail+1))
+fi
+
+# a read-only explore alongside a writer is fine and must NOT be refused
+out="$(PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$LOCKDIR" --timeout 2 "reader" 2>&1)"
+if grep -q 'REFUSING' <<<"$out"; then
+  echo "  FAIL  explore was refused; the lock must only guard writers"; fail=$((fail+1))
+else
+  echo "  PASS  explore alongside a writer is allowed"; pass=$((pass+1))
+fi
+
+kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

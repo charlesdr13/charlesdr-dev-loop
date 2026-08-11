@@ -236,6 +236,16 @@ having the system.
 
 ---
 
+### Concurrent writers are refused
+
+A second `--lane implement` dispatch on a directory that already has one exits 4
+rather than starting. Read-only explores alongside a writer are fine. Override
+with `CHARLES_ALLOW_CONCURRENT_WRITES=1` if you genuinely mean it.
+
+This exists because the docs promised worktree isolation that no code provided,
+and a timed-out dispatch got re-dispatched while the original codex was still
+writing to the same tree.
+
 ## Commands
 
 | Command | When |

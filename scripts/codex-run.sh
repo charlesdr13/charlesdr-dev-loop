@@ -210,6 +210,25 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   return $rc
 }
 
+# --- refuse a second writer on the same tree ---------------------------------
+# Two workspace-write dispatches on one directory interleave their edits and the
+# loser is silently overwritten. Observed live: a dispatch killed by the harness
+# 10-minute cap was re-dispatched while the original codex was still writing.
+# Worktree isolation was documented but never enforced by anything; this is.
+if [ "$LANE" = "implement" ] && [ "$SANDBOX" = "workspace-write" ]; then
+  others="$(pgrep -af "timeout [0-9]+ codex" 2>/dev/null \
+            | grep -F -- "-C $DIR" | grep -F -- "-s workspace-write" | grep -vc "^$$ " || true)"
+  if [ "${others:-0}" -gt 0 ]; then
+    echo "codex-run.sh: REFUSING — $others implement dispatch(es) already writing to $DIR" >&2
+    echo "codex-run.sh: two writers on one tree interleave edits and silently lose work." >&2
+    echo "codex-run.sh: wait for it to finish, or give this one its own worktree:" >&2
+    echo "codex-run.sh:   treehouse get   # then re-run with --dir <that worktree>" >&2
+    echo "codex-run.sh: override deliberately with CHARLES_ALLOW_CONCURRENT_WRITES=1" >&2
+    [ "${CHARLES_ALLOW_CONCURRENT_WRITES:-0}" = "1" ] || exit 4
+    echo "codex-run.sh: override set — proceeding anyway" >&2
+  fi
+fi
+
 # The role fixes the sandbox; the engine is what actually runs.
 case "$LANE" in
   explore)   SANDBOX="read-only" ;;
