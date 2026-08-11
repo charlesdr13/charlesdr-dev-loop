@@ -90,7 +90,7 @@ WARN="$(cd "$(dirname "$0")/.." && pwd)/hooks/warn-open-runs.sh"
 RT="$BOX/runrepo"; mkdir -p "$RT/docs/specs"
 ( cd "$RT" && git init -q && git config user.name tester && git config user.email tester@example.invalid )
 printf 'green = "true"\n' > "$RT/.charles.toml"
-printf '# Plan\n' > "$RT/docs/specs/p.md"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n' > "$RT/docs/specs/p.md"
 
 rcheck() { # rcheck NAME EXPECT-SUBSTRING COMMAND...
   local name="$1" want="$2"; shift 2
@@ -254,6 +254,33 @@ printf 'result\n' > "$LD/20260101-000000-333333-explore.last"
 CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-333333-explore >/dev/null 2>&1
 [ $? -eq 1 ] && { echo "  PASS  finished dispatch reports DONE"; pass=$((pass+1)); } \
              || { echo "  FAIL  dispatch with a result should be DONE"; fail=$((fail+1)); }
+
+# --- flow completeness --------------------------------------------------------
+# A dispatch succeeding is not a flow finishing. The audit that motivated this
+# found 19% review coverage and 1 grill verdict across 13 plans.
+FS="$(cd "$(dirname "$0")/.." && pwd)/scripts/flow-status.sh"
+FD="$BOX/flowrepo"; mkdir -p "$FD/.charles" "$FD/docs/specs"
+printf 'green = "true"\n' > "$FD/.charles.toml"
+printf '%s\n' '{"ts":"2026-08-11T07:00:00Z","lane":"implement","engine":"luna","model":"m","rc":0,"run":"/x","task":"t"}' > "$FD/.charles/dispatches.jsonl"
+
+bash "$FS" "$FD" >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  implement with no review is flagged"; pass=$((pass+1)); } \
+             || { echo "  FAIL  ungraded implement should be flagged"; fail=$((fail+1)); }
+
+bash "$RS" init "$FD" feature "g" >/dev/null 2>&1
+bash "$RS" close "$FD" "done" >/dev/null 2>&1
+[ $? -eq 5 ] && { echo "  PASS  close refuses while work is ungraded"; pass=$((pass+1)); } \
+             || { echo "  FAIL  close should refuse with exit 5"; fail=$((fail+1)); }
+
+bash "$RS" close "$FD" "done" --force >/dev/null 2>&1
+[ $? -eq 0 ] && { echo "  PASS  --force closes deliberately"; pass=$((pass+1)); } \
+             || { echo "  FAIL  --force should close"; fail=$((fail+1)); }
+
+printf '%s\n' '{"ts":"2026-08-11T08:00:00Z","lane":"review","engine":"review","model":"m","rc":0,"run":"/y","task":"t"}' >> "$FD/.charles/dispatches.jsonl"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n' > "$FD/docs/specs/p.md"
+bash "$FS" "$FD" >/dev/null 2>&1
+[ $? -eq 0 ] && { echo "  PASS  reviewed, grilled and closed reports clean"; pass=$((pass+1)); } \
+             || { echo "  FAIL  a complete flow should report clean"; fail=$((fail+1)); }
 
 echo
 echo "$pass passed, $fail failed"

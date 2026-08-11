@@ -93,8 +93,31 @@ rollback)
 close)
   d="$(newest_open)" || { echo "run-state.sh: no open run" >&2; exit 1; }
   outcome="${1:?outcome required}"; shift || true
-  spec=""
-  [ "${1:-}" = "--spec" ] && spec="${2:-}"
+  spec=""; force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --spec)  spec="${2:-}"; shift 2 ;;
+      --force) force=1; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  # Closing is the moment you declare the work done, so it is where flow
+  # completeness gets checked. An audit of 75 real dispatches found 19% review
+  # coverage and 1 grill verdict across 13 plans — every one of those "finished"
+  # because the individual dispatches succeeded. A dispatch succeeding is not a
+  # flow finishing.
+  fs="$(dirname "$0")/flow-status.sh"
+  if [ -x "$fs" ] && [ "$force" -eq 0 ]; then
+    if ! "$fs" "$DIR" --closing "$d" > /tmp/flow-status.$$ 2>&1; then
+      sed 's/^/  /' /tmp/flow-status.$$ >&2; rm -f /tmp/flow-status.$$
+      echo >&2
+      echo "run-state.sh: REFUSING to close — the flow is not finished." >&2
+      echo "run-state.sh: grade the work, or close deliberately with --force." >&2
+      exit 5
+    fi
+    rm -f /tmp/flow-status.$$
+  fi
   printf '\n## Outcome\n\n%s\n\nclosed: %s\n' "$outcome" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$d/RUN.md"
   # the durable half: the outcome goes next to the committed plan it resolves
   if [ -n "$spec" ] && [ -f "$DIR/$spec" ]; then

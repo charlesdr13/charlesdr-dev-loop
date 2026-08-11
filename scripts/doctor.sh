@@ -77,6 +77,24 @@ else
   fi
 fi
 
+
+if [ -f "$PWD/.charles.toml" ]; then
+  echo
+  echo "Flow completeness:"
+  fs="$(dirname "$0")/flow-status.sh"
+  if [ -x "$fs" ]; then
+    if out="$("$fs" "$PWD" 2>&1)"; then
+      say OK "no ungraded work, no open runs"
+    else
+      # WARN not FAIL: a repo mid-flow legitimately has ungraded implements.
+      # The blocking check lives in `run-state.sh close`, where you declare done.
+      while IFS= read -r line; do
+        case "$line" in *ISSUE*) say WARN "${line#*ISSUE  }" ;; esac
+      done <<< "$out"
+    fi
+  fi
+fi
+
 echo
 echo "$ok ok, $bad failing"
 [ "$bad" -eq 0 ]

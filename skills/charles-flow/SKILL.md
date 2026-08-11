@@ -90,6 +90,26 @@ isolated reviewer after it. That is why it must be requirements rather than
 steps: "tighten the card spacing" is checkable against a diff, "step 3: edit
 CampaignCard.tsx" is not.
 
+## Finishing is not the same as dispatching
+
+A dispatch succeeding proves a lane ran. It proves nothing about the flow. An
+audit of 75 real dispatches found what that gap costs: **26 implements against 5
+reviews** (two repos never reviewed at all), **13 plans carrying 1 grill
+verdict**, and **4 runs open against 1 closed**. Every one of those looked fine,
+because each individual dispatch had succeeded.
+
+```bash
+"$SCRIPTS/flow-status.sh" "$(pwd)"     # 0 clean · 1 outstanding
+```
+
+It reports implements with no later review, plans with no grill verdict, and
+runs left open. `run-state.sh close` runs it and **refuses to close** when it
+fails (exit 5) — closing is where you declare the work done, so it is where the
+check belongs. `--force` closes anyway, deliberately.
+
+Run it before you tell the user you are finished. "The implementer succeeded" is
+not an answer to "is it done".
+
 ## A lane that stopped answering
 
 Never decide a dispatch is alive by looking for its output file. `.last` appears

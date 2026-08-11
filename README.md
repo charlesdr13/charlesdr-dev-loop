@@ -360,6 +360,22 @@ skill is what actually keeps the work routed.
 
 ---
 
+## Finishing is not dispatching
+
+`verify-receipt.sh` proves a lane ran; `flow-status.sh` proves the flow did.
+An audit of 75 real dispatches found 26 implements against 5 reviews, 13 plans
+carrying 1 grill verdict, and 4 runs open against 1 closed — all of it passing
+silently because the individual dispatches succeeded.
+
+```bash
+scripts/flow-status.sh .      # 0 clean · 1 outstanding
+```
+
+`run-state.sh close` refuses (exit 5) while anything is outstanding, since
+closing is where you declare the work done. `--force` overrides. `doctor`
+reports the same as warnings, because a repo mid-flow legitimately has ungraded
+work — the blocking check belongs at the finish line, not on every health check.
+
 ## A lane that stopped answering
 
 Never decide a dispatch is alive by looking for its output file. `.last` appears
