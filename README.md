@@ -360,6 +360,22 @@ skill is what actually keeps the work routed.
 
 ---
 
+## Chunked dispatch
+
+An implementer given twelve requirements does about 60% of each — the diff looks
+plausible and the shortfall surfaces in review, or later. Capping scope is not
+enough, because one coherent slice can still carry a long list.
+
+Chunks are counted in **plan requirements**, not files or lines: 1-5 is one
+dispatch, 6-10 is two, 11+ means three or more and probably means this is two
+plans wearing one name. Chunks run **sequentially on the same tree** with
+`green.sh` between them — no worktrees needed, and a red result implicates four
+requirements instead of twelve.
+
+Parallel implementers remain reserved for plans that genuinely declare disjoint
+slices, since those need a worktree each and the writer lock will refuse them
+otherwise.
+
 ## The ground-truth gate
 
 Three checks, before any implementation, none of them optional:

@@ -90,6 +90,34 @@ isolated reviewer after it. That is why it must be requirements rather than
 steps: "tighten the card spacing" is checkable against a diff, "step 3: edit
 CampaignCard.tsx" is not.
 
+## Chunk the dispatch, not just the scope
+
+An implementer given twelve requirements does roughly 60% of each. The work
+looks done, the diff is plausible, and the shortfall only surfaces in review —
+or later, in production. Capping *scope* helps, but a single coherent slice can
+still carry a long requirement list.
+
+**Count the checkable requirements in the plan before dispatching.**
+
+- **1-5** — one dispatch. Splitting costs more than it saves.
+- **6-10** — two dispatches, split on a natural seam (a layer, a module, a
+  user-visible behaviour), `green.sh` between them.
+- **11+** — three or more, and reconsider whether this is one plan. A plan with
+  fifteen requirements is usually two features that have not been separated yet.
+
+Dispatch chunks **sequentially on the same tree**. The concurrent-writer lock
+refuses a second simultaneous writer, and going parallel would demand a
+worktree per maker plus disjoint file slices — real machinery, for a benefit
+that sequential chunking already delivers. Parallel implementers stay reserved
+for work whose slices the plan genuinely declares independent.
+
+Between chunks: run `green.sh`, and record progress with `run-state.sh phase`.
+That is the point of chunking — a red result after chunk two implicates four
+requirements, not twelve, and the run survives if the session dies midway.
+
+Each chunk still gets its own receipt. `verify-receipt.sh` after each one, not
+just at the end.
+
 ## Run state
 
 Every flow run keeps durable state, because a run that ends in prose ends with

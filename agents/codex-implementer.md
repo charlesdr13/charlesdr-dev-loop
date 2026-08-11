@@ -42,6 +42,13 @@ the dispatch from inside that shell rather than passing a path you guessed.
 
 Two implementers on one tree will silently clobber each other's edits.
 
+## Scope of one dispatch
+
+You are given a chunk, not a whole plan. If the brief you receive carries more
+than about five checkable requirements, say so and ask for it split rather than
+dispatching it whole — an implementer handed a long list does less per item, and
+the shortfall is invisible until review.
+
 ## Briefing it
 
 State the problem and the constraints, not the keystrokes:
