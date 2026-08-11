@@ -206,6 +206,19 @@ luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
 fallback, tried automatically when luna fails, or forced with `--engine deepseek`
 for a deliberately wide, cheap sweep.
 
+**How long dispatches actually take** (measured over 179 runs, not estimated):
+
+| lane | median | p90 | over 25 min |
+|---|---|---|---|
+| explore | 5.7 min | 22.0 min | |
+| implement | 1.9 min | 19.5 min | 4% of all runs |
+| review | 1.7 min | 3.2 min | never |
+
+The Bash tool caps a single call at 600s, so **57% of successful explores and
+56% of successful implements cannot finish in the foreground.** Explore and
+implement run backgrounded with `--timeout 1800` and are polled through
+`lane-status.sh`; review runs in the foreground.
+
 **Speed.** `--fast` is shorthand for `--effort high`; `--effort max|high|medium`
 sets it directly. Codex's `fast_mode` feature is globally on by default, so it is
 enabled explicitly on luna and disabled on the review lane — that way "fast on

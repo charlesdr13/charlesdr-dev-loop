@@ -24,7 +24,7 @@ Then dispatch with `"$RUN"`:
 
 ```bash
 "$RUN" --lane review \
-  --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 540 \
+  --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 540   # review is fast: p90 3.2 min, foreground is fine \
   "<what to pay special attention to>"
 ```
 
@@ -60,10 +60,8 @@ is killed mid-flight while codex keeps going, which is how a dispatcher ends up
 polling an output file for six minutes and then re-dispatching on top of a run
 that never died.
 
-**Keep the dispatch inside the cap.** Use `--timeout 540` and, for exploration,
-`--fast` (effort `high`) — a repo-wide sweep at `high` ran ~100s where `max` ran
-~700s. Reserve `max` for questions where being wrong is expensive, and then
-expect to use the long-run pattern below.
+**Review runs in the foreground.** Measured p90 is 3.2 minutes and no review
+run has ever exceeded 540s, so it comfortably fits the Bash tool's 600s cap.
 
 **If the Bash call times out anyway:**
 

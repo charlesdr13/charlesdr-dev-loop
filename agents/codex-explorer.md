@@ -23,7 +23,7 @@ SCRIPTS="$(dirname "$(readlink -f "$RUN")")"
 Then dispatch with `"$RUN"`:
 
 ```bash
-"$RUN" --lane explore --dir <REPO> --fast --timeout 540 "<TASK>"
+"$RUN" --lane explore --dir <REPO> --timeout 1800 "<TASK>"
 ```
 
 The engine is gpt-5.6-luna at max reasoning effort, sandboxed read-only. It
@@ -71,10 +71,11 @@ is killed mid-flight while codex keeps going, which is how a dispatcher ends up
 polling an output file for six minutes and then re-dispatching on top of a run
 that never died.
 
-**Keep the dispatch inside the cap.** Use `--timeout 540` and, for exploration,
-`--fast` (effort `high`) — a repo-wide sweep at `high` ran ~100s where `max` ran
-~700s. Reserve `max` for questions where being wrong is expensive, and then
-expect to use the long-run pattern below.
+**Do not shorten the task to fit the cap.** Measured across 179 real runs: the
+median successful dispatch is 8.8 minutes and p90 is 22.8 minutes, so more than
+half of legitimate work cannot finish inside the Bash tool's 600s limit. Use the
+background pattern above. `--fast` (effort `high`) is for when you genuinely
+want a quicker, shallower answer — not a workaround for the cap.
 
 **If the Bash call times out anyway:**
 
@@ -95,6 +96,29 @@ sleep 300; tail -20 /tmp/lane-$$.log
 ```
 
 Three checks maximum. Still running after that? Report it as `FAILED` and stop.
+
+## How to dispatch: background, then check
+
+**Measured across 179 real runs:** median successful run 8.8 min, p90 22.8 min,
+only 4% over 25 min. The Bash tool caps a single call at 600s, so **more than
+half of legitimate work cannot finish in the foreground.** Do not shorten the
+task to fit the cap; run it in the background and check.
+
+```bash
+LOG=/tmp/lane-$$.log
+nohup "$RUN" --lane <lane> --dir <REPO> --timeout 1800 "<TASK>" > "$LOG" 2>&1 &
+sleep 240
+"$SCRIPTS/lane-status.sh"      # 0 RUNNING · 1 DONE · 2 DEAD
+```
+
+Then **at most three** further checks, `sleep 300` between them, each a single
+call. RUNNING after that is a `FAILED` item for `/resolve` — not a reason to
+keep waiting, and never a reason to re-dispatch on top of it.
+
+Read the result from `$LOG` once lane-status reports DONE.
+
+The review lane is the exception: measured p90 is 3.2 min and **zero** review
+runs exceeded 540s, so review dispatches run in the foreground.
 
 ## If you end up waiting
 

@@ -31,7 +31,10 @@ EFFORT="max"         # luna reasoning effort: max | high | medium. high is marke
 DIR="$PWD"
 SANDBOX="workspace-write"
 RESUME=0
-TIMEOUT=540        # the Bash tool caps one call at 600s; stay under it
+TIMEOUT=1800       # measured: median successful run 8.8 min, p90 22.8 min. A 540s
+                   # cap (chosen to fit the Bash tool) would have truncated 57% of
+                   # successful explores. Long runs are normal; see the agent docs
+                   # for the background + lane-status pattern that survives them.
 PLAN=""
 FILES=""
 FALLBACK=1
