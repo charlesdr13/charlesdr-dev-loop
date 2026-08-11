@@ -29,8 +29,9 @@ This costs real money on wide fan-outs. A 5-explorer luna sweep is not the
 cents-per-task exercise the deepseek lane was, so size fleets to the question
 rather than to the cap.
 
-Fleet sizes: 3 explorers / 1 implementer / 1 reviewer by default, capped at
-`max_fleet` in `.charles.toml`. More than one implementer requires the plan to
+Fleet sizes: 3 explorers / 1 implementer / 1 reviewer by default, 5 explorers at
+the very most. Nothing enforces that ceiling — it is judgment, and at luna-at-max
+prices a 5-wide sweep is not free. More than one implementer requires the plan to
 declare the slices disjoint, and then each gets a `treehouse` worktree.
 
 Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
@@ -93,8 +94,9 @@ absent, and record a `FAILED` item.
 5. **Implement.** `codex-implementer`.
 6. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
-7. **Debug loop.** Run the green command. Not green → `charlesdr-dev-loop:debug` flow.
-   Cap **3 cycles**, then stop and hand the user the state. Do not grind.
+7. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
+   green, and its output is the proof line. Not green → `charlesdr-dev-loop:debug`
+   flow. Cap **3 cycles**, then record a `FAILED` item and stop. Do not grind.
 
 ## Flow 2 — debug
 
@@ -109,7 +111,8 @@ absent, and record a `FAILED` item.
 5. `codex-implementer` for the fix.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
-7. Verify: run the green command and paste the output. Same 3-cycle cap.
+7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
+   Same 3-cycle cap, then a `FAILED` item.
 
 ## Flow 3 — polish
 
@@ -119,7 +122,7 @@ absent, and record a `FAILED` item.
 3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`.
 4. `codex-implementer`.
 5. `codex-reviewer` against that plan.
-6. Verify.
+6. Verify with `green.sh`.
 
 ## The ground-truth gate
 
@@ -128,9 +131,9 @@ A hard gate, not a checklist to wave at. All three, before any implementation:
 1. **Claims are sourced.** Every factual claim in the plan cites `file:line` in
    this repo. Unsourced claims get verified or deleted — extrapolating from a
    package name is not verification.
-2. **Baseline is green.** Run the green command from `.charles.toml` *before*
-   touching anything. If it is already red, you are about to attribute an
-   existing failure to your change.
+2. **Baseline is green.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`
+   *before* touching anything. If it is already red, you are about to attribute
+   an existing failure to your change. Never eyeball this — run it.
 3. **Prior art checked.** Search the repo, then whatever knowledge base this
    team keeps (a wiki, an ADR directory, a KG tool if one is configured). If the
    thing already exists, building it again is the most expensive possible outcome.

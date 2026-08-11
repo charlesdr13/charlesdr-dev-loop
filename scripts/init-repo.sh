@@ -46,9 +46,6 @@ green = "${green}"
 # instead. Bypass a session with CHARLES_INLINE_OK=1.
 inline_lines = 40
 inline_files = 3
-
-# Ceiling on parallel codex agents in one fan-out.
-max_fleet = 5
 EOF
 
 # --- gitignore .charles/ ------------------------------------------------------

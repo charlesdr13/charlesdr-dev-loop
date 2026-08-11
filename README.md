@@ -107,7 +107,6 @@ Writes `.charles.toml`, committed on purpose:
 green = "bun test && bun run typecheck"   # what "all green" means here
 inline_lines = 40
 inline_files  = 3
-max_fleet     = 5
 ```
 
 Nothing in this plugin does anything in a repo without that file. No hook, no
@@ -116,6 +115,11 @@ into in *this* repo is just friction.
 
 `green` is inferred from the repo at init time. Check it. A wrong green command
 makes the debug loop confidently meaningless.
+
+It is executed, not narrated — `scripts/green.sh` reads it, runs it, and exits
+with its status, so the debug loop terminates on a real exit code rather than on
+a model's recollection. With no green command set it refuses to run: a loop that
+cannot verify itself cannot honestly say it is finished.
 
 ---
 
@@ -144,7 +148,7 @@ and you rarely invoke it by hand.)
 Exploration and implementation both run on the strongest available reasoning,
 on the view that a wrong exploration is more expensive than an expensive one.
 The tradeoff is real: a five-wide luna sweep is not cheap, so size fleets to the
-question rather than to `max_fleet`.
+question rather than to the ceiling — and note that nothing enforces it, so it's judgment.
 
 A dispatch that fails on luna retries once on deepseek, then hard-stops. It never falls
 back to Claude doing the work inline. A fallback that fires on any error turns
