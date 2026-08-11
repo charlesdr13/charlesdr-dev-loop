@@ -1,35 +1,100 @@
 # charlesdr-dev-loop
 
-Claude Code as orchestrator only. Codex lanes do the exploring and the typing.
-An isolated reviewer grades the result without ever seeing who wrote it.
+Claude Code stops writing your code and starts running the shop. Exploration and
+implementation go out to Codex models at max reasoning; a reviewer that has never
+seen the implementer grades the result against the plan.
 
-## Install — as a plugin (normal)
+```bash
+cd your-repo
+/charlesdr-dev-loop:init                          # opt this repo in, once
+/charlesdr-dev-loop:feature add rate limiting to the API
+```
+
+That single command runs the whole loop: brainstorm, three parallel explorers,
+an adversarial grill of the plan, a ground-truth gate, implementation, isolated
+review, then your test command until it passes.
+
+---
+
+## The problem this solves
+
+An agent that writes code and then checks its own code will tell you it works.
+Not from dishonesty, but because the same reasoning that produced the bug
+produces the argument that it is not a bug. Self-evaluation is an agreement
+loop wearing the costume of a review.
+
+The usual fix is to ask the model to be more critical. That fails, because you
+are asking the biased party to correct for its own bias.
+
+The fix here is structural. Three separations, none of which rely on a model
+choosing to behave:
+
+**The orchestrator does not implement.** Claude Code plans, routes, and judges.
+The typing goes to a Codex lane. A `PreToolUse` hook enforces this: an edit over
+the threshold gets stopped and told to dispatch instead.
+
+**The reviewer cannot see the implementer.** The review lane runs in a
+`mktemp -d` containing exactly two files, `plan.md` and `changes.diff`,
+read-only. It cannot reach the repo, the transcripts, or `git log`. It is not
+asked to ignore the implementer's reasoning; it is unable to find it.
+
+**The grill happens before the code, not after.** A plan gets attacked by an
+adversary whose job is to find the reason it fails, and every attack must be
+answered from source before implementation starts.
+
+---
+
+## Install
+
+As a plugin, which is the normal path:
 
 ```bash
 /plugin marketplace add ~/MACH4_2/charlesdr-dev-loop
 /plugin install charlesdr-dev-loop@charlesdr-dev-loop
 ```
 
-Then, **in each repo you want it active**:
+Then check every lane resolves:
+
+```bash
+/charlesdr-dev-loop:doctor
+```
+
+As plain skills, for a harness without plugin support:
+
+```bash
+bash scripts/install-skills.sh          # --copy for an independent copy
+```
+
+The skill-only path gives you the two skills and `codex-run` on PATH. It does
+not give you the agents, the commands, or the hook.
+
+---
+
+## Opting a repo in
 
 ```bash
 /charlesdr-dev-loop:init
 ```
 
-That writes `.charles.toml`. Nothing in this plugin does anything in a repo
-without one — no hook, no auto-routing. One switch, per repo, on purpose.
+Writes `.charles.toml`, committed on purpose:
 
-## Install — as plain skills (no plugin support)
-
-```bash
-bash scripts/install-skills.sh          # symlink; --copy for an independent copy
+```toml
+green = "bun test && bun run typecheck"   # what "all green" means here
+inline_lines = 40
+inline_files  = 3
+max_fleet     = 5
 ```
 
-Gives you the two skills plus `codex-run` on PATH. Does **not** give you the
-agents, the commands, or the edit-routing hook — those are plugin-only. Use this
-on a harness where plugins are unavailable.
+Nothing in this plugin does anything in a repo without that file. No hook, no
+auto-routing. One switch, per repo, deliberately: enforcement you did not opt
+into in *this* repo is just friction.
 
-## Lanes
+`green` is inferred from the repo at init time. Check it. A wrong green command
+makes the debug loop confidently meaningless.
+
+---
+
+## The three lanes
 
 | Role | Model | Effort | Sandbox |
 |---|---|---|---|
@@ -38,66 +103,117 @@ on a harness where plugins are unavailable.
 | review | gpt-5.6-sol | medium | read-only, isolated temp dir |
 
 ```bash
-scripts/codex-run.sh --lane explore   --dir REPO "question"
-scripts/codex-run.sh --lane implement --dir REPO "task"
-scripts/codex-run.sh --lane review    --dir REPO --plan docs/specs/x.md "focus"
+scripts/codex-run.sh --lane explore   --dir REPO "why does the refresh path 401?"
+scripts/codex-run.sh --lane implement --dir REPO "add the RangeError guard from the plan"
+scripts/codex-run.sh --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
 ```
 
+(After `install-skills.sh` the same script is on PATH as `codex-run`. Under the
+plugin install, the agents call it at `${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh`
+and you rarely invoke it by hand.)
+
+Exploration is where fan-out pays, and at cents per task five explorers cost
+less than being wrong once. Implementation lands in your repo, so it gets the
+expensive lane.
+
 A lane failure retries once on the other lane, then hard-stops. It never falls
-back to Claude doing the work inline — a fallback that fires on any error turns
-"always dispatch" into "dispatch when convenient".
+back to Claude doing the work inline. A fallback that fires on any error turns
+"always dispatch" into "dispatch when convenient", which is the same as not
+having the system.
+
+---
 
 ## Commands
 
-| Command | What |
+| Command | When |
 |---|---|
-| `/charlesdr-dev-loop:feature` | brainstorm → explore fleet → grill → ground-truth gate → implement → review → debug loop |
-| `/charlesdr-dev-loop:debug` | diagnosing-bugs → explore fleet → validate → fix → verify |
-| `/charlesdr-dev-loop:polish` | gap-finding fleet → brainstorm → grill → implement → verify |
-| `/charlesdr-dev-loop:init` | opt this repo in |
-| `/charlesdr-dev-loop:doctor` | check every lane and dependency |
+| `/charlesdr-dev-loop:feature <what>` | Building something new |
+| `/charlesdr-dev-loop:debug <symptom>` | Something is broken |
+| `/charlesdr-dev-loop:polish` | "What should I improve here" |
+| `/charlesdr-dev-loop:init` | Opt this repo in |
+| `/charlesdr-dev-loop:doctor` | Check every lane and dependency |
+
+You do not have to type them. In an opted-in repo the flow triggers on intent —
+"add rate limiting" is enough. The commands are for being explicit.
+
+---
 
 ## The hook
 
 `PreToolUse` on `Edit|Write|MultiEdit`. In an opted-in repo, on a code file, it
-asks you to dispatch codex instead when an edit touches ≥`inline_lines` (40) or
-you have touched ≥`inline_files` (3) distinct files since the last dispatch.
+asks you to dispatch instead when an edit touches at least `inline_lines`, or
+when you have touched at least `inline_files` distinct files since the last
+dispatch. The file counter matters more than the line counter: a three-file
+change is a feature, even when each edit is small.
 
-Always allowed: new files (scaffolding), non-code extensions, repos without
-`.charles.toml`, and anything at all when `CHARLES_INLINE_OK=1`.
+Always allowed: new files, non-code extensions, repos without `.charles.toml`,
+and everything when `CHARLES_INLINE_OK=1`.
 
-**Known hole:** writes through Bash (`sed -i`, heredocs, `tee`) are not
-intercepted. Matching those would fire on every `bun test > out.log` and the
-hook would be switched off within a day. The flow skill is what keeps Claude
-dispatching; the hook is a backstop, not a sandbox.
+**Known hole, on purpose.** Writes through Bash (`sed -i`, heredocs, `tee`) are
+not intercepted. Matching those would fire on every `bun test > out.log` and the
+hook would be switched off within a day. The hook is a backstop. The `charles-flow`
+skill is what actually keeps the work routed.
 
-## Why the reviewer runs in a temp directory
+---
 
-The model that wrote the code grades its own homework generously — and a grader
-that can read the author's reasoning inherits the same bias. So the review lane
-gets a `mktemp -d` containing exactly two files, `plan.md` and `changes.diff`,
-and runs read-only inside it. It cannot reach the repo, the transcripts, or
-`git log`. The isolation is a property of the filesystem rather than a request
-in a prompt, which is the only reason it holds.
+## The ground-truth gate
 
-Borrowed from [loop-engineer](https://github.com/LeadGrowGTM/loop-engineer),
-along with the proof protocol (`"47 passed, 0 failed"`, not "tests pass").
-No runtime dependency on it — the ideas travelled, the code did not.
+Three checks, before any implementation, none of them optional:
 
-## Config
+1. **Claims are sourced.** Every factual claim in the plan cites `file:line`.
+   Extrapolating from a package name is not verification.
+2. **Baseline is green.** Run `green` *before* touching anything, or you will
+   attribute an existing failure to your change.
+3. **Prior art checked.** If the thing already exists, building it again is the
+   most expensive available outcome.
 
-`.charles.toml`, committed:
+And the proof protocol throughout: `"47 passed, 0 failed"`, not "tests pass".
+`"312 lines"`, not "file written". Assertions without output are how a loop
+convinces itself it is finished.
 
-```toml
-green = "bun test && bun run typecheck"   # what "all green" means here
-inline_lines = 40
-inline_files = 3
-max_fleet = 5
-```
+---
 
 ## Test
 
 ```bash
 bash scripts/selftest.sh   # 8 assertions on the hook's allow/ask branches
-bash scripts/doctor.sh     # every lane and dependency
+bash scripts/doctor.sh     # every lane, every dependency, this repo's config
 ```
+
+Both are expected to exit non-zero when something is genuinely wrong. `doctor`
+distinguishes FAIL (a dead lane) from WARN (a degraded capability).
+
+---
+
+## Acknowledgements
+
+This plugin is mostly other people's ideas, arranged for one person's workflow.
+
+[**loop-engineer**](https://github.com/LeadGrowGTM/loop-engineer) is where the
+two load-bearing ideas come from: the proof protocol, and grading in a context
+that never saw the maker. Its four-agent harness solves the unattended case;
+this solves the supervised one, and borrows without depending. No runtime link
+between them — the ideas travelled, the code did not.
+
+[**superpowers**](https://github.com/obra/superpowers) by Jesse Vincent (MIT)
+provides the brainstorming discipline the feature flow opens with. The flow
+overrides its terminal state — brainstorming here hands off to the grill rather
+than to `writing-plans` — which is a deviation from its design, not a defect in it.
+
+[**mattpocock/skills**](https://github.com/mattpocock/skills) by Matt Pocock
+(MIT) is the origin of `grill-me`, which `grill-rounds` forks: same relentless
+interrogation, bounded to two or three rounds and front-loaded with an automated
+adversary so it can run unattended. Its `diagnose` and `tdd` skills are called
+unmodified. Forking rather than editing was a practical decision — installed
+plugin caches get overwritten on marketplace update, so an edit in place has a
+lifespan measured in days.
+
+[**OpenAI Codex CLI**](https://github.com/openai/codex) is the wire for all
+three lanes. It speaks the Responses API, which honours `reasoning_effort` —
+the reason `max` is reachable here at all.
+
+**treehouse** provides the pre-warmed worktree pool that makes parallel
+implementers safe.
+
+The `codex-deepseek` dispatch wrapper this builds on was written for an earlier
+project and is reused rather than reimplemented.

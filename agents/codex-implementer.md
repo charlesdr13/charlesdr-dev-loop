@@ -22,9 +22,12 @@ By default there is exactly one implementer. Run several only when the plan
 states the slices touch disjoint files. In that case each gets its own worktree:
 
 ```bash
-treehouse lease --repo <REPO>     # returns a worktree path
+treehouse status                  # see the pool; `treehouse get` opens a subshell
 ${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane implement --dir <WORKTREE> "<SLICE>"
 ```
+
+`treehouse get` acquires a worktree and drops you into a subshell in it, so run
+the dispatch from inside that shell rather than passing a path you guessed.
 
 Two implementers on one tree will silently clobber each other's edits.
 
