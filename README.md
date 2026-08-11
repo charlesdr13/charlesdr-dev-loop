@@ -16,6 +16,45 @@ review, then your test command until it passes.
 
 ---
 
+## The loop
+
+```mermaid
+flowchart TD
+    REQ(["add rate limiting to the API"]) --> GATE{".charles.toml<br/>in this repo?"}
+    GATE -->|no| INIT["/init — opt in, infer green"]
+    INIT --> GATE
+    GATE -->|yes| BRAIN["brainstorm<br/><i>superpowers</i>"]
+
+    BRAIN --> EXP["explore fleet — 3x parallel<br/><b>luna @ max</b> · read-only"]
+    EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
+    GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
+    TRUTH -->|any fails| GRILL
+    TRUTH -->|all pass| PLAN["plan → docs/specs/"]
+
+    PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
+    IMPL --> REV["review<br/><b>sol @ medium</b> · isolated"]
+    REV --> GREEN{"green.sh<br/>real exit code"}
+
+    GREEN -->|"red, under 3 cycles"| IMPL
+    GREEN -->|"red, 3 cycles"| FAILED["FAILED item"]
+    GREEN -->|green| CLOSE["close run<br/>outcome → the committed plan"]
+
+    FAILED --> RESOLVE["/resolve<br/>next session picks up here"]
+    RESOLVE --> IMPL
+
+    classDef lane fill:#2d6a9f,stroke:#1b4368,color:#fff
+    classDef gate fill:#8a6d1f,stroke:#5c4813,color:#fff
+    classDef term fill:#2f6b45,stroke:#1c4029,color:#fff
+    class EXP,IMPL,REV lane
+    class GATE,TRUTH,GREEN gate
+    class CLOSE,RESOLVE term
+```
+
+Blue is a Codex lane, amber is a gate that can send you backwards, green is an
+exit. Claude Code owns the arrows and none of the boxes.
+
+---
+
 ## The problem this solves
 
 An agent that writes code and then checks its own code will tell you it works.
@@ -37,6 +76,38 @@ the threshold gets stopped and told to dispatch instead.
 `mktemp -d` containing exactly two files, `plan.md` and `changes.diff`,
 read-only. It cannot reach the repo, the transcripts, or `git log`. It is not
 asked to ignore the implementer's reasoning; it is unable to find it.
+
+```mermaid
+flowchart LR
+    subgraph REPO["your repo"]
+        SRC["source files"]
+        TRANS[".charles/ transcripts<br/>git log · test output"]
+        SPEC["docs/specs/plan.md"]
+    end
+
+    IMPL["implementer<br/>luna @ max"] -->|writes| SRC
+    IMPL -->|reasoning| TRANS
+
+    subgraph BOX["mktemp -d — everything the reviewer can see"]
+        PLANMD["plan.md"]
+        DIFF["changes.diff"]
+    end
+
+    SPEC -->|copied| PLANMD
+    SRC -->|git diff HEAD| DIFF
+    BOX --> REV["reviewer<br/>sol @ medium · read-only"]
+
+    TRANS -.->|"unreachable — different filesystem"| REV
+    SRC  -.->|"unreachable"| REV
+
+    classDef hidden fill:#7a2f2f,stroke:#4a1c1c,color:#fff
+    classDef seen fill:#2f6b45,stroke:#1c4029,color:#fff
+    class TRANS hidden
+    class PLANMD,DIFF seen
+```
+
+The dotted edges are not policy. There is no path from the implementer's
+reasoning to the reviewer's working directory, so there is nothing to enforce.
 
 **The grill happens before the code, not after.** A plan gets attacked by an
 adversary whose job is to find the reason it fails, and every attack must be
