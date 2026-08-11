@@ -158,6 +158,26 @@ from inside a report, which is why the check reads that instead.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
 
+## Flow 4 — UI polish
+
+Use `/charlesdr-dev-loop:ui`. This one is a **router, not a flow**: `impeccable`
+is a 27-command UI system and owns the taste judgment. Do not rebuild it here.
+
+1. Baseline green, open the run.
+2. Route to ONE impeccable command — `polish`, `audit`, `critique`, `animate`,
+   `optimize`, `bolder`/`quieter`, or `live` (needs a dev server). Motion work
+   also loads the gsap skills; `gsap-performance` before shipping animation.
+3. In parallel, ONE `codex-explorer` for the mechanical audit only — token
+   drift, off-scale spacing, duplicate variants, dead styles, with `file:line`.
+   It cannot see, so never ask it for an aesthetic opinion.
+4. Merge: impeccable leads, the codex audit is the mechanical backlog. Plan to
+   `docs/specs/`. Taste disagreements become `BLOCKED-HUMAN` items.
+5. Verify green, confirm no regression in contrast/focus/tab-order/CLS, and run
+   `codex-reviewer` for scope creep — the characteristic failure of polish work.
+
+Scope is one route or one component. Screenshots and running apps go to the
+user, never to a lane: luna gets a diff, never a picture.
+
 ## The ground-truth gate
 
 A hard gate, not a checklist to wave at. All three, before any implementation:

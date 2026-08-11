@@ -266,6 +266,7 @@ writing to the same tree.
 | `/charlesdr-dev-loop:debug <symptom>` | Something is broken |
 | `/charlesdr-dev-loop:polish` | "What should I improve here" |
 | `/charlesdr-dev-loop:init` | Opt this repo in |
+| `/charlesdr-dev-loop:ui <route>` | UI/UX polish — routes to impeccable, adds a codex mechanical audit |
 | `/charlesdr-dev-loop:resolve` | Pick up where the last run stopped |
 | `/charlesdr-dev-loop:doctor` | Check every lane and dependency |
 
@@ -311,6 +312,24 @@ reads it and exits 0 (a lane ran), 1 (nothing ran — discard the report), or 2
 The pasted receipt line in a report is a courtesy: an agent can type it without
 running anything. The dispatch log is written by the wrapper itself and cannot be
 forged from inside a report, so that is what gets checked.
+
+## UI polish is a router, not a flow
+
+`/charlesdr-dev-loop:ui` deliberately does **not** implement UI judgment.
+`impeccable` is a 27-command UI system whose `polish`
+alone covers spacing, information architecture, typography, contrast,
+interaction states, micro-interactions, content, icons and forms — and nine of
+its references already handle the perf/a11y floor. Rebuilding that would have
+produced a worse copy.
+
+The router adds only what impeccable lacks: durable run state, one codex
+explorer for the *mechanical* audit (token drift, off-scale spacing, duplicate
+variants, dead styles — grep-shaped findings an eye misses), gsap routing for
+motion work, and a `codex-reviewer` pass for scope creep, which is how polish
+work actually goes wrong.
+
+Taste never goes to a lane. luna gets a diff, never a picture, so anything
+needing an eye becomes a `BLOCKED-HUMAN` item rather than a guess.
 
 ## The hooks
 
