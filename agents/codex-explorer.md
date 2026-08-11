@@ -11,7 +11,7 @@ Your entire job is to hand the task to the explore lane and return what comes ba
 ## Run exactly this
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane explore --dir <REPO> --timeout 1800 "<TASK>"
+${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane explore --dir <REPO> --fast --timeout 540 "<TASK>"
 ```
 
 The engine is gpt-5.6-luna at max reasoning effort, sandboxed read-only. It
@@ -51,6 +51,38 @@ Do not summarise away uncertainty. Do not add your own analysis on top. If the
 dispatch failed, say so and stop — never substitute your own exploration for the
 lane's. A failed dispatch is information; a quietly-Claude-authored answer
 wearing a codex label is a lie.
+
+## Timeouts — read this before dispatching
+
+The Bash tool caps a single call at **10 minutes**. A dispatch that runs longer
+is killed mid-flight while codex keeps going, which is how a dispatcher ends up
+polling an output file for six minutes and then re-dispatching on top of a run
+that never died.
+
+**Keep the dispatch inside the cap.** Use `--timeout 540` and, for exploration,
+`--fast` (effort `high`) — a repo-wide sweep at `high` ran ~100s where `max` ran
+~700s. Reserve `max` for questions where being wrong is expensive, and then
+expect to use the long-run pattern below.
+
+**If the Bash call times out anyway:**
+
+1. Do NOT re-dispatch. A second codex process may now be racing the first.
+2. Do NOT poll in a loop. Each poll is a turn, and turns are the cost.
+3. Report the failure, name the `raw:` jsonl path from the run, and STOP. A
+   timed-out lane is a `FAILED` item for `/charlesdr-dev-loop:resolve`, not a
+   cue to improvise.
+
+**If the work genuinely needs longer than 10 minutes**, launch once in the
+background and check a bounded number of times, sleeping inside the call so
+waiting costs turns instead of tokens:
+
+```bash
+nohup <the codex-run.sh command> > /tmp/lane-$$.log 2>&1 &
+# then AT MOST three checks, each one a single call:
+sleep 300; tail -20 /tmp/lane-$$.log
+```
+
+Three checks maximum. Still running after that? Report it as `FAILED` and stop.
 
 ## The receipt is mandatory
 

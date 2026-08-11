@@ -20,6 +20,11 @@ the flow, and do not silently skip it either.
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
 
+**Dispatches must fit in 10 minutes** — the Bash tool's cap. Explorers default
+to `--fast --timeout 540`. A lane that outruns the cap gets killed mid-flight
+while codex keeps running; the dispatcher must then report `FAILED` and stop,
+never re-dispatch on top of a live process.
+
 Add `--fast` (or `--effort high`) when latency matters more than the last
 increment of rigour — scoped lookups, "where is X", a sanity check. Keep `max`
 for anything where a plausible-but-wrong answer is expensive.
