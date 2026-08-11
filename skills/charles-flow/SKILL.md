@@ -58,6 +58,10 @@ editing inline, just wearing a hat. A hook will stop you, but the rule is the
 skill's, not the hook's. Non-code agents (`google-drive`, `claude-code-guide`)
 are unaffected.
 
+The dispatcher is on PATH as `codex-run` (a SessionStart hook links it to the
+installed plugin copy). Never hardcode a path into a checkout — an agent that
+executes a working tree runs whatever half-finished state it is in.
+
 **Skill-only install** (no plugin, so no agents): call the dispatcher directly
 as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
 in sequence rather than fanning out agents, so keep fleets small.

@@ -11,7 +11,18 @@ Your entire job is to hand the task to the explore lane and return what comes ba
 ## Run exactly this
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane explore --dir <REPO> --fast --timeout 540 "<TASK>"
+# Resolve the dispatcher. CLAUDE_PLUGIN_ROOT does NOT reliably expand in an
+# agent shell — trusting it is what sent earlier agents hunting through the
+# filesystem and executing someone's live working copy.
+RUN="$(command -v codex-run || true)"
+[ -x "$RUN" ] || RUN="${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-run.sh"
+[ -x "$RUN" ] || { echo "codex-run not found — report this and STOP"; exit 1; }
+```
+
+Then dispatch with `"$RUN"`:
+
+```bash
+"$RUN" --lane explore --dir <REPO> --fast --timeout 540 "<TASK>"
 ```
 
 The engine is gpt-5.6-luna at max reasoning effort, sandboxed read-only. It

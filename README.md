@@ -236,6 +236,18 @@ having the system.
 
 ---
 
+### The dispatcher has a stable path
+
+A `SessionStart` hook symlinks `~/.local/bin/codex-run` to the installed
+plugin's copy of the script. Agents resolve `codex-run` from PATH first and only
+fall back to `${CLAUDE_PLUGIN_ROOT}`.
+
+That variable does not reliably expand inside an agent's shell. When it did not,
+agents searched the filesystem, found the author's working checkout, and one of
+them executed it mid-edit and died on a syntax error. Pointing at the installed
+snapshot fixes both problems: the path is stable, and it is never someone's live
+working tree.
+
 ### Concurrent writers are refused
 
 A second `--lane implement` dispatch on a directory that already has one exits 4

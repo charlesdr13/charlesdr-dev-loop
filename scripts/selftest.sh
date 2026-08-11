@@ -171,6 +171,39 @@ fi
 
 kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
 
+# --- dispatcher symlink hook --------------------------------------------------
+# Agents cannot rely on ${CLAUDE_PLUGIN_ROOT} expanding in their shell; when it
+# did not, they hunted the filesystem and executed a live working copy. The hook
+# gives them a stable `codex-run` instead.
+LINK="$(cd "$(dirname "$0")/.." && pwd)/hooks/link-dispatcher.sh"
+FAKEROOT="$BOX/fakeplugin"; mkdir -p "$FAKEROOT/scripts"
+printf '#!/usr/bin/env bash\necho dispatched\n' > "$FAKEROOT/scripts/codex-run.sh"
+chmod +x "$FAKEROOT/scripts/codex-run.sh"
+
+HOME_ORIG="$HOME"
+export HOME="$BOX/fakehome"; mkdir -p "$HOME"
+CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" >/dev/null 2>&1
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$FAKEROOT/scripts/codex-run.sh" ]; then
+  echo "  PASS  session hook links codex-run onto PATH"; pass=$((pass+1))
+else
+  echo "  FAIL  session hook did not create the codex-run symlink"; fail=$((fail+1))
+fi
+
+second="$(CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" 2>&1)"
+if [ -z "$second" ]; then
+  echo "  PASS  hook is idempotent on reinstall"; pass=$((pass+1))
+else
+  echo "  FAIL  hook should be silent when the link is already correct"; fail=$((fail+1))
+fi
+
+# with no plugin root it must exit quietly rather than erroring
+if CLAUDE_PLUGIN_ROOT="" bash "$LINK" >/dev/null 2>&1; then
+  echo "  PASS  hook is a no-op without a plugin root"; pass=$((pass+1))
+else
+  echo "  FAIL  hook errored when CLAUDE_PLUGIN_ROOT was empty"; fail=$((fail+1))
+fi
+export HOME="$HOME_ORIG"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

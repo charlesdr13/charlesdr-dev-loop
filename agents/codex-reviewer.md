@@ -11,7 +11,18 @@ defend it either.
 ## Run exactly this
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane review \
+# Resolve the dispatcher. CLAUDE_PLUGIN_ROOT does NOT reliably expand in an
+# agent shell — trusting it is what sent earlier agents hunting through the
+# filesystem and executing someone's live working copy.
+RUN="$(command -v codex-run || true)"
+[ -x "$RUN" ] || RUN="${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-run.sh"
+[ -x "$RUN" ] || { echo "codex-run not found — report this and STOP"; exit 1; }
+```
+
+Then dispatch with `"$RUN"`:
+
+```bash
+"$RUN" --lane review \
   --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 540 \
   "<what to pay special attention to>"
 ```
