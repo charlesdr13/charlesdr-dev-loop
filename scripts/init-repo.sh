@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# init-repo.sh — opt a repo into the charlesdr13 flow.
+# init-repo.sh — opt a repo into the charlesdr-dev-loop flow.
 # Seeds .charles.toml (green command inferred), gitignores .charles/.
 set -euo pipefail
 
@@ -35,7 +35,7 @@ elif [ -f "$DIR/go.mod" ]; then
 fi
 
 cat > "$CFG" <<EOF
-# charlesdr13 — per-repo flow config. Committed on purpose: the green command is
+# charlesdr-dev-loop — per-repo flow config. Committed on purpose: the green command is
 # a fact about this repo, not a preference of yours.
 
 # What "all green" means. The debug loop runs this and stops when it passes.
@@ -54,7 +54,7 @@ EOF
 # --- gitignore .charles/ ------------------------------------------------------
 if [ -d "$DIR/.git" ] || git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
   if ! grep -qxF '.charles/' "$DIR/.gitignore" 2>/dev/null; then
-    printf '\n# charlesdr13 scratch (transcripts, gate output, hook state)\n.charles/\n' >> "$DIR/.gitignore"
+    printf '\n# charlesdr-dev-loop scratch (transcripts, gate output, hook state)\n.charles/\n' >> "$DIR/.gitignore"
     echo "gitignored .charles/"
   fi
 else

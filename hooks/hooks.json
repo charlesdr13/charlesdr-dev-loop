@@ -1,5 +1,5 @@
 {
-  "description": "charlesdr13: route non-trivial edits to a codex lane instead of inline editing. Active only in repos with a .charles.toml.",
+  "description": "charlesdr-dev-loop: route non-trivial edits to a codex lane instead of inline editing. Active only in repos with a .charles.toml.",
   "hooks": {
     "PreToolUse": [
       {

@@ -9,4 +9,4 @@ hypothesising (that is the `diagnosing-bugs` discipline, and it is the part that
 actually finds bugs). Explorers return causes with `file:line` evidence, never
 patches. Cap at 3 cycles, then stop and report.
 
-If this repo has no `.charles.toml`, stop and offer `/charlesdr13:init` first.
+If this repo has no `.charles.toml`, stop and offer `/charlesdr-dev-loop:init` first.

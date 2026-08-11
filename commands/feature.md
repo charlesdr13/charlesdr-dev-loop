@@ -8,4 +8,4 @@ Invoke `charles-flow` and follow Flow 1 exactly. Do not skip the ground-truth
 gate, and do not implement anything yourself — that is what `codex-implementer`
 is for.
 
-If this repo has no `.charles.toml`, stop and offer `/charlesdr13:init` first.
+If this repo has no `.charles.toml`, stop and offer `/charlesdr-dev-loop:init` first.

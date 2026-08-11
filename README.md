@@ -1,23 +1,33 @@
-# charlesdr13
+# charlesdr-dev-loop
 
 Claude Code as orchestrator only. Codex lanes do the exploring and the typing.
 An isolated reviewer grades the result without ever seeing who wrote it.
 
-## Install
+## Install — as a plugin (normal)
 
 ```bash
-/plugin marketplace add ~/MACH4_2/charlesdr13-plugin
-/plugin install charlesdr13@charlesdr13-plugin
+/plugin marketplace add ~/MACH4_2/charlesdr-dev-loop
+/plugin install charlesdr-dev-loop@charlesdr-dev-loop
 ```
 
 Then, **in each repo you want it active**:
 
 ```bash
-/charlesdr13:init
+/charlesdr-dev-loop:init
 ```
 
 That writes `.charles.toml`. Nothing in this plugin does anything in a repo
 without one — no hook, no auto-routing. One switch, per repo, on purpose.
+
+## Install — as plain skills (no plugin support)
+
+```bash
+bash scripts/install-skills.sh          # symlink; --copy for an independent copy
+```
+
+Gives you the two skills plus `codex-run` on PATH. Does **not** give you the
+agents, the commands, or the edit-routing hook — those are plugin-only. Use this
+on a harness where plugins are unavailable.
 
 ## Lanes
 
@@ -41,11 +51,11 @@ back to Claude doing the work inline — a fallback that fires on any error turn
 
 | Command | What |
 |---|---|
-| `/charlesdr13:feature` | brainstorm → explore fleet → grill → ground-truth gate → implement → review → debug loop |
-| `/charlesdr13:debug` | diagnosing-bugs → explore fleet → validate → fix → verify |
-| `/charlesdr13:polish` | gap-finding fleet → brainstorm → grill → implement → verify |
-| `/charlesdr13:init` | opt this repo in |
-| `/charlesdr13:doctor` | check every lane and dependency |
+| `/charlesdr-dev-loop:feature` | brainstorm → explore fleet → grill → ground-truth gate → implement → review → debug loop |
+| `/charlesdr-dev-loop:debug` | diagnosing-bugs → explore fleet → validate → fix → verify |
+| `/charlesdr-dev-loop:polish` | gap-finding fleet → brainstorm → grill → implement → verify |
+| `/charlesdr-dev-loop:init` | opt this repo in |
+| `/charlesdr-dev-loop:doctor` | check every lane and dependency |
 
 ## The hook
 

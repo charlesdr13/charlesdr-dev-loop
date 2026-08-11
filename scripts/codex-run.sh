@@ -25,7 +25,7 @@ TIMEOUT=1800
 PLAN=""
 FILES=""
 FALLBACK=1
-STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr13}"
+STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
 DS_SCRIPT="$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
 
 usage() { sed -n '2,20p' "$0"; exit 2; }

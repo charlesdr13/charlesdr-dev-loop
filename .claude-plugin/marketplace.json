@@ -1,13 +1,13 @@
 {
-  "name": "charlesdr13-plugin",
+  "name": "charlesdr-dev-loop",
   "owner": { "name": "charlesdr13" },
   "metadata": {
-    "description": "charlesdr13: personal dev-loop plugin — codex lanes, grilling, adversarial review.",
+    "description": "charlesdr-dev-loop: personal dev-loop plugin — codex lanes, grilling, adversarial review.",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "charlesdr13",
+      "name": "charlesdr-dev-loop",
       "source": "./",
       "description": "Orchestrator-only Claude Code: codex explore/implement lanes, bounded grilling, isolated adversarial review",
       "version": "1.0.0",

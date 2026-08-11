@@ -9,4 +9,4 @@ Invoke `charles-flow` and follow Flow 3. Give each explorer a different lens —
 gaps, must-haves, quality-of-life — rather than asking three agents the same
 question and getting three versions of the same answer.
 
-If this repo has no `.charles.toml`, stop and offer `/charlesdr13:init` first.
+If this repo has no `.charles.toml`, stop and offer `/charlesdr-dev-loop:init` first.

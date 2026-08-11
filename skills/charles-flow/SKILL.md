@@ -9,7 +9,7 @@ Claude Code is the orchestrator and never the implementer. Exploration and
 implementation go out to Codex lanes; grading goes to an isolated reviewer.
 
 **Gate:** this only applies in a repo with a `.charles.toml` at its root. If
-there isn't one, say so and offer `/charlesdr13:init` — do not silently apply
+there isn't one, say so and offer `/charlesdr-dev-loop:init` — do not silently apply
 the flow, and do not silently skip it either.
 
 ## Lanes
@@ -33,6 +33,10 @@ declare the slices disjoint, and then each gets a `treehouse` worktree.
 Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
 agents — several in one message to run them concurrently.
 
+**Skill-only install** (no plugin, so no agents): call the dispatcher directly
+as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
+in sequence rather than fanning out agents, so keep fleets small.
+
 ## Flow 1 — feature
 
 1. **Brainstorm.** Use `superpowers:brainstorming`. **Override its terminal
@@ -48,7 +52,7 @@ agents — several in one message to run them concurrently.
 5. **Implement.** `codex-implementer`.
 6. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
-7. **Debug loop.** Run the green command. Not green → `charlesdr13:debug` flow.
+7. **Debug loop.** Run the green command. Not green → `charlesdr-dev-loop:debug` flow.
    Cap **3 cycles**, then stop and hand the user the state. Do not grind.
 
 ## Flow 2 — debug

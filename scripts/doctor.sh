@@ -6,7 +6,7 @@ ok=0; bad=0
 say() { printf '  %-6s %s\n' "$1" "$2"; [ "$1" = "FAIL" ] && bad=$((bad+1)) || ok=$((ok+1)); }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-echo "charlesdr13 doctor"
+echo "charlesdr-dev-loop doctor"
 echo
 echo "Lanes:"
 have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
@@ -30,7 +30,7 @@ if [ -f "$PWD/.charles.toml" ]; then
   g="$(grep -oE '^green[[:space:]]*=[[:space:]]*".*"' "$PWD/.charles.toml" | sed 's/.*= *"//; s/"$//')"
   [ -n "$g" ] && say OK "green command: $g" || say WARN "no green command set — the debug loop will refuse to start"
 else
-  say WARN "not opted in — run /charlesdr13:init to enable the hook and flows here"
+  say WARN "not opted in — run /charlesdr-dev-loop:init to enable the hook and flows here"
 fi
 
 echo
