@@ -113,6 +113,19 @@ else
   echo "  FAIL  stop hook warns on FAILED"; fail=$((fail+1))
 fi
 
+# An OPEN run with zero FAILED items must be silent. This branch was uncovered
+# and shipped broken: grep -c prints 0 and exits 1, so `|| echo 0` yielded "0\n0".
+RT2="$BOX/runrepo2"; mkdir -p "$RT2"
+printf 'green = "true"\n' > "$RT2/.charles.toml"
+bash "$RS" init "$RT2" feature "open, nothing failed" >/dev/null
+bash "$RS" item "$RT2" PENDING-DECISION "awaiting a yes" >/dev/null
+warn_out="$( cd "$RT2" && bash "$WARN" 2>&1 || true )"
+if [ -z "$warn_out" ]; then
+  echo "  PASS  stop hook silent on open run with no FAILED"; pass=$((pass+1))
+else
+  echo "  FAIL  stop hook silent on open run with no FAILED — got: $warn_out"; fail=$((fail+1))
+fi
+
 bash "$RS" close "$RT" "done" --spec docs/specs/p.md >/dev/null
 warn_out="$( cd "$RT" && bash "$WARN" 2>&1 || true )"
 if [ -z "$warn_out" ]; then
