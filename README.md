@@ -403,7 +403,11 @@ want on the code has to be in the prompt, or it does not exist — which for a
 long time meant the orchestrator had a simplicity discipline and the thing
 actually writing the code had none.
 
-Every `implement` dispatch now carries a distilled ladder: need it at all,
+**ponytail is not Claude-Code-exclusive** — it ships a real Codex plugin
+(`codex plugin marketplace add DietrichGebert/ponytail`), and a lane told to
+load it does: verified reading `skills/ponytail/SKILL.md` and quoting rung 1
+verbatim. Every `implement` dispatch therefore points at the maintained skill
+first, and falls back to a distilled ladder: need it at all,
 stdlib, native platform, existing dependency, one line, minimum code. Plus the
 carve-outs it must not simplify away — validation at trust boundaries, error
 handling that prevents data loss, security, accessibility, anything the brief
@@ -485,6 +489,11 @@ lifespan measured in days.
 [**OpenAI Codex CLI**](https://github.com/openai/codex) is the wire for all
 three lanes. It speaks the Responses API, which honours `reasoning_effort` —
 the reason `max` is reachable here at all.
+
+[**ponytail**](https://github.com/DietrichGebert/ponytail) by Dietrich Gebert
+(MIT) is the simplicity discipline the implement lane runs under. It is not
+Claude-Code-only — its Codex plugin is what lets the lane load the real skill
+rather than a paraphrase of it.
 
 **treehouse** provides the pre-warmed worktree pool that makes parallel
 implementers safe.

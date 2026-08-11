@@ -85,10 +85,16 @@ git checkout -- ., or anything that discards uncommitted work. Never commit, pus
 force-push. If the task is ambiguous or you cannot finish, STOP and report what blocked
 you rather than improvising a different design or tidying unrelated files.'
 
-# The implement lane writes code, and codex cannot load Claude Code skills — the
-# prompt is the only channel. Without this it has no simplicity pressure at all,
-# while the orchestrator that briefed it does. Distilled from the ponytail skill.
-LADDER='Before writing anything, stop at the first rung that holds:
+# The implement lane writes code and inherits no Claude Code skills, so the
+# prompt is the only channel. ponytail ships a real Codex plugin, and a lane
+# told to load it does (verified: it read skills/ponytail/SKILL.md and quoted
+# rung 1 verbatim). Prefer the maintained source; the distillation below is the
+# fallback for harnesses that do not have it installed.
+LADDER='If a skill named `ponytail` is available in this harness, load and follow
+it now — it is the canonical source of what follows, and it is maintained.
+Say which file you read. If it is not available, follow this distillation.
+
+Before writing anything, stop at the first rung that holds:
 1. Does this need to exist at all? Speculative need means skip it and say so.
 2. Does the standard library already do it? Use it.
 3. Does a native platform feature cover it? Prefer it over a dependency.
