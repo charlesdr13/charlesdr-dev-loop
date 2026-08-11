@@ -66,6 +66,30 @@ executes a working tree runs whatever half-finished state it is in.
 as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
 in sequence rather than fanning out agents, so keep fleets small.
 
+## Plans: one artifact, and it is not a task list
+
+Every flow writes exactly one plan. Do **not** also produce a separate
+implementation plan, and do not invoke `superpowers:writing-plans` — luna at max
+is being paid for its planning judgment, and handing it your ordered steps both
+wastes that and tends to make the result worse, because it follows your sequence
+instead of finding a better one.
+
+What a dispatch actually needs is a **brief**, which the plan already contains:
+
+- what must be true when it is done, stated so a wrong answer is detectable
+- which files it may touch, and which it must not
+- what must keep working (the green command)
+- a nearby file to copy conventions from — point, do not describe
+
+The one exception is parallel implementers: disjoint file slices are a genuine
+implementation plan and the worktree path cannot work without one. A single
+implementer, which is the default, never needs it.
+
+The same plan is consumed twice — by the grill before the work, and by the
+isolated reviewer after it. That is why it must be requirements rather than
+steps: "tighten the card spacing" is checkable against a diff, "step 3: edit
+CampaignCard.tsx" is not.
+
 ## Run state
 
 Every flow run keeps durable state, because a run that ends in prose ends with
@@ -122,13 +146,20 @@ from inside a report, which is why the check reads that instead.
    angle — prior art in this repo, the integration points, the failure modes,
    what a competing design would look like. Synthesise their reports yourself;
    do not hand the raw reports to the user.
-3. **Grill.** `grill-rounds`, 2-3 rounds. Round 1 is adversarial and automated;
-   what survives comes to the user as one batched round.
-4. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
-5. **Implement.** `codex-implementer`.
-6. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
+3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
+   not after. `grill-rounds` needs a file to attack and the review lane needs one
+   to judge against; a plan that exists only in conversation can be neither.
+   Write **checkable requirements**, not steps: what must be true when this is
+   done, which files are in scope, what must keep working.
+4. **Grill.** `grill-rounds`, 2-3 rounds, amending the plan in place. Round 1 is
+   adversarial and automated; what survives comes to the user as one batched
+   round. Three is the ceiling — a fourth means the plan is wrong at a level
+   grilling cannot fix, so go back to brainstorming.
+5. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
+6. **Implement.** `codex-implementer`.
+7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
-7. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
+8. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
    green, and its output is the proof line. Not green → `charlesdr-dev-loop:debug`
    flow. Cap **3 cycles**, then record a `FAILED` item and stop. Do not grind.
 
