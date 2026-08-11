@@ -50,6 +50,19 @@ than about five checkable requirements, say so and ask for it split rather than
 dispatching it whole — an implementer handed a long list does less per item, and
 the shortfall is invisible until review.
 
+## Simplicity travels in the prompt
+
+The lane cannot load Claude Code skills, so `ponytail` does not reach it. The
+wrapper appends a distilled ladder to every implement dispatch — need it at all,
+stdlib, native platform, existing dependency, one line, minimum code — plus the
+carve-outs it must not simplify away (validation at trust boundaries, error
+handling that prevents data loss, security, accessibility, anything the brief
+asked for).
+
+You do not need to repeat it. Do not contradict it either: a brief that asks for
+an abstraction should say why, because the lane has been told the brief wins and
+to name the rung it skipped.
+
 ## Briefing it
 
 State the problem and the constraints, not the keystrokes:

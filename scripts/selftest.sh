@@ -282,6 +282,33 @@ bash "$FS" "$FD" >/dev/null 2>&1
 [ $? -eq 0 ] && { echo "  PASS  reviewed, grilled and closed reports clean"; pass=$((pass+1)); } \
              || { echo "  FAIL  a complete flow should report clean"; fail=$((fail+1)); }
 
+# --- simplicity ladder --------------------------------------------------------
+# codex cannot load Claude Code skills, so ponytail's constraint has to travel in
+# the prompt or the implementer has none at all.
+LB="$BOX/ladder"; mkdir -p "$LB/bin"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do echo "$a"; done > %s/prompt.txt\n' "$LB" > "$LB/bin/codex"
+chmod +x "$LB/bin/codex"
+
+PATH="$LB/bin:$PATH" CHARLES_STATE_DIR="$LB" bash "$RUN_SH" --lane implement --dir "$LB" --timeout 5 "t" >/dev/null 2>&1
+if grep -q 'Does this need to exist at all' "$LB/prompt.txt" 2>/dev/null; then
+  echo "  PASS  implement dispatch carries the simplicity ladder"; pass=$((pass+1))
+else
+  echo "  FAIL  implement dispatch is missing the ladder"; fail=$((fail+1))
+fi
+if grep -q 'Do NOT simplify away' "$LB/prompt.txt" 2>/dev/null; then
+  echo "  PASS  ladder keeps its carve-outs (validation, security, a11y)"; pass=$((pass+1))
+else
+  echo "  FAIL  ladder must keep its carve-outs"; fail=$((fail+1))
+fi
+
+rm -f "$LB/prompt.txt"
+PATH="$LB/bin:$PATH" CHARLES_STATE_DIR="$LB" bash "$RUN_SH" --lane explore --dir "$LB" --timeout 5 "t" >/dev/null 2>&1
+if grep -q 'Does this need to exist at all' "$LB/prompt.txt" 2>/dev/null; then
+  echo "  FAIL  explore should not carry the ladder; it writes no code"; fail=$((fail+1))
+else
+  echo "  PASS  explore correctly omits the ladder"; pass=$((pass+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

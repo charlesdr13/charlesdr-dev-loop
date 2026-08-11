@@ -395,6 +395,24 @@ DEAD means over: record `FAILED`, stop, and never re-dispatch on top of a
 RUNNING lane. The original keeps writing, and two engines racing on one tree is
 how work gets silently lost.
 
+## The lane inherits nothing
+
+Codex runs in its own process and cannot load Claude Code skills. Not
+`ponytail`, not your CLAUDE.md, not your output style. Whatever constraint you
+want on the code has to be in the prompt, or it does not exist — which for a
+long time meant the orchestrator had a simplicity discipline and the thing
+actually writing the code had none.
+
+Every `implement` dispatch now carries a distilled ladder: need it at all,
+stdlib, native platform, existing dependency, one line, minimum code. Plus the
+carve-outs it must not simplify away — validation at trust boundaries, error
+handling that prevents data loss, security, accessibility, anything the brief
+asked for. The reviewer grades for unrequested complexity too: an abstraction
+with one caller, a config value that never varies, a dependency doing what a few
+lines would.
+
+`explore` does not carry it. It writes no code.
+
 ## Chunked dispatch
 
 An implementer given twelve requirements does about 60% of each — the diff looks

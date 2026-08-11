@@ -130,6 +130,16 @@ A dispatch that exceeded its own `--timeout` reports rc=124; one with no marker
 at all was SIGKILLed, which nothing can trap, which is precisely why liveness is
 answered by process rather than by file.
 
+## The lane has no skills
+
+Codex runs in its own process and cannot load Claude Code skills. Whatever
+constraint you want on the code has to be in the prompt, or it does not exist.
+
+`ponytail` is the one that matters for the write lane, so the wrapper appends a
+distilled ladder to every implement dispatch automatically. Nothing else is
+inherited: no CLAUDE.md, no output style, no skill you have loaded. If a
+convention matters, put it in the brief or point at a file that demonstrates it.
+
 ## Chunk the dispatch, not just the scope
 
 An implementer given twelve requirements does roughly 60% of each. The work

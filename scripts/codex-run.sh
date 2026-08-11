@@ -85,6 +85,29 @@ git checkout -- ., or anything that discards uncommitted work. Never commit, pus
 force-push. If the task is ambiguous or you cannot finish, STOP and report what blocked
 you rather than improvising a different design or tidying unrelated files.'
 
+# The implement lane writes code, and codex cannot load Claude Code skills — the
+# prompt is the only channel. Without this it has no simplicity pressure at all,
+# while the orchestrator that briefed it does. Distilled from the ponytail skill.
+LADDER='Before writing anything, stop at the first rung that holds:
+1. Does this need to exist at all? Speculative need means skip it and say so.
+2. Does the standard library already do it? Use it.
+3. Does a native platform feature cover it? Prefer it over a dependency.
+4. Does an already-installed dependency solve it? Use it. Never add a new one
+   for what a few lines can do.
+5. Can it be one line? Make it one line.
+6. Only then: the minimum code that works.
+
+No unrequested abstractions: no interface with one implementation, no factory
+for one product, no config for a value that never changes, no scaffolding for a
+future that has not arrived. Prefer deleting over adding. Prefer boring over
+clever. Fewest files, shortest working diff. Mark a deliberate shortcut with a
+comment naming its ceiling and the upgrade path.
+
+Do NOT simplify away: input validation at trust boundaries, error handling that
+prevents data loss, security controls, accessibility basics, or anything the
+brief explicitly asked for. If the brief and this instruction conflict, the
+brief wins and you say which rung you skipped and why.'
+
 # --- append a dispatch receipt: mechanical, no model cooperation required -----
 # This is both halves of the fix: it is the receipt an agent must echo back
 # (closing the inline-fallback hole) and the record `resolve` correlates on.
@@ -125,9 +148,14 @@ run_luna() {
           --json -o "$RUN.last")
   fi
   # </dev/null: codex reads stdin when it is not a tty and blocks forever
+  # only the write lane gets the ladder: exploration produces no code
+  local extra=""
+  [ "$LANE" = "implement" ] && extra="
+
+$LADDER"
   ( cd "$DIR" && timeout "$TIMEOUT" codex "${args[@]}" "$TASK
 
-$GUARD" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
+$GUARD$extra" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   local rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
   echo "— codex/gpt-5.6-luna · effort=$EFFORT · fast_mode=on · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
@@ -201,7 +229,11 @@ $TASK
 Report, in this order:
 1. Requirements in plan.md that the changes do NOT satisfy. Quote the plan line.
 2. Defects in the changes: bugs, unhandled cases, security or data-loss risks. Cite the diff hunk.
-3. Anything in the changes that plan.md never asked for (scope creep).
+3. Anything in the changes that plan.md never asked for: scope creep, and also
+   unrequested complexity — an abstraction with one caller, a config value that
+   never varies, a new dependency doing what a few lines would, scaffolding for
+   a future the plan never mentions. Quote the hunk and say what it should have
+   been instead.
 4. A one-line verdict: SATISFIES PLAN | GAPS FOUND | CANNOT TELL (and why).
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
