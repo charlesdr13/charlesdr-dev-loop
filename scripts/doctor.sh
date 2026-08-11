@@ -10,10 +10,10 @@ echo "charlesdr-dev-loop doctor"
 echo
 echo "Lanes:"
 have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
-[ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (implement lane)" || say FAIL "missing ~/.codex/luna.config.toml — implement lane dead"
-[ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (explore lane)" || say FAIL "missing ~/.codex/deepseek.config.toml — explore lane dead"
-[ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say FAIL "missing ~/.config/lg-cc-deepseek/key.env — explore lane dead"
-[ -x "$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh" ] && say OK "codex-ds.sh wrapper" || say FAIL "missing codex-ds.sh — explore lane dead"
+[ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (PRIMARY engine)" || say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
+[ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"
+[ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say WARN "missing ~/.config/lg-cc-deepseek/key.env — no fallback if luna fails"
+[ -x "$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh" ] && say OK "codex-ds.sh wrapper" || say WARN "missing codex-ds.sh — no fallback if luna fails"
 grep -q 'model = "gpt-5.6-sol"' "$HOME/.codex/config.toml" 2>/dev/null && say OK "sol base model (review lane)" || say WARN "base model is not gpt-5.6-sol — review lane will use whatever ~/.codex/config.toml says"
 
 echo

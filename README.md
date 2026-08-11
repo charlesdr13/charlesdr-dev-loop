@@ -96,11 +96,15 @@ makes the debug loop confidently meaningless.
 
 ## The three lanes
 
-| Role | Model | Effort | Sandbox |
+| Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | deepseek-v4-flash | max | read-only |
+| explore | gpt-5.6-luna | max | read-only |
 | implement | gpt-5.6-luna | max | workspace-write |
 | review | gpt-5.6-sol | medium | read-only, isolated temp dir |
+
+luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
+fallback, tried automatically when luna fails, or forced with `--engine deepseek`
+for a deliberately wide, cheap sweep.
 
 ```bash
 scripts/codex-run.sh --lane explore   --dir REPO "why does the refresh path 401?"
@@ -112,11 +116,12 @@ scripts/codex-run.sh --lane review    --dir REPO --plan docs/specs/x.md "check e
 plugin install, the agents call it at `${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh`
 and you rarely invoke it by hand.)
 
-Exploration is where fan-out pays, and at cents per task five explorers cost
-less than being wrong once. Implementation lands in your repo, so it gets the
-expensive lane.
+Exploration and implementation both run on the strongest available reasoning,
+on the view that a wrong exploration is more expensive than an expensive one.
+The tradeoff is real: a five-wide luna sweep is not cheap, so size fleets to the
+question rather than to `max_fleet`.
 
-A lane failure retries once on the other lane, then hard-stops. It never falls
+A dispatch that fails on luna retries once on deepseek, then hard-stops. It never falls
 back to Claude doing the work inline. A fallback that fires on any error turns
 "always dispatch" into "dispatch when convenient", which is the same as not
 having the system.

@@ -14,17 +14,20 @@ the flow, and do not silently skip it either.
 
 ## Lanes
 
-| Role | Lane | Model | Sandbox |
+| Role | Lane | Engine | Sandbox |
 |---|---|---|---|
-| Explore | `--lane explore` | deepseek-v4-flash @ max | read-only |
+| Explore | `--lane explore` | gpt-5.6-luna @ max | read-only |
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
 
-Exploration is where fan-out pays, and deepseek at cents per task means 5
-explorers cost less than being wrong once. Implementation lands in the repo, so
-it gets the expensive lane. You may override with a stated reason — "this
-exploration needs to reason about a subtle ordering bug, using luna" is fine;
-switching lanes silently is not.
+**luna at max is the primary engine for every dispatch.** deepseek-v4-flash is
+the fallback: the wrapper retries on it automatically when luna fails, and you
+can force it with `--engine deepseek` when you deliberately want a wide cheap
+sweep. Do not route to deepseek silently — luna first is the default.
+
+This costs real money on wide fan-outs. A 5-explorer luna sweep is not the
+cents-per-task exercise the deepseek lane was, so size fleets to the question
+rather than to the cap.
 
 Fleet sizes: 3 explorers / 1 implementer / 1 reviewer by default, capped at
 `max_fleet` in `.charles.toml`. More than one implementer requires the plan to
@@ -94,8 +97,8 @@ how a loop convinces itself it is finished.
 
 ## Failure handling
 
-A lane failure is a hard stop after one cross-lane retry (the wrapper does this
-for you). **Never fall back to doing the work inline.** A fallback that fires on
+A dispatch that fails on luna retries once on deepseek (the wrapper does this
+for you), then hard-stops. **Never fall back to doing the work inline.** A fallback that fires on
 any error turns "always dispatch" into "dispatch when convenient", which is the
 same as not having the system at all. Report the failure and let the user decide.
 

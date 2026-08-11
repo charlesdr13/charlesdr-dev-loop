@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
 # codex-run.sh — dispatch work to a Codex lane.
 #
-# Lanes:
-#   explore   deepseek-v4-flash @ max, read-only      (wide fan-out, cents/task)
-#   implement gpt-5.6-luna      @ max, workspace-write (lands in your repo)
-#   review    gpt-5.6-sol       @ medium, read-only    (adversarial, ISOLATED)
+# Roles (--lane):
+#   explore   read-only investigation
+#   implement writes into the working tree
+#   review    adversarial grading, ISOLATED (always gpt-5.6-sol @ medium)
+#
+# Engines (--engine), for explore and implement:
+#   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
+#   deepseek  deepseek-v4-flash @ max FALLBACK — only when luna fails
 #
 # The review lane runs in a temp dir containing ONLY plan.md + changes.diff.
 # That isolation is the point: a grader that can read the implementer's
 # transcript gets talked into agreeing with it. Enforced here, not by prompt.
 #
 # Usage:
-#   codex-run.sh --lane explore   [--dir D] [--timeout N] "task"
-#   codex-run.sh --lane implement [--dir D] [--read-only] [--resume] "task"
+#   codex-run.sh --lane explore   [--dir D] [--engine E] [--timeout N] "task"
+#   codex-run.sh --lane implement [--dir D] [--engine E] [--read-only] [--resume] "task"
 #   codex-run.sh --lane review    --dir D --plan FILE [--files a,b] "task"
 
 set -euo pipefail
 
 LANE=""
+ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
 DIR="$PWD"
 SANDBOX="workspace-write"
 RESUME=0
@@ -33,6 +38,7 @@ usage() { sed -n '2,20p' "$0"; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane)      LANE="$2"; shift 2 ;;
+    --engine)    ENGINE="$2"; shift 2 ;;
     --dir)       DIR="$2"; shift 2 ;;
     --plan)      PLAN="$2"; shift 2 ;;
     --files)     FILES="$2"; shift 2 ;;
@@ -69,17 +75,8 @@ clear_touched() {
   return 0
 }
 
-# --- lane: explore (deepseek, delegates to the existing proven wrapper) --------
-run_explore() {
-  [ -x "$DS_SCRIPT" ] || { echo "codex-run.sh: missing $DS_SCRIPT" >&2; return 1; }
-  local args=(--dir "$DIR" --timeout "$TIMEOUT")
-  [ "$SANDBOX" = "read-only" ] && args+=(--read-only)
-  [ "$RESUME" -eq 1 ] && args+=(--resume)
-  "$DS_SCRIPT" "${args[@]}" "$TASK"
-}
-
-# --- lane: implement (luna @ max) ---------------------------------------------
-run_implement() {
+# --- engine: luna @ max (PRIMARY for both explore and implement) --------------
+run_luna() {
   local args
   if [ "$RESUME" -eq 1 ]; then
     args=(-p luna exec resume --last --skip-git-repo-check --json -o "$RUN.last")
@@ -90,8 +87,20 @@ run_implement() {
   ( cd "$DIR" && timeout "$TIMEOUT" codex "${args[@]}" "$TASK
 
 $GUARD" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
+  local rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
-  echo "— codex/gpt-5.6-luna · effort=max · raw: $RUN.jsonl" >&2
+  echo "— codex/gpt-5.6-luna · effort=max · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  return $rc
+}
+
+# --- engine: deepseek @ max (FALLBACK only) -----------------------------------
+# Delegates to the existing proven wrapper rather than reimplementing it.
+run_deepseek() {
+  [ -x "$DS_SCRIPT" ] || { echo "codex-run.sh: missing $DS_SCRIPT" >&2; return 1; }
+  local args=(--dir "$DIR" --timeout "$TIMEOUT")
+  [ "$SANDBOX" = "read-only" ] && args+=(--read-only)
+  [ "$RESUME" -eq 1 ] && args+=(--resume)
+  "$DS_SCRIPT" "${args[@]}" "$TASK"
 }
 
 # --- lane: review (sol @ medium, isolated temp dir) ---------------------------
@@ -169,33 +178,34 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   return $rc
 }
 
-dispatch() {
+# The role fixes the sandbox; the engine is what actually runs.
+case "$LANE" in
+  explore)   SANDBOX="read-only" ;;
+  implement) ;;                       # keeps workspace-write unless --read-only
+  review)    ;;
+  *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
+esac
+
+dispatch() { # dispatch ENGINE
   case "$1" in
-    explore)   run_explore ;;
-    implement) run_implement ;;
-    review)    run_review ;;
-    *) echo "codex-run.sh: unknown lane '$1' (explore|implement|review)" >&2; exit 2 ;;
+    luna)     run_luna ;;
+    deepseek) run_deepseek ;;
+    *) echo "codex-run.sh: unknown engine '$1' (luna|deepseek)" >&2; exit 2 ;;
   esac
 }
 
-set +e
-dispatch "$LANE"
-RC=$?
-set -e
+if [ "$LANE" = "review" ]; then
+  set +e; run_review; RC=$?; set -e
+else
+  set +e; dispatch "$ENGINE"; RC=$?; set -e
 
-# Cross-lane retry (explore <-> implement only). A failure here is usually one
-# broken profile or key, not a broken task. Review has no counterpart: hard stop.
-# There is deliberately NO fallback to inline editing — that would defeat the
-# entire point of routing this work out in the first place.
-if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ]; then
-  case "$LANE" in
-    explore)   ALT=implement ;;
-    implement) ALT=explore ;;
-    *)         ALT="" ;;
-  esac
-  if [ -n "$ALT" ]; then
-    echo "codex-run.sh: lane '$LANE' failed (exit $RC) — retrying once on '$ALT'" >&2
-    set +e; dispatch "$ALT"; RC=$?; set -e
+  # Engine fallback: luna is primary, deepseek catches a broken luna profile or
+  # a transient failure. Same role, same sandbox — only the model changes.
+  # There is deliberately NO fallback to inline editing: that would defeat the
+  # entire point of routing this work out in the first place.
+  if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && [ "$ENGINE" = "luna" ]; then
+    echo "codex-run.sh: luna failed (exit $RC) — falling back to deepseek for this $LANE" >&2
+    set +e; dispatch deepseek; RC=$?; set -e
   fi
 fi
 

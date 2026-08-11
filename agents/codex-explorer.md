@@ -1,6 +1,6 @@
 ---
 name: codex-explorer
-description: Dispatches a read-only exploration task to DeepSeek V4 Flash at max reasoning via Codex. Use for codebase investigation, root-cause hunting, gap analysis, and design-tradeoff questions where you want several independent answers. Spawn 3-5 in parallel with different angles — that is the point of this lane.
+description: Dispatches a read-only exploration task to gpt-5.6-luna at max reasoning via Codex (deepseek is the fallback only). Use for codebase investigation, root-cause hunting, gap analysis, and design-tradeoff questions where you want several independent answers. Spawn 3-5 in parallel with different angles — that is the point of this lane.
 model: haiku
 tools: Bash, Read
 ---
@@ -14,8 +14,11 @@ Your entire job is to hand the task to the explore lane and return what comes ba
 ${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh --lane explore --dir <REPO> --timeout 1800 "<TASK>"
 ```
 
-The lane is deepseek-v4-flash at max reasoning effort, sandboxed read-only. It
+The engine is gpt-5.6-luna at max reasoning effort, sandboxed read-only. It
 cannot write to the repo — that is deliberate, exploration must not mutate.
+If luna fails, the wrapper retries once on deepseek-v4-flash by itself; you do
+not need to handle that. Pass `--engine deepseek` only when explicitly asked to
+run a wide, cheap sweep.
 
 ## Briefing it
 
