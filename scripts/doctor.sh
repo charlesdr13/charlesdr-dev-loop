@@ -42,6 +42,29 @@ if [ -d "$PWD/.charles/runs" ]; then
   [ "$open_n" -eq 0 ] && say OK "no unclosed runs" || say WARN "$open_n unclosed run(s) — /charlesdr-dev-loop:resolve"
 fi
 
+
+echo
+echo "Installed plugin:"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VER="$(jq -r '.version' "$REPO_ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
+CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VER"
+if [ ! -d "$CACHE" ]; then
+  say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop"
+else
+  drift=0
+  for f in scripts/codex-run.sh scripts/run-state.sh scripts/green.sh \
+           hooks/route-to-codex.sh hooks/route-subagents.sh hooks/warn-open-runs.sh \
+           agents/codex-explorer.md agents/codex-implementer.md agents/codex-reviewer.md \
+           skills/charles-flow/SKILL.md; do
+    cmp -s "$CACHE/$f" "$REPO_ROOT/$f" || { drift=$((drift+1)); echo "         drifted: $f"; }
+  done
+  # The installed plugin is a COPY taken at install time, not a live view. Editing
+  # the repo changes nothing until you bump the version and reinstall. This check
+  # exists because that surprise has now cost three separate debugging detours.
+  [ "$drift" -eq 0 ] && say OK "installed v$VER matches this repo" \
+    || say FAIL "$drift file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+fi
+
 echo
 echo "$ok ok, $bad failing"
 [ "$bad" -eq 0 ]
