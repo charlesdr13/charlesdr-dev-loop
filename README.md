@@ -360,6 +360,25 @@ skill is what actually keeps the work routed.
 
 ---
 
+## A lane that stopped answering
+
+Never decide a dispatch is alive by looking for its output file. `.last` appears
+only on success, so a killed lane leaves nothing and a waiter cannot tell "still
+working" from "died twelve minutes ago" — which is exactly how an agent ends up
+stuck for half an hour on an engine that already exited.
+
+```bash
+scripts/lane-status.sh        # 0 RUNNING · 1 DONE · 2 DEAD
+```
+
+Every dispatch now also writes a `.done` marker with its exit code on every
+exit path it can control, so a timeout reports `rc=124`. It cannot cover
+SIGKILL — nothing can — which is why liveness is answered by process, not file.
+
+DEAD means over: record `FAILED`, stop, and never re-dispatch on top of a
+RUNNING lane. The original keeps writing, and two engines racing on one tree is
+how work gets silently lost.
+
 ## Chunked dispatch
 
 An implementer given twelve requirements does about 60% of each — the diff looks

@@ -14,6 +14,7 @@ You are a dispatcher, not an implementer. You do not write the code yourself.
 # agent shell — trusting it is what sent earlier agents hunting through the
 # filesystem and executing someone's live working copy.
 RUN="$(command -v codex-run || true)"
+SCRIPTS="$(dirname "$(readlink -f "$RUN")")"
 [ -x "$RUN" ] || RUN="${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-run.sh"
 [ -x "$RUN" ] || { echo "codex-run not found — report this and STOP"; exit 1; }
 ```
@@ -107,6 +108,27 @@ sleep 300; tail -20 /tmp/lane-$$.log
 ```
 
 Three checks maximum. Still running after that? Report it as `FAILED` and stop.
+
+## If you end up waiting
+
+You should rarely wait — a dispatch under the cap either returns or errors. But
+if you do, **never wait on a file.** `.last` is written only on success, so
+"no file yet" and "died twelve minutes ago" look identical. Agents have sat
+stuck for 27 minutes on engines that had already exited, burning 50k tokens.
+
+Ask the process instead:
+
+```bash
+"$SCRIPTS/lane-status.sh"          # newest dispatch, or pass a run id
+```
+
+- **exit 0 RUNNING** — genuinely working. Keep waiting only if under your cap.
+- **exit 1 DONE** — finished; read the named result file.
+- **exit 2 DEAD** — no process, no result. It is over. Report `FAILED` and stop.
+
+Three checks maximum, `sleep 300` between them, then `FAILED` regardless.
+Never re-dispatch on top of a RUNNING lane: the original keeps writing and you
+get two engines racing, which is how a tree gets corrupted.
 
 ## The receipt is mandatory
 

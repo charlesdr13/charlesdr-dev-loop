@@ -90,6 +90,21 @@ isolated reviewer after it. That is why it must be requirements rather than
 steps: "tighten the card spacing" is checkable against a diff, "step 3: edit
 CampaignCard.tsx" is not.
 
+## A lane that stopped answering
+
+Never decide a dispatch is alive by looking for its output file. `.last` appears
+only on success, so a killed lane leaves nothing and a waiter cannot tell
+"still working" from "died". That is the exact shape of a stuck agent.
+
+```bash
+"$SCRIPTS/lane-status.sh"     # 0 RUNNING · 1 DONE · 2 DEAD
+```
+
+DEAD means over: record `FAILED`, do not wait, do not re-dispatch on top of it.
+A dispatch that exceeded its own `--timeout` reports rc=124; one with no marker
+at all was SIGKILLed, which nothing can trap, which is precisely why liveness is
+answered by process rather than by file.
+
 ## Chunk the dispatch, not just the scope
 
 An implementer given twelve requirements does roughly 60% of each. The work

@@ -232,6 +232,29 @@ bash "$VR" "$VD" --since 5 >/dev/null 2>&1
 [ $? -eq 1 ] && { echo "  PASS  a stale receipt does not count"; pass=$((pass+1)); } \
              || { echo "  FAIL  time window should reject"; fail=$((fail+1)); }
 
+# --- lane liveness ------------------------------------------------------------
+# Waiting on .last cannot distinguish "not finished yet" from "killed"; agents
+# sat stuck 27 minutes on dead engines. lane-status asks the process instead.
+LS="$(cd "$(dirname "$0")/.." && pwd)/scripts/lane-status.sh"
+LD="$BOX/lanes"; mkdir -p "$LD"
+
+touch "$LD/20260101-000000-111111-explore.jsonl"
+printf '124\n' > "$LD/20260101-000000-111111-explore.done"
+CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-111111-explore >/dev/null 2>&1
+[ $? -eq 2 ] && { echo "  PASS  timed-out dispatch reports DEAD"; pass=$((pass+1)); } \
+             || { echo "  FAIL  timed-out dispatch should be DEAD"; fail=$((fail+1)); }
+
+touch "$LD/20260101-000000-222222-explore.jsonl"
+CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-222222-explore >/dev/null 2>&1
+[ $? -eq 2 ] && { echo "  PASS  SIGKILLed dispatch (no marker) reports DEAD"; pass=$((pass+1)); } \
+             || { echo "  FAIL  unmarked dispatch should be DEAD"; fail=$((fail+1)); }
+
+touch "$LD/20260101-000000-333333-explore.jsonl"
+printf 'result\n' > "$LD/20260101-000000-333333-explore.last"
+CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-333333-explore >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  finished dispatch reports DONE"; pass=$((pass+1)); } \
+             || { echo "  FAIL  dispatch with a result should be DONE"; fail=$((fail+1)); }
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

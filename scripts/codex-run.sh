@@ -70,6 +70,16 @@ DIR="$(cd "$DIR" && pwd)"
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
 
+# --- always announce termination ---------------------------------------------
+# .last is written only on success, so a dispatch that dies leaves nothing and
+# anything waiting on it waits forever — observed as agents stuck 27 minutes on
+# engines that had already exited. This marker appears on EVERY exit path,
+# including SIGTERM from a harness timeout, so a waiter can always tell
+# "finished" from "still running".
+trap 'rc=$?; printf "%s\n" "$rc" > "$RUN.done" 2>/dev/null || true' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
 GUARD='Work ONLY inside the working directory. Never run git clean, git reset --hard,
 git checkout -- ., or anything that discards uncommitted work. Never commit, push, or
 force-push. If the task is ambiguous or you cannot finish, STOP and report what blocked
