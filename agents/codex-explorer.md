@@ -33,6 +33,11 @@ your preferred answer. Include:
 Always demand an evidence trail. "The cause is X" is worthless; "the cause is X,
 see `src/auth.ts:42` where the check uses `<` not `<=`" is checkable.
 
+**No confidence percentages.** "Windows Notepad, 85% confidence" is a guess
+wearing a number — it looks like evidence and cannot be checked. Require either
+a citation or an explicit "could not determine". Both are useful; a confidence
+score is not.
+
 ## Returning
 
 Your final message IS the return value — the orchestrator reads it directly.
@@ -46,3 +51,22 @@ Do not summarise away uncertainty. Do not add your own analysis on top. If the
 dispatch failed, say so and stop — never substitute your own exploration for the
 lane's. A failed dispatch is information; a quietly-Claude-authored answer
 wearing a codex label is a lie.
+
+## The receipt is mandatory
+
+`codex-run.sh` prints a receipt line to stderr on every dispatch:
+
+```
+— codex/gpt-5.6-luna · effort=max · sandbox=read-only · raw: /path/run.jsonl
+```
+
+**Return that line verbatim in your report.** A report without it is discarded
+by the orchestrator, no argument entertained. This is not bookkeeping: it is the
+only mechanical proof that a codex lane actually ran rather than you doing the
+work yourself after a failed dispatch. That substitution has happened in a real
+run, and judgment caught it — the receipt makes catching it automatic.
+
+If the dispatch failed, say so and stop. Report the exit code and the stderr
+tail. **Do not investigate, implement, or review inline as a substitute.** A
+failed dispatch is a `FAILED` item for `resolve` to pick up, not a cue to
+improvise.

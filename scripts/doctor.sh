@@ -32,6 +32,15 @@ if [ -f "$PWD/.charles.toml" ]; then
 else
   say WARN "not opted in — run /charlesdr-dev-loop:init to enable the hook and flows here"
 fi
+have tasks-axi && say OK "tasks-axi (open items)" || say WARN "tasks-axi missing — open items stay in RUN.md instead"
+if [ -d "$PWD/.charles/runs" ]; then
+  open_n=0
+  for d in "$PWD"/.charles/runs/*/; do
+    [ -f "$d/RUN.md" ] || continue
+    grep -q '^## Outcome' "$d/RUN.md" || open_n=$((open_n+1))
+  done
+  [ "$open_n" -eq 0 ] && say OK "no unclosed runs" || say WARN "$open_n unclosed run(s) — /charlesdr-dev-loop:resolve"
+fi
 
 echo
 echo "$ok ok, $bad failing"

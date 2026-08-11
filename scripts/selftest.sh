@@ -84,6 +84,45 @@ scheck "general-purpose must route"      ask general-purpose "$BOX/repo"
 scheck "python-pro must route"           ask python-pro "$BOX/repo"
 scheck "feature-dev:code-explorer routes" ask "feature-dev:code-explorer" "$BOX/repo"
 
+# --- run state lifecycle ------------------------------------------------------
+RS="$(cd "$(dirname "$0")/.." && pwd)/scripts/run-state.sh"
+WARN="$(cd "$(dirname "$0")/.." && pwd)/hooks/warn-open-runs.sh"
+RT="$BOX/runrepo"; mkdir -p "$RT/docs/specs"
+( cd "$RT" && git init -q && git config user.name tester && git config user.email tester@example.invalid )
+printf 'green = "true"\n' > "$RT/.charles.toml"
+printf '# Plan\n' > "$RT/docs/specs/p.md"
+
+rcheck() { # rcheck NAME EXPECT-SUBSTRING COMMAND...
+  local name="$1" want="$2"; shift 2
+  local out; out="$("$@" 2>&1 || true)"
+  if grep -qF "$want" <<<"$out"; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name — expected to contain: $want"; fail=$((fail+1)); fi
+}
+
+echo
+bash "$RS" init "$RT" debug "test goal" >/dev/null
+rcheck "run state records a phase"  "Phase 1"  bash "$RS" phase "$RT" "Phase 1" "3 passed"
+rcheck "run state records an item"  "FAILED"   bash "$RS" item  "$RT" FAILED "lane timed out"
+rcheck "bad item type is rejected"  "bad type" bash "$RS" item  "$RT" NONSENSE "x"
+rcheck "show surfaces the open run" "test goal" bash "$RS" show "$RT"
+
+warn_out="$( cd "$RT" && bash "$WARN" 2>&1 || true )"
+if grep -q 'FAILED item' <<<"$warn_out"; then
+  echo "  PASS  stop hook warns on FAILED"; pass=$((pass+1))
+else
+  echo "  FAIL  stop hook warns on FAILED"; fail=$((fail+1))
+fi
+
+bash "$RS" close "$RT" "done" --spec docs/specs/p.md >/dev/null
+warn_out="$( cd "$RT" && bash "$WARN" 2>&1 || true )"
+if [ -z "$warn_out" ]; then
+  echo "  PASS  stop hook silent after close"; pass=$((pass+1))
+else
+  echo "  FAIL  stop hook silent after close"; fail=$((fail+1))
+fi
+
+rcheck "outcome promoted to committed plan" "Run outcome" cat "$RT/docs/specs/p.md"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -57,3 +57,22 @@ Never claim the change works. You did not run it — verification happens after
 you, in the review lane and the green command. If the dispatch failed, report
 the failure and stop. Do not finish the work inline: that is precisely the
 behaviour this whole plugin exists to prevent.
+
+## The receipt is mandatory
+
+`codex-run.sh` prints a receipt line to stderr on every dispatch:
+
+```
+— codex/gpt-5.6-luna · effort=max · sandbox=read-only · raw: /path/run.jsonl
+```
+
+**Return that line verbatim in your report.** A report without it is discarded
+by the orchestrator, no argument entertained. This is not bookkeeping: it is the
+only mechanical proof that a codex lane actually ran rather than you doing the
+work yourself after a failed dispatch. That substitution has happened in a real
+run, and judgment caught it — the receipt makes catching it automatic.
+
+If the dispatch failed, say so and stop. Report the exit code and the stderr
+tail. **Do not investigate, implement, or review inline as a substitute.** A
+failed dispatch is a `FAILED` item for `resolve` to pick up, not a cue to
+improvise.

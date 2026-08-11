@@ -68,6 +68,26 @@ git checkout -- ., or anything that discards uncommitted work. Never commit, pus
 force-push. If the task is ambiguous or you cannot finish, STOP and report what blocked
 you rather than improvising a different design or tidying unrelated files.'
 
+# --- append a dispatch receipt: mechanical, no model cooperation required -----
+# This is both halves of the fix: it is the receipt an agent must echo back
+# (closing the inline-fallback hole) and the record `resolve` correlates on.
+log_dispatch() { # log_dispatch ENGINE RC
+  local f="$DIR/.charles/dispatches.jsonl"
+  mkdir -p "$DIR/.charles" 2>/dev/null || return 0
+  local model
+  case "$1" in
+    luna)     model="gpt-5.6-luna" ;;
+    deepseek) model="deepseek-v4-flash" ;;
+    review)   model="gpt-5.6-sol" ;;
+    *)        model="$1" ;;
+  esac
+  jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
+     --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN" \
+     --arg task "$(printf '%.200s' "$TASK")" \
+     '{ts:$ts,lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,task:$task}' \
+     >> "$f" 2>/dev/null || true
+}
+
 # --- clear the hook'"'"'s touched-files counter on a successful dispatch --------------
 clear_touched() {
   local root="$1"
@@ -196,8 +216,10 @@ dispatch() { # dispatch ENGINE
 
 if [ "$LANE" = "review" ]; then
   set +e; run_review; RC=$?; set -e
+  log_dispatch review "$RC"
 else
   set +e; dispatch "$ENGINE"; RC=$?; set -e
+  log_dispatch "$ENGINE" "$RC"
 
   # Engine fallback: luna is primary, deepseek catches a broken luna profile or
   # a transient failure. Same role, same sandbox — only the model changes.
@@ -206,6 +228,7 @@ else
   if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && [ "$ENGINE" = "luna" ]; then
     echo "codex-run.sh: luna failed (exit $RC) — falling back to deepseek for this $LANE" >&2
     set +e; dispatch deepseek; RC=$?; set -e
+    log_dispatch deepseek "$RC"
   fi
 fi
 

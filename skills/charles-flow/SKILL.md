@@ -47,6 +47,37 @@ are unaffected.
 as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
 in sequence rather than fanning out agents, so keep fleets small.
 
+## Run state
+
+Every flow run keeps durable state, because a run that ends in prose ends with
+its open items lost:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh init  "$(pwd)" <flow> "<goal>"
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh phase "$(pwd)" "<phase>" "<pasted proof output>"
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh item  "$(pwd)" <TYPE> "<text>"
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh close "$(pwd)" "<outcome>" --spec docs/specs/<plan>.md
+```
+
+`init` at the start, `phase` at every phase boundary (with the actual output,
+per the proof protocol), `item` the moment something cannot be finished now:
+
+| Type | Meaning |
+|---|---|
+| `BLOCKED-HUMAN` | needs a fact or reply only the user has |
+| `PENDING-DECISION` | ready to act, needs their yes |
+| `DEFERRED` | deliberately out of scope |
+| `FAILED` | a lane died, work incomplete |
+
+Close only when every item is resolved AND the flow reached its final phase. A
+run that died at phase 3 with no open items is abandoned, not finished — leave
+it open. `/charlesdr-dev-loop:resolve` picks up from there.
+
+**Discard any agent report with no receipt line.** Every codex agent must return
+the `— codex/<model> · …` line the wrapper prints. Missing receipt means the
+lane did not run and the agent answered from its own head — treat the report as
+absent, and record a `FAILED` item.
+
 ## Flow 1 — feature
 
 1. **Brainstorm.** Use `superpowers:brainstorming`. **Override its terminal
@@ -71,17 +102,24 @@ in sequence rather than fanning out agents, so keep fleets small.
 2. Explore fleet on the failing behaviour. Each explorer gets the repro and is
    asked for a cause **plus** the `file:line` evidence trail, never a patch.
 3. Ground to truth: confirm the cause yourself against source before fixing.
-4. `codex-implementer` for the fix.
-5. Verify: run the green command and paste the output. Same 3-cycle cap.
+4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
+   the intended fix scope, and the green command. Three short sections. This is
+   what makes step 6 possible at all — the review lane needs a plan, and without
+   one a debug fix ships unreviewed.
+5. `codex-implementer` for the fix.
+6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
+   nothing else".
+7. Verify: run the green command and paste the output. Same 3-cycle cap.
 
 ## Flow 3 — polish
 
 1. Explore fleet asked for gaps, must-haves, and quality-of-life wins — one
    explorer per lens, not three asked the same question.
 2. Brainstorm the shortlist with the user.
-3. Grill (`grill-rounds`).
+3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`.
 4. `codex-implementer`.
-5. Verify.
+5. `codex-reviewer` against that plan.
+6. Verify.
 
 ## The ground-truth gate
 
@@ -113,4 +151,8 @@ same as not having the system at all. Report the failure and let the user decide
 ## Artifacts
 
 - Plan and grill verdict → `docs/specs/YYYY-MM-DD-<topic>.md`, committed.
-- Codex transcripts, gate output, hook state → `.charles/`, gitignored.
+  **Every flow writes one** — debug and polish included, or their fix cannot be
+  reviewed.
+- Run state, dispatch log, transcripts, hook state → `.charles/`, gitignored.
+- The closing outcome paragraph is appended to the committed plan, so the
+  durable half survives without committing forensic detail nobody rereads.

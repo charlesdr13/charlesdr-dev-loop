@@ -161,12 +161,47 @@ having the system.
 | `/charlesdr-dev-loop:debug <symptom>` | Something is broken |
 | `/charlesdr-dev-loop:polish` | "What should I improve here" |
 | `/charlesdr-dev-loop:init` | Opt this repo in |
+| `/charlesdr-dev-loop:resolve` | Pick up where the last run stopped |
 | `/charlesdr-dev-loop:doctor` | Check every lane and dependency |
 
 You do not have to type them. In an opted-in repo the flow triggers on intent —
 "add rate limiting" is enough. The commands are for being explicit.
 
 ---
+
+## Continuing a run
+
+A flow that ends with open items used to end in prose, and the prose died with
+the session. Every run now keeps state in `.charles/runs/<id>/RUN.md` — phases
+with their pasted proof, the rollback command, and open items typed by who can
+unblock them:
+
+| Type | Meaning | Unblocked by |
+|---|---|---|
+| `BLOCKED-HUMAN` | needs a fact or reply only you have | you |
+| `PENDING-DECISION` | ready to act, needs your yes | you |
+| `DEFERRED` | deliberately out of scope | either |
+| `FAILED` | a lane died, work incomplete | re-dispatch |
+
+```bash
+/charlesdr-dev-loop:resolve          # newest unclosed run
+/charlesdr-dev-loop:resolve --list   # pick another
+```
+
+`resolve` surfaces `BLOCKED-HUMAN` first (usually two minutes of your time, and
+everything downstream waits on them), confirms before re-dispatching a `FAILED`
+lane, and closes only when every item is resolved *and* the flow reached its
+final phase — a run that died at phase 3 is abandoned, not finished.
+
+Where `tasks-axi` is installed it owns the items, since it already resurfaces
+them at session start; otherwise they live in `RUN.md`.
+
+Alongside this, `codex-run.sh` appends a receipt for every dispatch to
+`.charles/dispatches.jsonl` — lane, engine, model, exit code. It is written by
+the script, so a lane that fails records itself with no cooperation from any
+model. That log is also what makes the receipt rule enforceable: every agent must
+return the `— codex/<model> · …` line, and a report without one is discarded as
+having never run a lane at all.
 
 ## The hooks
 
@@ -185,6 +220,10 @@ instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
 language specialist in an opted-in repo asks you to use a codex lane instead.
 It is a denylist of agents that do repo code work — `google-drive`,
 `claude-code-guide` and the rest are none of this hook's business.
+
+**Unclosed runs** — a `Stop` hook warns when a run has `FAILED` items. Only
+`FAILED`: the others already resurface via `tasks-axi`, and warning twice is
+nagging.
 
 **Known hole, on purpose.** Writes through Bash (`sed -i`, heredocs, `tee`) are
 not intercepted. Matching those would fire on every `bun test > out.log` and the
@@ -213,7 +252,7 @@ convinces itself it is finished.
 ## Test
 
 ```bash
-bash scripts/selftest.sh   # 16 assertions across both hooks' allow/ask branches
+bash scripts/selftest.sh   # 23 assertions: both PreToolUse hooks, run state, Stop hook
 bash scripts/doctor.sh     # every lane, every dependency, this repo's config
 ```
 
