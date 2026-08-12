@@ -227,11 +227,27 @@ still carry a long requirement list.
 - **11+** — three or more, and reconsider whether this is one plan. A plan with
   fifteen requirements is usually two features that have not been separated yet.
 
-Dispatch chunks **sequentially on the same tree**. The concurrent-writer lock
-refuses a second simultaneous writer, and going parallel would demand a
-worktree per maker plus disjoint file slices — real machinery, for a benefit
-that sequential chunking already delivers. Parallel implementers stay reserved
-for work whose slices the plan genuinely declares independent.
+**Serial by default, parallel when it actually pays.** The median implement is
+1.9 min, so parallelising two short chunks buys nothing. But p90 is 19.5 min,
+and three long disjoint chunks cost ~30 min serially against ~10 in parallel.
+
+Go parallel when **all three** hold: 3+ chunks, genuinely disjoint file sets,
+and each chunk non-trivial. Otherwise sequential, with `green.sh` between chunks
+so a failure implicates four requirements instead of twelve.
+
+```bash
+"$SCRIPTS/parallel-chunks.sh" "$(pwd)" chunks.json
+# chunks.json: [{"name":"api","files":["src/a.ts"],"task":"..."}, ...]
+```
+
+Each chunk gets its own `treehouse` worktree and **declares the files it may
+touch**. The declaration is what makes this safe, not the worktree: overlapping
+declarations are refused before anything is dispatched, and a chunk that writes
+outside its own declaration is rejected and never merged. So a lane that
+quietly widens its scope gets caught, which the serial path does not do.
+
+Merging is per-file and only from accepted chunks. **Run `green.sh` once on the
+combined result** — chunks that pass alone can still fail together.
 
 Between chunks: run `green.sh`, and record progress with `run-state.sh phase`.
 That is the point of chunking — a red result after chunk two implicates four
