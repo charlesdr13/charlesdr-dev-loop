@@ -21,10 +21,28 @@ grill a plan that only exists in the conversation, and neither can the adversary
 Dispatch a `codex-explorer` (read-only, so it cannot "fix" anything) with:
 
 > Attack this plan. You are trying to find the reason it fails, not to improve
-> it. Produce a numbered list of: unstated assumptions; steps that depend on
-> something not established; claims about the codebase that may be false; cases
-> the plan does not handle; and anything simpler that would achieve the same
-> outcome. For each, say what evidence would settle it. Do not propose a rewrite.
+> it. Produce a numbered list of:
+>
+> - unstated assumptions, and steps depending on something not established
+> - claims about the codebase that may be false — check them against source
+> - cases the plan does not handle
+> - anything simpler that achieves the same outcome
+> - **terminology**: terms the plan uses loosely or in more than one sense, and
+>   any that conflict with how the codebase or a CONTEXT.md/glossary uses them
+> - **contradictions**: where the plan says the system behaves one way and the
+>   code says otherwise. Quote both.
+> - **scenarios**: invent two concrete edge cases and walk the plan through them
+>
+> For each item, say what evidence would settle it, with `file:line` where the
+> answer is in the repo. Do not propose a rewrite. Do not ask questions — there
+> is nobody to answer them.
+
+The last three come from `grill-with-docs`, which is available to codex as a
+skill. **Do not tell the lane to load `grill-me` or `grill-with-docs`**: both
+are interview skills that ask one question at a time and wait for a human. In an
+unattended dispatch the lane would stall on questions nobody will answer. Take
+their checkable parts, as above, and leave the interview to round 2 where a
+human actually is present.
 
 Then, for each item it raises, **answer it yourself from source** — read the
 files, run the command, check the API. Every item ends in one of three states:

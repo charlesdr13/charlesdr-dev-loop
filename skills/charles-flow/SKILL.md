@@ -135,15 +135,23 @@ A dispatch that exceeded its own `--timeout` reports rc=124; one with no marker
 at all was SIGKILLed, which nothing can trap, which is precisely why liveness is
 answered by process rather than by file.
 
-## The lane has no skills
+## What a lane inherits: nothing automatic, almost everything on request
 
-Codex runs in its own process and cannot load Claude Code skills. Whatever
-constraint you want on the code has to be in the prompt, or it does not exist.
+Codex loads no Claude Code skill on its own — not `ponytail`, not your
+CLAUDE.md, not your output style. But `~/.codex/skills/` mirrors 100+ of them
+(impeccable, the gsap set, superpowers, tdd, the grill skills), and a lane told
+to load one does. Verified: an implement lane read
+`skills/ponytail/SKILL.md` and quoted it back verbatim.
 
-`ponytail` is the one that matters for the write lane, so the wrapper appends a
-distilled ladder to every implement dispatch automatically. Nothing else is
-inherited: no CLAUDE.md, no output style, no skill you have loaded. If a
-convention matters, put it in the brief or point at a file that demonstrates it.
+So the rule is: **name the skill in the brief, or it does not apply.** The
+wrapper already does this for `ponytail` on every implement dispatch.
+
+**But check the skill's shape before pointing a lane at it.** `grill-me` and
+`grill-with-docs` are interview skills — they ask one question at a time and
+wait for a human. An unattended lane told to load one stalls on questions nobody
+will answer. `grill-rounds` therefore borrows their checkable parts (terminology
+conflicts, plan-versus-code contradictions, edge-case scenarios) and leaves the
+interviewing to the round where a human is present.
 
 ## Chunk the dispatch, not just the scope
 
