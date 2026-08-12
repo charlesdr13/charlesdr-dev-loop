@@ -172,7 +172,9 @@ run_gpt() { # run_gpt PROFILE
   [ "$LANE" = "implement" ] && extra="
 
 $LADDER"
-  ( cd "$DIR" && timeout "$TIMEOUT" codex "${args[@]}" "$TASK
+  # -k: GNU timeout sends only TERM. A child that ignores it would hang forever,
+  # holding the writer lock and never falling back.
+  ( cd "$DIR" && timeout -k 30s "$TIMEOUT" codex "${args[@]}" "$TASK
 
 $GUARD$extra" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   local rc=$?
@@ -257,7 +259,7 @@ Report, in this order:
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
   set +e
-  ( cd "$box" && timeout "$TIMEOUT" codex exec --skip-git-repo-check \
+  ( cd "$box" && timeout -k 30s "$TIMEOUT" codex exec --skip-git-repo-check \
       -s read-only -C "$box" -m gpt-5.6-sol -c model_reasoning_effort=medium \
       --disable fast_mode \
       --json -o "$RUN.last" "$prompt" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
@@ -277,8 +279,16 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
 # 10-minute cap was re-dispatched while the original codex was still writing.
 # Worktree isolation was documented but never enforced by anything; this is.
 if [ "$LANE" = "implement" ] && [ "$SANDBOX" = "workspace-write" ]; then
-  others="$(pgrep -af "timeout [0-9]+ codex" 2>/dev/null \
-            | grep -F -- "-C $DIR" | grep -F -- "-s workspace-write" | grep -vc "^$$ " || true)"
+  # flock, not pgrep: the probe was racy (two simultaneous starts could both
+  # pass it) and blind to `--resume`, which omits -C and so never matched.
+  # The lock is held on this process until it exits, by the kernel.
+  mkdir -p "$DIR/.charles" 2>/dev/null || true
+  exec 9>"$DIR/.charles/implement.lock"
+  if ! flock -n 9; then
+    others=1
+  else
+    others=0
+  fi
   if [ "${others:-0}" -gt 0 ]; then
     echo "codex-run.sh: REFUSING — $others implement dispatch(es) already writing to $DIR" >&2
     echo "codex-run.sh: two writers on one tree interleave edits and silently lose work." >&2

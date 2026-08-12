@@ -107,6 +107,16 @@ close)
   # coverage and 1 grill verdict across 13 plans — every one of those "finished"
   # because the individual dispatches succeeded. A dispatch succeeding is not a
   # flow finishing.
+  # An unchecked item means the run is not finished, whatever else is clean.
+  # This gate existed to stop premature "done" and did not check the one thing
+  # it was built for. Found by an adversarial review, 2026-08-12.
+  if [ "$force" -eq 0 ] && grep -q '^- \[ \] ' "$d/RUN.md" 2>/dev/null; then
+    echo "run-state.sh: REFUSING to close — the run still has open items:" >&2
+    grep '^- \[ \] ' "$d/RUN.md" | sed 's/^/  /' >&2
+    echo "run-state.sh: resolve them, or close deliberately with --force." >&2
+    exit 5
+  fi
+
   fs="$(dirname "$0")/flow-status.sh"
   if [ -x "$fs" ] && [ "$force" -eq 0 ]; then
     if ! "$fs" "$DIR" --closing "$d" > /tmp/flow-status.$$ 2>&1; then

@@ -126,6 +126,8 @@ else
   echo "  FAIL  stop hook silent on open run with no FAILED — got: $warn_out"; fail=$((fail+1))
 fi
 
+# the run recorded a FAILED item earlier; a real flow resolves it before closing
+sed -i 's/^- \[ \] /- [x] /' "$RT"/.charles/runs/*/RUN.md 2>/dev/null
 bash "$RS" close "$RT" "done" --spec docs/specs/p.md >/dev/null
 warn_out="$( cd "$RT" && bash "$WARN" 2>&1 || true )"
 if [ -z "$warn_out" ]; then
@@ -143,7 +145,9 @@ RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
 LOCKDIR="$BOX/locktest"; mkdir -p "$LOCKDIR/bin"
 printf '#!/usr/bin/env bash\nsleep 25\n' > "$LOCKDIR/bin/codex"; chmod +x "$LOCKDIR/bin/codex"
 
-( PATH="$LOCKDIR/bin:$PATH"; timeout 25 codex -C "$LOCKDIR" -s workspace-write >/dev/null 2>&1 ) &
+mkdir -p "$LOCKDIR/.charles"
+# hold the real lock the way a live writer would, then try to start a second
+( flock 9 && sleep 20 ) 9>"$LOCKDIR/.charles/implement.lock" &
 decoy=$!
 sleep 1
 

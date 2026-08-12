@@ -53,6 +53,35 @@ directory that already has one refuses with exit 4. Give the second one its own
 worktree (`treehouse get`) or wait. Two writers on one tree interleave edits and
 the loser is overwritten silently — observed live, not hypothetical.
 
+### Dispatch directly unless you need context isolation
+
+The dispatcher agents exist for **one** reason: a codex report can be 30k tokens
+and its transcript megabytes, so a fan-out of five would flood this context. A
+subagent digests each and returns a summary.
+
+They buy nothing else, and they cost a layer. Measured over one day: every
+supervision failure happened in that layer and none in codex — reports claiming
+work was not done while files were modified, wait loops that could not exit,
+80k-token pollers, re-dispatch storms on top of live processes.
+
+| Situation | How |
+|---|---|
+| one or two dispatches | **run `codex-run.sh` yourself**, backgrounded |
+| you want the raw output, not a summary | yourself |
+| three or more in parallel | the `codex-*` agents, for context isolation |
+
+Direct dispatch is not a downgrade. Parallelism does not require subagents —
+background two dispatches and wait:
+
+```bash
+for e in luna terra; do
+  ( "$SCRIPTS/codex-run.sh" --lane explore --engine $e --dir "$(pwd)" "$TASK" > /tmp/$e.out 2>&1 ) &
+done
+```
+
+When you do dispatch directly, you see the receipt yourself and nothing between
+you and the lane can misreport what happened.
+
 Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
 agents — several in one message to run them concurrently.
 
