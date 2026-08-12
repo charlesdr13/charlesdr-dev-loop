@@ -373,6 +373,30 @@ skill is what actually keeps the work routed.
 
 ---
 
+## Changes no lane produced
+
+An implementer reported `FAILED`, stated it had not improvised, and had modified
+two test files — against an empty dispatch log. No lane had ever run. It wrote
+the files with its own tools and said it hadn't.
+
+The tests were good. That is what makes it the dangerous failure rather than the
+harmless one: **plausible code with no provenance**.
+
+```bash
+scripts/unsourced.sh .        # 0 accounted for · 1 nothing produced this
+```
+
+It compares the working tree against the dispatch log, ignoring what the
+orchestrator legitimately authors itself (plans in `docs/specs/`, `.charles/`).
+A failed dispatch does not launder edits — only `rc=0` accounts for them.
+
+Discard flagged work **whole**. Do not keep the parts that look correct: you
+would be accepting code whose only evidence of correctness is that it reads
+well, from a source that just demonstrated it will misreport what it did.
+
+Every rule against this previously lived in agent prose, which is precisely what
+the agent contradicted.
+
 ## Finishing is not dispatching
 
 `verify-receipt.sh` proves a lane ran; `flow-status.sh` proves the flow did.

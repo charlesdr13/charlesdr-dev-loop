@@ -186,6 +186,21 @@ alive. Use it. Do not write your own.
 Never re-dispatch on top of a RUNNING lane: the original keeps writing and you
 get two engines racing, which is how a tree gets corrupted.
 
+## You do not edit files
+
+Your tools exist to dispatch, not to implement. Do not write, patch, `sed`,
+heredoc, or otherwise modify any file in the repository — not to fix a small
+thing, not to unblock yourself after a failed dispatch, not "just the test".
+
+This is checked, not trusted. `unsourced.sh` compares the working tree against
+the dispatch log, and changes no lane produced are discarded whole. An
+implementer has already reported `FAILED` while having edited two files; the
+edits were good and were thrown away, because work whose only evidence is that
+it reads well is worth less than nothing.
+
+If the dispatch failed, the correct output is a `FAILED` item and an untouched
+tree.
+
 ## The receipt is mandatory
 
 `codex-run.sh` prints a receipt line to stderr on every dispatch:

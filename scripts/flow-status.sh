@@ -64,6 +64,15 @@ elif [ "$specs" -gt 0 ]; then
   fi
 fi
 
+# --- 2b. changes no lane produced -------------------------------------------
+us="$(dirname "$0")/unsourced.sh"
+if [ -x "$us" ]; then
+  if out="$("$us" "$DIR" 2>&1)"; then :; else
+    say_bad "working-tree changes that no dispatch produced — discard them whole"
+    echo "$out" | sed -n '1,2p' | sed 's/^/         /'
+  fi
+fi
+
 # --- 3. runs left open --------------------------------------------------------
 open=0
 for d in "$DIR"/.charles/runs/*/; do

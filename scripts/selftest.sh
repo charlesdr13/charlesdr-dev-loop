@@ -309,6 +309,33 @@ else
   echo "  PASS  explore correctly omits the ladder"; pass=$((pass+1))
 fi
 
+# --- unsourced changes --------------------------------------------------------
+# An implementer reported FAILED while having edited two files, against an empty
+# dispatch log. Prose forbade it; prose is what the agent contradicted.
+US="$(cd "$(dirname "$0")/.." && pwd)/scripts/unsourced.sh"
+UD="$BOX/unsourced"; mkdir -p "$UD"
+( cd "$UD" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  echo orig > a.ts && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf 'edited by nobody\n' > "$UD/a.ts"
+
+bash "$US" "$UD" >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  edits with no dispatch are flagged unsourced"; pass=$((pass+1)); } \
+             || { echo "  FAIL  unsourced edits should be flagged"; fail=$((fail+1)); }
+
+mkdir -p "$UD/.charles"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"/x","task":"t"}\n' "$NOW" \
+  > "$UD/.charles/dispatches.jsonl"
+bash "$US" "$UD" >/dev/null 2>&1
+[ $? -eq 0 ] && { echo "  PASS  the same edits with a real dispatch are accounted for"; pass=$((pass+1)); } \
+             || { echo "  FAIL  dispatched edits should be accounted for"; fail=$((fail+1)); }
+
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":143,"run":"/y","task":"t"}\n' "$NOW" \
+  > "$UD/.charles/dispatches.jsonl"
+bash "$US" "$UD" >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  a failed dispatch does not launder edits"; pass=$((pass+1)); } \
+             || { echo "  FAIL  rc!=0 must not account for edits"; fail=$((fail+1)); }
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
