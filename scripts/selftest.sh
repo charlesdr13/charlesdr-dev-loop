@@ -356,6 +356,20 @@ else
   echo "  FAIL  default should still be luna"; fail=$((fail+1))
 fi
 
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine terra --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  terra runs with fast_mode disabled"; pass=$((pass+1))
+else
+  echo "  FAIL  terra must not use fast_mode"; fail=$((fail+1))
+fi
+
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--enable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  luna keeps fast_mode enabled"; pass=$((pass+1))
+else
+  echo "  FAIL  luna should keep fast_mode"; fail=$((fail+1))
+fi
+
 out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine nonsense --dir "$ED" --timeout 5 "t" 2>&1)"
 if grep -q 'unknown engine' <<<"$out"; then
   echo "  PASS  an unknown engine is rejected"; pass=$((pass+1))

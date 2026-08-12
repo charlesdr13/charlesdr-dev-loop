@@ -152,14 +152,18 @@ clear_touched() {
 
 # --- engines: luna (primary) and terra (escalation), both gpt-5.6 @ max -------
 run_gpt() { # run_gpt PROFILE
-  local profile="$1" args
+  local profile="$1" args fast
+  # fast_mode on luna only. terra is the escalation engine — it is reached after
+  # two failures, which is exactly when you want its full deliberation, not a
+  # faster answer.
+  if [ "$profile" = "terra" ]; then fast="--disable"; else fast="--enable"; fi
   if [ "$RESUME" -eq 1 ]; then
-    args=(-p "$profile" exec resume --last --skip-git-repo-check --enable fast_mode --json -o "$RUN.last")
+    args=(-p "$profile" exec resume --last --skip-git-repo-check "$fast" fast_mode --json -o "$RUN.last")
   else
     # fast_mode is globally default-on; state it here so "fast on luna only" is
     # literally true rather than inherited, and pin effort explicitly.
     args=(-p "$profile" exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
-          --enable fast_mode -c model_reasoning_effort="$EFFORT"
+          "$fast" fast_mode -c model_reasoning_effort="$EFFORT"
           --json -o "$RUN.last")
   fi
   # </dev/null: codex reads stdin when it is not a tty and blocks forever
@@ -173,7 +177,7 @@ $LADDER"
 $GUARD$extra" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   local rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
-  echo "— codex/gpt-5.6-$profile · effort=$EFFORT · fast_mode=on · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  echo "— codex/gpt-5.6-$profile · effort=$EFFORT · fast_mode=${fast#--}d · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
   return $rc
 }
 
