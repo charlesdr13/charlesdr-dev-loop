@@ -243,9 +243,11 @@ from inside a report, which is why the check reads that instead.
    Write **checkable requirements**, not steps: what must be true when this is
    done, which files are in scope, what must keep working.
 4. **Grill.** `grill-rounds`, 2-3 rounds, amending the plan in place. Round 1 is
-   adversarial and automated; what survives comes to the user as one batched
-   round. Three is the ceiling — a fourth means the plan is wrong at a level
-   grilling cannot fix, so go back to brainstorming.
+   adversarial and unattended. **Everything it could not settle is then
+   collected and surfaced to the user in one message**, each item recorded as a
+   `BLOCKED-HUMAN` run item first so the list survives a dead session. Nothing
+   proceeds to implementation while one is unanswered. Three rounds is the
+   ceiling — a fourth means the plan is wrong at a level grilling cannot fix.
 5. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
 6. **Implement.** `codex-implementer`.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
