@@ -24,4 +24,30 @@ if [ "$(readlink "$link" 2>/dev/null)" != "$src" ]; then
   ln -sfn "$src" "$link" 2>/dev/null || exit 0
   echo "charlesdr-dev-loop: codex-run -> $src"
 fi
+
+# --- where you left off -------------------------------------------------------
+# 12 runs sat open across 5 repos, invisible unless you ran /status in each. The
+# Stop hook only warns about FAILED items; this answers the resume question at
+# the moment you enter the repo, and stays silent when nothing is open.
+repo="$PWD"
+repo="$(realpath -m "$repo" 2>/dev/null || echo "$repo")"
+while [ "$repo" != "/" ] && [ ! -f "$repo/.charles.toml" ]; do
+  parent="$(dirname "$repo")"; [ "$parent" = "$repo" ] && break; repo="$parent"
+done
+[ -f "$repo/.charles.toml" ] || exit 0
+
+open_n=0; items=0; newest=""
+for d in "$repo"/.charles/runs/*/; do
+  [ -f "$d/RUN.md" ] || continue
+  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
+  open_n=$((open_n + 1))
+  n="$(grep -c '^- \[ \] ' "$d/RUN.md" 2>/dev/null)" || n=0
+  items=$((items + ${n:-0}))
+  newest="$(basename "${d%/}")"
+done
+
+if [ "$open_n" -gt 0 ]; then
+  echo "charlesdr-dev-loop: $open_n open run(s) here, $items unresolved item(s). Newest: $newest"
+  echo "  /charlesdr-dev-loop:resolve to pick up where you stopped"
+fi
 exit 0
