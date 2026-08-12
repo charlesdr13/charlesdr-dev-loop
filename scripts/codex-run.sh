@@ -4,7 +4,10 @@
 # Roles (--lane):
 #   explore   read-only investigation
 #   implement writes into the working tree
-#   review    adversarial grading, ISOLATED (always gpt-5.6-sol @ medium)
+#   review    adversarial grading, ISOLATED. sol @ medium by default; --engine
+#             luna|terra runs the same isolated review on another model. Review
+#             is read-only and the cheapest lane, so two in parallel is cheap —
+#             and measured, two models overlapped on 1 finding out of 13.
 #
 # Engines (--engine), for explore and implement:
 #   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
@@ -31,6 +34,7 @@ set -euo pipefail
 
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
+ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
 EFFORT="max"         # luna reasoning effort: max | high | medium. high is markedly
                      # faster and is Codex's own default; max is the quality ceiling.
 DIR="$PWD"
@@ -51,7 +55,7 @@ usage() { sed -n '2,24p' "$0"; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane)      LANE="$2"; shift 2 ;;
-    --engine)    ENGINE="$2"; shift 2 ;;
+    --engine)    ENGINE="$2"; ENGINE_SET=1; shift 2 ;;
     --effort)    EFFORT="$2"; shift 2 ;;
     --fast)      EFFORT="high"; shift ;;
     --dir)       DIR="$2"; shift 2 ;;
@@ -133,7 +137,9 @@ log_dispatch() { # log_dispatch ENGINE RC
     luna)     model="gpt-5.6-luna" ;;
     terra)    model="gpt-5.6-terra" ;;
     deepseek) model="deepseek-v4-flash" ;;
-    review)   model="gpt-5.6-sol" ;;
+    review)   if [ "$ENGINE_SET" -eq 1 ]; then
+                case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; *) model="gpt-5.6-sol" ;; esac
+              else model="gpt-5.6-sol"; fi ;;
     *)        model="$1" ;;
   esac
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
@@ -239,6 +245,18 @@ run_review() {
     return 3
   fi
 
+  # review defaults to sol; --engine picks another model for a second opinion
+  local rmodel rprofile
+  if [ "$ENGINE_SET" -eq 1 ]; then
+    case "$ENGINE" in
+      luna)  rmodel="gpt-5.6-luna";  rprofile=(-p luna) ;;
+      terra) rmodel="gpt-5.6-terra"; rprofile=(-p terra) ;;
+      *)     rmodel="gpt-5.6-sol";   rprofile=() ;;
+    esac
+  else
+    rmodel="gpt-5.6-sol"; rprofile=()
+  fi
+
   local prompt="You are an adversarial reviewer. You can see exactly two files: plan.md
 (what was supposed to be built) and changes.diff (what was actually built). You cannot
 see the repository, the implementer's reasoning, or any test output — by design.
@@ -259,8 +277,8 @@ Report, in this order:
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
   set +e
-  ( cd "$box" && timeout -k 30s "$TIMEOUT" codex exec --skip-git-repo-check \
-      -s read-only -C "$box" -m gpt-5.6-sol -c model_reasoning_effort=medium \
+  ( cd "$box" && timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
+      -s read-only -C "$box" -m "$rmodel" -c model_reasoning_effort=medium \
       --disable fast_mode \
       --json -o "$RUN.last" "$prompt" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   rc=$?
@@ -269,7 +287,7 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   rm -rf "$box"
   [ -s "$RUN.last" ] && cat "$RUN.last"
   echo "" >&2
-  echo "— codex/gpt-5.6-sol · effort=medium · isolated · raw: $RUN.jsonl" >&2
+  echo "— codex/$rmodel · effort=medium · isolated · raw: $RUN.jsonl" >&2
   return $rc
 }
 

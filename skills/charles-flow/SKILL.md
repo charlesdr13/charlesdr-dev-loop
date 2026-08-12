@@ -182,6 +182,36 @@ will answer. `grill-rounds` therefore borrows their checkable parts (terminology
 conflicts, plan-versus-code contradictions, edge-case scenarios) and leaves the
 interviewing to the round where a human is present.
 
+## Where parallelism actually pays
+
+Not everywhere. Measured, per lane:
+
+- **explore** — median 5.7 min, p90 22 min. The slow lane, and already run 3+
+  wide. This is where fan-out earns its cost.
+- **implement** — median 1.9 min. Parallelising this buys almost nothing and
+  costs a worktree per writer plus a merge. Chunks run sequentially with
+  `green.sh` between them, which localises failure to four requirements instead
+  of twelve. Parallel implementers stay reserved for plans that genuinely
+  declare disjoint slices.
+- **review** — median 1.7 min, read-only, no shared state. The cheapest lane,
+  and the one place a second run is nearly free.
+
+**Run two reviewers in parallel on anything security-, state- or
+concurrency-sensitive.** Measured on this repo: sol-class and terra-class
+reviews of the same code produced 13 findings with **one** overlap. A single
+reviewer is not a weaker version of two — it is a different, mostly disjoint set.
+
+```bash
+"$SCRIPTS/codex-run.sh" --lane review --dir "$(pwd)" --plan <plan> "<focus>" &
+"$SCRIPTS/codex-run.sh" --lane review --engine terra --dir "$(pwd)" --plan <plan> "<focus>" &
+wait
+```
+
+Each gets its own `mktemp -d`, so they cannot interfere. Take the union of the
+findings and verify each one yourself before acting — two models agreeing is the
+strongest signal available, and two disagreeing usually means both are partly
+right.
+
 ## Chunk the dispatch, not just the scope
 
 An implementer given twelve requirements does roughly 60% of each. The work

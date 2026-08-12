@@ -434,6 +434,30 @@ bash "$US" "$PW" >/dev/null 2>&1
 [ $? -eq 0 ] && { echo "  PASS  successful lane -> accounted for (0)"; pass=$((pass+1)); } \
              || { echo "  FAIL  successful dispatch should exit 0"; fail=$((fail+1)); }
 
+# --- review engine selection --------------------------------------------------
+# Two models reviewing the same code overlapped on 1 finding out of 13, and
+# review is the cheapest lane, so a second opinion is close to free.
+RD="$BOX/reviewengine"; mkdir -p "$RD/bin" "$RD/docs"
+printf '#!/usr/bin/env bash\necho "$@" > %s/args.txt\n' "$RD" > "$RD/bin/codex"
+chmod +x "$RD/bin/codex"
+( cd "$RD" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'x\n' > a.ts && git add -A && git commit -qm init && printf 'changed\n' > a.ts ) >/dev/null 2>&1
+printf '# Plan\n' > "$RD/docs/p.md"
+
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-m gpt-5.6-sol' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  review defaults to sol even though luna is the global default"; pass=$((pass+1))
+else
+  echo "  FAIL  review must default to sol"; fail=$((fail+1))
+fi
+
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine terra --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-m gpt-5.6-terra' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  --engine terra gives a second-opinion reviewer"; pass=$((pass+1))
+else
+  echo "  FAIL  review --engine terra not honoured"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

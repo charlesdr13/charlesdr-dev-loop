@@ -44,6 +44,17 @@ limitation in its own verdict.
 Exit code 3 means the diff was empty: nothing was actually changed. Report that
 as-is; it usually means the implementer failed silently.
 
+## A second opinion is cheap
+
+Review is the cheapest lane — median 1.7 min, read-only, isolated. Two reviewers
+on different models found 13 issues in this repo with one overlap, so a single
+review is not "most" of the coverage.
+
+When the diff touches concurrency, state machines, auth, money or data
+migration, run a second with `--engine terra` in parallel and report the union.
+Say which model produced which finding; they fail differently and it matters
+when you are deciding what to trust.
+
 ## Returning
 
 Your final message IS the return value. Return the verdict verbatim — all four
