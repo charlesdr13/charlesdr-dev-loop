@@ -390,9 +390,17 @@ It compares the working tree against the dispatch log, ignoring what the
 orchestrator legitimately authors itself (plans in `docs/specs/`, `.charles/`).
 A failed dispatch does not launder edits — only `rc=0` accounts for them.
 
-Discard flagged work **whole**. Do not keep the parts that look correct: you
-would be accepting code whose only evidence of correctness is that it reads
-well, from a source that just demonstrated it will misreport what it did.
+Three outcomes, because they need different answers:
+
+| exit | meaning | what to do |
+|---|---|---|
+| 0 | a successful dispatch accounts for the changes | proceed |
+| 1 | **no lane ran at all** | discard whole — no provenance, and something misreported |
+| 2 | **a lane ran and was cut short** (124/143) | its report is worthless, its code may not be — verify with `green.sh` and `codex-reviewer`, then keep or revert |
+
+Exit 1 is the fabrication case: discard it whole, do not keep the parts that
+look correct. Exit 2 is a clock, not a liar — a dispatch killed at 1800s may
+have written good code first, and throwing that away is its own kind of waste.
 
 Every rule against this previously lived in agent prose, which is precisely what
 the agent contradicted.

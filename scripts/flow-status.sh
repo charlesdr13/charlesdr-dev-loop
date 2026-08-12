@@ -43,7 +43,11 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     say_bad "$ungraded implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
     echo "         the isolated reviewer is the point of this plugin; run codex-reviewer against the plan"
   else
-    [ "${impl:-0}" -gt 0 ] && say_ok "every implement has a later review ($impl implements, $revs reviews)"
+    if [ "${revs:-0}" -eq 0 ] && [ "${impl:-0}" -gt 0 ]; then
+      say_ok "no successful implement awaiting review ($impl implement dispatch(es), all failed)"
+    elif [ "${impl:-0}" -gt 0 ]; then
+      say_ok "every implement has a later review ($impl implements, $revs reviews)"
+    fi
   fi
 else
   say_ok "no dispatch log yet — nothing to grade"
@@ -67,10 +71,14 @@ fi
 # --- 2b. changes no lane produced -------------------------------------------
 us="$(dirname "$0")/unsourced.sh"
 if [ -x "$us" ]; then
-  if out="$("$us" "$DIR" 2>&1)"; then :; else
-    say_bad "working-tree changes that no dispatch produced — discard them whole"
-    echo "$out" | sed -n '1,2p' | sed 's/^/         /'
-  fi
+  out="$("$us" "$DIR" 2>&1)"; urc=$?
+  case "$urc" in
+    0) ;;
+    2) say_bad "changes from a lane that was cut short — verify with green.sh and codex-reviewer, then keep or revert" ;;
+    *) say_bad "working-tree changes that no dispatch produced — discard them whole" ;;
+  esac
+  [ "$urc" -ne 0 ] && echo "$out" | sed -n '1,2p' | sed 's/^/         /'
+  true
 fi
 
 # --- 3. runs left open --------------------------------------------------------

@@ -43,8 +43,28 @@ if [ "${ok_impl:-0}" -gt 0 ]; then
   exit 0
 fi
 
-echo "UNSOURCED CHANGES: $changed path(s) modified, but no successful implement"
-echo "dispatch ran in the last ${SINCE}s. Nothing produced this work."
+# A lane that ran and failed is not the same as no lane at all. The first wrote
+# work that may be correct; the second means something edited files with no
+# provenance whatsoever. Conflating them either discards good code or accepts
+# fabricated code.
+failed_impl=0
+if [ -s "$log" ] && command -v jq >/dev/null; then
+  failed_impl="$(jq -r --arg c "$cutoff" \
+    'select(.lane=="implement" and .rc!=0 and ($c=="" or .ts>=$c)) | .ts' "$log" 2>/dev/null | wc -l)"
+fi
+
+if [ "${failed_impl:-0}" -gt 0 ]; then
+  echo "PARTIAL WORK: $changed path(s) modified. No implement dispatch SUCCEEDED,"
+  echo "but $failed_impl ran and was cut short (timeout or kill)."
+  echo
+  echo "The lane's report is worthless; the code on disk may not be. Judge it"
+  echo "yourself — green.sh, then codex-reviewer against the plan. Both pass:"
+  echo "keep it and record its origin. Otherwise revert."
+  exit 2
+fi
+
+echo "UNSOURCED CHANGES: $changed path(s) modified, but no implement dispatch ran"
+echo "at all in the last ${SINCE}s. Nothing produced this work."
 echo
 git -C "$DIR" status --porcelain -uall 2>/dev/null | grep -vE '^\?\? \.charles|^ M \.charles' | head -20 | sed 's/^/  /'
 echo

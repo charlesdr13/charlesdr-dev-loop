@@ -342,8 +342,11 @@ bash "$US" "$UD" >/dev/null 2>&1
 
 printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":143,"run":"/y","task":"t"}\n' "$NOW" \
   > "$UD/.charles/dispatches.jsonl"
+# rc!=0 must never mean "accounted for". It now means "verify it yourself" (2)
+# rather than "discard whole" (1): a lane cut short may still have written good
+# code, and the receipt governs its claim, not its artifact.
 bash "$US" "$UD" >/dev/null 2>&1
-[ $? -eq 1 ] && { echo "  PASS  a failed dispatch does not launder edits"; pass=$((pass+1)); } \
+[ $? -eq 2 ] && { echo "  PASS  a failed dispatch does not launder edits (2, not 0)"; pass=$((pass+1)); } \
              || { echo "  FAIL  rc!=0 must not account for edits"; fail=$((fail+1)); }
 
 # --- engine routing -----------------------------------------------------------
@@ -405,6 +408,31 @@ NC="$BOX/nocharles"; mkdir -p "$NC"
 ( cd "$NC" && timeout 5 bash "$WARN" ) >/dev/null 2>&1
 [ $? -ne 124 ] && { echo "  PASS  stop hook does not hang outside an opted-in repo"; pass=$((pass+1)); } \
                || { echo "  FAIL  stop hook hung"; fail=$((fail+1)); }
+
+# --- partial work is not fabricated work --------------------------------------
+# A lane cut short at its timeout may have written correct code before the clock
+# stopped it. Discarding that is as wrong as accepting work no lane produced.
+PW="$BOX/partial"; mkdir -p "$PW/.charles"
+( cd "$PW" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'orig\n' > a.ts && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf 'changed\n' > "$PW/a.ts"
+PNOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+bash "$US" "$PW" >/dev/null 2>&1
+[ $? -eq 1 ] && { echo "  PASS  no dispatch at all -> discard whole (1)"; pass=$((pass+1)); } \
+             || { echo "  FAIL  no dispatch should exit 1"; fail=$((fail+1)); }
+
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":124,"run":"/x","task":"t"}\n' \
+  "$PNOW" > "$PW/.charles/dispatches.jsonl"
+bash "$US" "$PW" >/dev/null 2>&1
+[ $? -eq 2 ] && { echo "  PASS  timed-out lane -> verify it yourself (2), not discard"; pass=$((pass+1)); } \
+             || { echo "  FAIL  partial work should exit 2"; fail=$((fail+1)); }
+
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"/y","task":"t"}\n' \
+  "$PNOW" >> "$PW/.charles/dispatches.jsonl"
+bash "$US" "$PW" >/dev/null 2>&1
+[ $? -eq 0 ] && { echo "  PASS  successful lane -> accounted for (0)"; pass=$((pass+1)); } \
+             || { echo "  FAIL  successful dispatch should exit 0"; fail=$((fail+1)); }
 
 echo
 echo "$pass passed, $fail failed"

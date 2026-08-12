@@ -49,7 +49,16 @@ bad="$(jq -s '[.[] | select(.rc != 0)] | length' <<<"$recent" 2>/dev/null)"
 if [ "${ok:-0}" -eq 0 ]; then
   echo "RECEIPTS PRESENT BUT ALL FAILED ($bad failed, 0 succeeded):" >&2
   jq -s -r '.[] | select(.rc != 0) | "  rc=\(.rc)  \(.lane)/\(.model)  \(.ts)"' <<<"$recent" >&2
-  echo "rc=143 means the harness killed it — the dispatch was cut short, not completed." >&2
+  echo >&2
+  echo "The lane ran and was cut short (124 = its own timeout, 143 = killed)." >&2
+  echo "This invalidates its REPORT, not necessarily its WORK: a lane killed at" >&2
+  echo "1800s may have written correct code before the clock stopped it." >&2
+  echo >&2
+  echo "So do not trust a word it said, and judge the tree independently:" >&2
+  echo "  1. green.sh          — does it actually pass" >&2
+  echo "  2. codex-reviewer    — does the diff satisfy the plan" >&2
+  echo "Both pass: keep it, and record that it came from a timed-out lane." >&2
+  echo "Either fails, or you cannot be bothered to check: revert." >&2
   exit 2
 fi
 
