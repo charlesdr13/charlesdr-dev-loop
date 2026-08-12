@@ -8,7 +8,12 @@
 #
 # Engines (--engine), for explore and implement:
 #   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
-#   deepseek  deepseek-v4-flash @ max FALLBACK — only when luna fails
+#   terra     gpt-5.6-terra @ max     ESCALATION — when luna's work came back wrong
+#   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
+#
+# Availability and capability are different problems. A dispatch that DIED falls
+# back to deepseek. Work that RAN and was wrong escalates to terra. Difficulty is
+# never predicted from the task text — it is demonstrated by a failed check.
 #
 # The review lane runs in a temp dir containing ONLY plan.md + changes.diff.
 # That isolation is the point: a grader that can read the implementer's
@@ -126,6 +131,7 @@ log_dispatch() { # log_dispatch ENGINE RC
   local model
   case "$1" in
     luna)     model="gpt-5.6-luna" ;;
+    terra)    model="gpt-5.6-terra" ;;
     deepseek) model="deepseek-v4-flash" ;;
     review)   model="gpt-5.6-sol" ;;
     *)        model="$1" ;;
@@ -144,15 +150,15 @@ clear_touched() {
   return 0
 }
 
-# --- engine: luna @ max (PRIMARY for both explore and implement) --------------
-run_luna() {
-  local args
+# --- engines: luna (primary) and terra (escalation), both gpt-5.6 @ max -------
+run_gpt() { # run_gpt PROFILE
+  local profile="$1" args
   if [ "$RESUME" -eq 1 ]; then
-    args=(-p luna exec resume --last --skip-git-repo-check --enable fast_mode --json -o "$RUN.last")
+    args=(-p "$profile" exec resume --last --skip-git-repo-check --enable fast_mode --json -o "$RUN.last")
   else
     # fast_mode is globally default-on; state it here so "fast on luna only" is
     # literally true rather than inherited, and pin effort explicitly.
-    args=(-p luna exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
+    args=(-p "$profile" exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
           --enable fast_mode -c model_reasoning_effort="$EFFORT"
           --json -o "$RUN.last")
   fi
@@ -167,7 +173,7 @@ $LADDER"
 $GUARD$extra" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   local rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
-  echo "— codex/gpt-5.6-luna · effort=$EFFORT · fast_mode=on · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  echo "— codex/gpt-5.6-$profile · effort=$EFFORT · fast_mode=on · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
   return $rc
 }
 
@@ -290,9 +296,10 @@ esac
 
 dispatch() { # dispatch ENGINE
   case "$1" in
-    luna)     run_luna ;;
+    luna)     run_gpt luna ;;
+    terra)    run_gpt terra ;;
     deepseek) run_deepseek ;;
-    *) echo "codex-run.sh: unknown engine '$1' (luna|deepseek)" >&2; exit 2 ;;
+    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek)" >&2; exit 2 ;;
   esac
 }
 
@@ -307,8 +314,8 @@ else
   # a transient failure. Same role, same sandbox — only the model changes.
   # There is deliberately NO fallback to inline editing: that would defeat the
   # entire point of routing this work out in the first place.
-  if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && [ "$ENGINE" = "luna" ]; then
-    echo "codex-run.sh: luna failed (exit $RC) — falling back to deepseek for this $LANE" >&2
+  if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && { [ "$ENGINE" = "luna" ] || [ "$ENGINE" = "terra" ]; }; then
+    echo "codex-run.sh: $ENGINE failed (exit $RC) — falling back to deepseek for this $LANE" >&2
     set +e; dispatch deepseek; RC=$?; set -e
     log_dispatch deepseek "$RC"
   fi

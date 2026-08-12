@@ -11,6 +11,7 @@ echo
 echo "Lanes:"
 have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
 [ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (PRIMARY engine)" || say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
+[ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"
 [ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say WARN "missing ~/.config/lg-cc-deepseek/key.env — no fallback if luna fails"
 [ -x "$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh" ] && say OK "codex-ds.sh wrapper" || say WARN "missing codex-ds.sh — no fallback if luna fails"

@@ -336,6 +336,33 @@ bash "$US" "$UD" >/dev/null 2>&1
 [ $? -eq 1 ] && { echo "  PASS  a failed dispatch does not launder edits"; pass=$((pass+1)); } \
              || { echo "  FAIL  rc!=0 must not account for edits"; fail=$((fail+1)); }
 
+# --- engine routing -----------------------------------------------------------
+# terra is the capability escalation; deepseek is the availability fallback.
+ED="$BOX/engines"; mkdir -p "$ED/bin"
+printf '#!/usr/bin/env bash\necho "$@" > %s/args.txt\n' "$ED" > "$ED/bin/codex"
+chmod +x "$ED/bin/codex"
+
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine terra --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-p terra' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  --engine terra dispatches the terra profile"; pass=$((pass+1))
+else
+  echo "  FAIL  terra profile not selected"; fail=$((fail+1))
+fi
+
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-p luna' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  luna remains the default engine"; pass=$((pass+1))
+else
+  echo "  FAIL  default should still be luna"; fail=$((fail+1))
+fi
+
+out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine nonsense --dir "$ED" --timeout 5 "t" 2>&1)"
+if grep -q 'unknown engine' <<<"$out"; then
+  echo "  PASS  an unknown engine is rejected"; pass=$((pass+1))
+else
+  echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
