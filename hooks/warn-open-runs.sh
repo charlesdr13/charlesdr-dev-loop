@@ -8,7 +8,10 @@
 set -euo pipefail
 
 root="$PWD"
-while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do root="$(dirname "$root")"; done
+root="$(realpath -m "$root" 2>/dev/null || echo "$root")"
+while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do
+  parent="$(dirname "$root")"; [ "$parent" = "$root" ] && break; root="$parent"
+done
 [ -f "$root/.charles.toml" ] || exit 0
 
 runs="$root/.charles/runs"

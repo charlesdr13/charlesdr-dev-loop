@@ -381,6 +381,25 @@ else
   echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
 fi
 
+# --- relative paths must not hang the parent walk -----------------------------
+# dirname "." is "." forever. Both hooks span-locked at rc 124 when a payload
+# carried a relative path from a directory with no .charles.toml above it.
+NC="$BOX/nocharles"; mkdir -p "$NC"
+
+( cd "$NC" && printf '{"tool_name":"Write","tool_input":{"file_path":"a.ts","content":"x"}}' \
+  | timeout 5 bash "$HOOK" ) >/dev/null 2>&1
+[ $? -ne 124 ] && { echo "  PASS  relative file_path does not hang the edit hook"; pass=$((pass+1)); } \
+               || { echo "  FAIL  edit hook hung on a relative path"; fail=$((fail+1)); }
+
+( cd "$NC" && printf '{"tool_name":"Agent","cwd":".","tool_input":{"subagent_type":"Explore","prompt":"x"}}' \
+  | timeout 5 bash "$SUBHOOK" ) >/dev/null 2>&1
+[ $? -ne 124 ] && { echo "  PASS  relative cwd does not hang the subagent hook"; pass=$((pass+1)); } \
+               || { echo "  FAIL  subagent hook hung on a relative cwd"; fail=$((fail+1)); }
+
+( cd "$NC" && timeout 5 bash "$WARN" ) >/dev/null 2>&1
+[ $? -ne 124 ] && { echo "  PASS  stop hook does not hang outside an opted-in repo"; pass=$((pass+1)); } \
+               || { echo "  FAIL  stop hook hung"; fail=$((fail+1)); }
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -25,11 +25,14 @@ case "$tool" in Agent|Task) ;; *) exit 0 ;; esac
 # --- opt-in gate: .charles.toml at or above cwd -------------------------------
 cwd="$(jq -r '.cwd // empty' <<<"$payload")"
 [ -n "$cwd" ] || cwd="$PWD"
+cwd="$(realpath -m "$cwd" 2>/dev/null || echo "$cwd")"
 root=""
 d="$cwd"
-while [ "$d" != "/" ] && [ -n "$d" ]; do
+while [ -n "$d" ] && [ "$d" != "/" ]; do
   if [ -f "$d/.charles.toml" ]; then root="$d"; break; fi
-  d="$(dirname "$d")"
+  parent="$(dirname "$d")"
+  [ "$parent" = "$d" ] && break     # no progress: stop rather than spin
+  d="$parent"
 done
 [ -n "$root" ] || exit 0
 

@@ -25,11 +25,16 @@ path="$(jq -r '.tool_input.file_path // empty' <<<"$payload")"
 [ -n "$path" ] || exit 0
 
 # --- opt-in gate: walk up for .charles.toml -----------------------------------
+# realpath first: a relative path makes dirname "." return "." forever and the
+# walk never terminates. Confirmed hanging at rc 124 before this line existed.
+path="$(realpath -m "$path" 2>/dev/null || echo "$path")"
 root=""
 d="$(dirname "$path")"
-while [ "$d" != "/" ] && [ -n "$d" ]; do
+while [ -n "$d" ] && [ "$d" != "/" ]; do
   if [ -f "$d/.charles.toml" ]; then root="$d"; break; fi
-  d="$(dirname "$d")"
+  parent="$(dirname "$d")"
+  [ "$parent" = "$d" ] && break     # no progress: stop rather than spin
+  d="$parent"
 done
 [ -n "$root" ] || exit 0
 

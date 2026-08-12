@@ -19,7 +19,10 @@ for a in "$@"; do [ "$a" = "--quiet" ] && QUIET=1; done
 DIR="$(cd "$DIR" && pwd)"
 
 root="$DIR"
-while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do root="$(dirname "$root")"; done
+root="$(realpath -m "$root" 2>/dev/null || echo "$root")"
+while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do
+  parent="$(dirname "$root")"; [ "$parent" = "$root" ] && break; root="$parent"
+done
 if [ ! -f "$root/.charles.toml" ]; then
   echo "green.sh: no .charles.toml at or above $DIR — run /charlesdr-dev-loop:init" >&2
   exit 2
