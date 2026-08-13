@@ -155,3 +155,7 @@ worktree exemption defined as a path segment and excluded from the touched
 counter (f.8, f.9); normative-vs-historical doc boundary stated (f.10);
 threshold keys named in the ask text (f.12). No round-2 contradictions left
 that require a human; zero BLOCKED-HUMAN items.
+
+## Run outcome — 2026-08-13
+
+Shipped dispatch-identity hardening as 2.14.0: start/end events with run ids close the receipt trust gap (orphan detection fail-closed, --run verification, last-end-wins under fallback); fallback is loud end to end; lane state repo-scoped; hook exempts worktree paths and names its threshold keys; release.sh automates bump-install-relink-doctor and proved its rollback live on its first real failure. Two review cycles (sol+terra parallel, then focused sol) to PASS; selftest 61 to 87 assertions. Grill-verdict ISSUE is yesterday's already-closed 2026-08-13 plan, not this one. Rollback: git revert ac321f7..HEAD then bash scripts/release.sh 2.13.0
