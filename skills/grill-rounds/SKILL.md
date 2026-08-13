@@ -18,7 +18,8 @@ grill a plan that only exists in the conversation, and neither can the adversary
 
 ## Round 1 — automated adversary
 
-Dispatch a `codex-explorer` (read-only, so it cannot "fix" anything) with:
+Issue a direct background `codex-run --lane explore` call (read-only, so it
+cannot "fix" anything) with:
 
 > Attack this plan. You are trying to find the reason it fails, not to improve
 > it. Produce a numbered list of:

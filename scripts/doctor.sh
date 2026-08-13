@@ -53,12 +53,15 @@ if [ ! -d "$CACHE" ]; then
   say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop"
 else
   drift=0
-  for f in scripts/codex-run.sh scripts/run-state.sh scripts/green.sh \
-           hooks/route-to-codex.sh hooks/route-subagents.sh hooks/warn-open-runs.sh \
-           agents/codex-explorer.md agents/codex-implementer.md agents/codex-reviewer.md \
-           skills/charles-flow/SKILL.md; do
-    cmp -s "$CACHE/$f" "$REPO_ROOT/$f" || { drift=$((drift+1)); echo "         drifted: $f"; }
-  done
+  while IFS= read -r -d '' installed_file; do
+    rel="${installed_file#"$CACHE"/}"
+    case "$rel" in .charles|.charles/*) continue ;; esac
+    [ -f "$REPO_ROOT/$rel" ] || continue
+    if ! cmp -s "$installed_file" "$REPO_ROOT/$rel"; then
+      drift=$((drift+1))
+      echo "         drifted: $rel"
+    fi
+  done < <(find "$CACHE" -type f -print0 2>/dev/null)
   # The installed plugin is a COPY taken at install time, not a live view. Editing
   # the repo changes nothing until you bump the version and reinstall. This check
   # exists because that surprise has now cost three separate debugging detours.
@@ -75,6 +78,24 @@ else
     say OK "codex-run -> installed v$VER"
   else
     say FAIL "codex-run points at $have, not v$VER — restart the session or re-run hooks/link-dispatcher.sh"
+  fi
+fi
+
+if [ -f "$PWD/.charles/dispatches.jsonl" ]; then
+  cutoff="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  recent="$(jq -r -s --arg cutoff "$cutoff" '
+    map(select(.event == "end")) |
+    reduce .[] as $r ({};
+      .[(($r.run // "") | tostring | split("/") | last)] = $r
+    ) |
+    .[] |
+    select((.ts // "") >= $cutoff and
+      ((.rc != null and .rc != 0) or has("fallback_from"))) |
+    [.ts, .lane, .engine, (.rc // ""), (.fallback_from // "")] | @tsv
+  ' "$PWD/.charles/dispatches.jsonl" 2>/dev/null)"
+  if [ -n "$recent" ]; then
+    recent_n="$(printf '%s\n' "$recent" | wc -l)"
+    say WARN "$recent_n recent new-format end event(s) failed or used fallback"
   fi
 fi
 

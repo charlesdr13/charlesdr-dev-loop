@@ -23,9 +23,13 @@ the flow, and do not silently skip it either.
 **Long dispatches are normal — measured, not guessed.** Across 179 real runs:
 median successful dispatch 8.8 min, p90 22.8 min, only 4% over 25 min. The Bash
 tool caps one call at 600s, so **more than half of legitimate work cannot finish
-in the foreground.** Explore and implement therefore run in the background with
-`--timeout 1800`, checked via `lane-status.sh` at most three times. Review runs
-in the foreground: its p90 is 3.2 min and none has ever exceeded 540s.
+in the foreground.** Explore and implement therefore use one primary mechanism:
+the orchestrator invokes the Bash tool with `run_in_background: true` to run
+`codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"`. The harness
+re-invokes the orchestrator when the process exits — that callback is the
+completion signal. Do not add polling loops or periodic `lane-status.sh` polling
+as the primary wait. Review runs in the foreground: its p90 is 3.2 min and none
+has ever exceeded 540s.
 
 Never shorten a task to fit the cap, and never re-dispatch on top of a RUNNING
 lane. `--fast` is for wanting a shallower answer, not for beating the clock.
@@ -53,39 +57,37 @@ directory that already has one refuses with exit 4. Give the second one its own
 worktree (`treehouse get`) or wait. Two writers on one tree interleave edits and
 the loser is overwritten silently — observed live, not hypothetical.
 
-### Dispatch directly unless you need context isolation
+### Direct background dispatch
 
-The dispatcher agents exist for **one** reason: a codex report can be 30k tokens
-and its transcript megabytes, so a fan-out of five would flood this context. A
-subagent digests each and returns a summary.
-
-They buy nothing else, and they cost a layer. Measured over one day: every
-supervision failure happened in that layer and none in codex — reports claiming
-work was not done while files were modified, wait loops that could not exit,
-80k-token pollers, re-dispatch storms on top of live processes.
-
-| Situation | How |
-|---|---|
-| one or two dispatches | **run `codex-run.sh` yourself**, backgrounded |
-| you want the raw output, not a summary | yourself |
-| three or more in parallel | the `codex-*` agents, for context isolation |
-
-Direct dispatch is not a downgrade. Parallelism does not require subagents —
-background two dispatches and wait:
+Explore and implement are dispatched directly by the orchestrator. For each,
+make a Bash tool call with `run_in_background: true`:
 
 ```bash
-for e in luna terra; do
-  ( "$SCRIPTS/codex-run.sh" --lane explore --engine $e --dir "$(pwd)" "$TASK" > /tmp/$e.out 2>&1 ) &
-done
+codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"
 ```
 
-When you do dispatch directly, you see the receipt yourself and nothing between
-you and the lane can misreport what happened.
+Do not redirect output — the harness captures each background call's output to
+its own per-task file and tells you where. The harness re-invokes the
+orchestrator when the process exits. For a parallel fan-out, issue N separate
+background Bash calls:
 
-Dispatch via the `codex-explorer`, `codex-implementer`, and `codex-reviewer`
-agents — several in one message to run them concurrently.
+```bash
+# Each line is a separate Bash tool call with run_in_background: true.
+codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<task 1>"
+codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<task 2>"
+```
 
-**These are the only subagents that do code work here.** Do not spawn `Explore`,
+When you dispatch directly, you see the receipt yourself and nothing between
+you and the lane can misreport what happened. Review remains foreground and
+isolated; `codex-reviewer` is allowed for that lane.
+
+The old wrapper layer bought context isolation but introduced a supervision
+failure surface. Measured over one day: every supervision failure happened in
+that layer and none in codex — reports claiming work was not done while files
+were modified, wait loops that could not exit, 80k-token pollers, and
+re-dispatch storms on top of live processes.
+
+**The review agent is the only subagent used here.** Do not spawn `Explore`,
 `general-purpose`, `Plan`, `feature-dev:*` or a language specialist to
 investigate or write code in an opted-in repo — that is the same bypass as
 editing inline, just wearing a hat. A hook will stop you, but the rule is the
@@ -96,9 +98,9 @@ The dispatcher is on PATH as `codex-run` (a SessionStart hook links it to the
 installed plugin copy). Never hardcode a path into a checkout — an agent that
 executes a working tree runs whatever half-finished state it is in.
 
-**Skill-only install** (no plugin, so no agents): call the dispatcher directly
-as `codex-run --lane ... --dir ...`. Same lanes, but you run them yourself
-in sequence rather than fanning out agents, so keep fleets small.
+**Skill-only install** (no plugin): call the dispatcher directly as
+`codex-run --lane ... --dir ...`. The same background Bash mechanism applies, so
+keep fleets small and give parallel calls separate `.charles/` logs.
 
 ## Plans: one artifact, and it is not a task list
 
@@ -144,20 +146,20 @@ check belongs. `--force` closes anyway, deliberately.
 Run it before you tell the user you are finished. "The implementer succeeded" is
 not an answer to "is it done".
 
-## A lane that stopped answering
+## Recovery after a lost completion signal
 
-Never decide a dispatch is alive by looking for its output file. `.last` appears
-only on success, so a killed lane leaves nothing and a waiter cannot tell
-"still working" from "died". That is the exact shape of a stuck agent.
+Normally the harness callback tells the re-invoked orchestrator that a
+background dispatch exited. If a session restarts or the harness dies before
+that signal arrives, use `lane-status.sh` as the recovery probe:
 
 ```bash
 "$SCRIPTS/lane-status.sh"     # 0 RUNNING · 1 DONE · 2 DEAD
 ```
 
-**Never hand-roll the wait.** `while pgrep -f codex-run; do sleep 30; done`
-never exits — `pgrep -f` matches the loop's own command line. Observed running
-36 minutes against zero dispatches, with several such loops keeping each other
-alive. `lane-status.sh` skips its own pid and parent before deciding.
+Never turn this recovery probe into a periodic wait. The old self-matching
+process check ran 36 minutes against zero dispatches, with several such loops
+keeping each other alive. `lane-status.sh` skips its own pid and parent before
+deciding.
 
 DEAD means over: record `FAILED`, do not wait, do not re-dispatch on top of it.
 A dispatch that exceeded its own `--timeout` reports rc=124; one with no marker
@@ -173,7 +175,7 @@ to load one does. Verified: an implement lane read
 `skills/ponytail/SKILL.md` and quoted it back verbatim.
 
 So the rule is: **name the skill in the brief, or it does not apply.** The
-wrapper already does this for `ponytail` on every implement dispatch.
+direct implement dispatch already does this for `ponytail`.
 
 **But check the skill's shape before pointing a lane at it.** `grill-me` and
 `grill-with-docs` are interview skills — they ask one question at a time and
@@ -186,8 +188,8 @@ interviewing to the round where a human is present.
 
 Not everywhere. Measured, per lane:
 
-- **explore** — median 5.7 min, p90 22 min. The slow lane, and already run 3+
-  wide. This is where fan-out earns its cost.
+- **explore** — median 5.7 min, p90 22 min. The slow lane, and already benefits
+  from a 3+ background fan-out. This is where fan-out earns its cost.
 - **implement** — median 1.9 min. Parallelising this buys almost nothing and
   costs a worktree per writer plus a merge. Chunks run sequentially with
   `green.sh` between them, which localises failure to four requirements instead
@@ -308,10 +310,11 @@ from inside a report, which is why the check reads that instead.
 1. **Brainstorm.** Use `superpowers:brainstorming`. **Override its terminal
    state:** it ends by invoking `writing-plans`; here it ends by handing the
    design to the grill. Do not invoke `writing-plans`.
-2. **Explore.** 3+ `codex-explorer` agents in parallel, each on a different
-   angle — prior art in this repo, the integration points, the failure modes,
-   what a competing design would look like. Synthesise their reports yourself;
-   do not hand the raw reports to the user.
+2. **Explore.** Issue 3+ direct `codex-run --lane explore` calls as separate
+   background Bash calls, each on a different angle — prior art in this repo,
+   the integration points, the failure modes, what a competing design would
+   look like. Give each call its own `.charles/` log and synthesise the reports
+   yourself; do not hand the raw reports to the user.
 3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
    not after. `grill-rounds` needs a file to attack and the review lane needs one
    to judge against; a plan that exists only in conversation can be neither.
@@ -324,7 +327,8 @@ from inside a report, which is why the check reads that instead.
    proceeds to implementation while one is unanswered. Three rounds is the
    ceiling — a fourth means the plan is wrong at a level grilling cannot fix.
 5. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
-6. **Implement.** `codex-implementer`.
+6. **Implement.** Issue the direct `codex-run --lane implement` command as a
+   background Bash call with `--timeout 1800` and its own `.charles/` log.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
 8. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
@@ -334,14 +338,16 @@ from inside a report, which is why the check reads that instead.
 ## Flow 2 — debug
 
 1. `diagnosing-bugs` for the discipline — build the feedback loop first.
-2. Explore fleet on the failing behaviour. Each explorer gets the repro and is
-   asked for a cause **plus** the `file:line` evidence trail, never a patch.
+2. Explore fleet on the failing behaviour with direct background
+   `codex-run --lane explore` calls. Each call gets the repro and is asked for a
+   cause **plus** the `file:line` evidence trail, never a patch.
 3. Ground to truth: confirm the cause yourself against source before fixing.
 4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
    the intended fix scope, and the green command. Three short sections. This is
    what makes step 6 possible at all — the review lane needs a plan, and without
    one a debug fix ships unreviewed.
-5. `codex-implementer` for the fix.
+5. Direct `codex-run --lane implement` for the fix, as a background Bash call
+   with `--timeout 1800`.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
@@ -349,11 +355,12 @@ from inside a report, which is why the check reads that instead.
 
 ## Flow 3 — polish
 
-1. Explore fleet asked for gaps, must-haves, and quality-of-life wins — one
-   explorer per lens, not three asked the same question.
+1. Direct background `codex-run --lane explore` calls asked for gaps, must-haves,
+   and quality-of-life wins — one call per lens, not three asked the same
+   question.
 2. Brainstorm the shortlist with the user.
 3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`.
-4. `codex-implementer`.
+4. Direct background `codex-run --lane implement` call.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
 
@@ -366,9 +373,10 @@ is a 27-command UI system and owns the taste judgment. Do not rebuild it here.
 2. Route to ONE impeccable command — `polish`, `audit`, `critique`, `animate`,
    `optimize`, `bolder`/`quieter`, or `live` (needs a dev server). Motion work
    also loads the gsap skills; `gsap-performance` before shipping animation.
-3. In parallel, ONE `codex-explorer` for the mechanical audit only — token
-   drift, off-scale spacing, duplicate variants, dead styles, with `file:line`.
-   It cannot see, so never ask it for an aesthetic opinion.
+3. In parallel, one direct background `codex-run --lane explore` call for the
+   mechanical audit only — token drift, off-scale spacing, duplicate variants,
+   dead styles, with `file:line`. It cannot see, so never ask it for an aesthetic
+   opinion.
 4. Merge: impeccable leads, the codex audit is the mechanical backlog. Plan to
    `docs/specs/`. Taste disagreements become `BLOCKED-HUMAN` items.
 5. Verify green, confirm no regression in contrast/focus/tab-order/CLS, and run
@@ -399,10 +407,12 @@ how a loop convinces itself it is finished.
 
 ## Failure handling
 
-A dispatch that fails on luna retries once on deepseek (the wrapper does this
-for you), then hard-stops. **Never fall back to doing the work inline.** A fallback that fires on
-any error turns "always dispatch" into "dispatch when convenient", which is the
-same as not having the system at all. Report the failure and let the user decide.
+A dispatch that fails on luna gets one deepseek rescue (the wrapper does this
+for you). It prints a loud `fallback_from:<engine> primary_rc:<n>` receipt; if
+the rescue also fails, the dispatch stops. **Never fall back to doing the work
+inline.** A fallback that fires on any error turns "always dispatch" into
+"dispatch when convenient", which is the same as not having the system at all.
+Report the failure and let the user decide.
 
 ## Artifacts
 

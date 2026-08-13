@@ -152,8 +152,20 @@ show)
   if [ -s "$log" ] && command -v jq >/dev/null; then
     echo
     echo "## Dispatches"
-    jq -r 'select(.rc != 0) | "  FAILED  \(.ts)  \(.lane)/\(.model)  rc=\(.rc)  \(.task[0:60])"' "$log" 2>/dev/null
-    jq -r 'select(.rc == 0) | "  ok      \(.ts)  \(.lane)/\(.model)"' "$log" 2>/dev/null | tail -5
+    jq -r -s '
+      map(select((has("event") | not) or .event == "end")) |
+      reduce .[] as $r ({};
+        .[(($r.run // "") | tostring | split("/") | last)] = $r) |
+      .[] | select(.rc != 0) |
+      "  FAILED  \(.ts)  \(.lane)/\(.model)  rc=\(.rc)  \(.task[0:60])"
+    ' "$log" 2>/dev/null
+    jq -r -s '
+      map(select((has("event") | not) or .event == "end")) |
+      reduce .[] as $r ({};
+        .[(($r.run // "") | tostring | split("/") | last)] = $r) |
+      .[] | select(.rc == 0) |
+      "  ok      \(.ts)  \(.lane)/\(.model)"
+    ' "$log" 2>/dev/null | tail -5
   fi
   ;;
 

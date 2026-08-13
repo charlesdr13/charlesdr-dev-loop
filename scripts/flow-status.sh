@@ -28,17 +28,52 @@ say_ok()  { echo "  ok     $1"; }
 
 echo "flow status: $(basename "$DIR")"
 
+last_ends() {
+  jq -c -s '
+    map(select((has("event") | not) or .event == "end")) |
+    reduce .[] as $r ({};
+      .[(($r.run // "") | tostring | split("/") | last)] = $r) |
+    .[]
+  ' "$log" 2>/dev/null
+}
+
+# A start without any end is not a failed receipt; the lane may still be
+# running or may have been killed between work and its end write.
+if [ -s "$log" ] && command -v jq >/dev/null; then
+  orphan_runs="$(jq -r -s '
+    ([.[] | select(.event == "start") |
+      ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $starts |
+    ([.[] | select((has("event") | not) or .event == "end") |
+      ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $ends |
+    ($starts - $ends)[]
+  ' "$log" 2>/dev/null)"
+  while IFS= read -r orphan; do
+    [ -n "$orphan" ] || continue
+    orphan_lane="$(jq -r --arg r "$orphan" -s '
+      [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r)) | .lane] | last // ""
+    ' "$log" 2>/dev/null)"
+    say_bad "orphan dispatch $orphan ($orphan_lane lane)"
+    status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$orphan" 2>&1)"; status_rc=$?
+    if [ "$status_rc" -eq 0 ]; then
+      echo "         lane in flight — consult lane-status.sh before concluding"
+    else
+      echo "         lane killed mid-write — consult lane-status.sh before concluding"
+    fi
+    echo "$status_out" | sed 's/^/         /'
+  done <<<"$orphan_runs"
+fi
+
 # --- 1. implements that were never graded -------------------------------------
 if [ -s "$log" ] && command -v jq >/dev/null; then
-  last_review="$(jq -r 'select(.lane=="review" and .rc==0) | .ts' "$log" 2>/dev/null | sort | tail -1)"
+  last_review="$(last_ends | jq -r 'select(.lane=="review" and .rc==0) | .ts' | sort | tail -1)"
   if [ -n "$last_review" ]; then
-    ungraded="$(jq -r --arg t "$last_review" \
-      'select(.lane=="implement" and .rc==0 and .ts > $t) | .ts' "$log" 2>/dev/null | wc -l)"
+    ungraded="$(last_ends | jq -r --arg t "$last_review" \
+      'select(.lane=="implement" and .rc==0 and .ts > $t) | .ts' | wc -l)"
   else
-    ungraded="$(jq -r 'select(.lane=="implement" and .rc==0) | .ts' "$log" 2>/dev/null | wc -l)"
+    ungraded="$(last_ends | jq -r 'select(.lane=="implement" and .rc==0) | .ts' | wc -l)"
   fi
-  impl="$(jq -r 'select(.lane=="implement") | .ts' "$log" 2>/dev/null | wc -l)"
-  revs="$(jq -r 'select(.lane=="review") | .ts' "$log" 2>/dev/null | wc -l)"
+  impl="$(last_ends | jq -r 'select(.lane=="implement") | .ts' | wc -l)"
+  revs="$(last_ends | jq -r 'select(.lane=="review") | .ts' | wc -l)"
   if [ "${ungraded:-0}" -gt 0 ]; then
     say_bad "$ungraded implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
     echo "         the isolated reviewer is the point of this plugin; run codex-reviewer against the plan"
@@ -51,6 +86,17 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
   fi
 else
   say_ok "no dispatch log yet — nothing to grade"
+fi
+
+fallback_cutoff="$(date -u -d '-7 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+if [ -s "$log" ] && command -v jq >/dev/null; then
+  while IFS= read -r fallback_note; do
+    [ -n "$fallback_note" ] || continue
+    say_ok "$fallback_note"
+  done < <(last_ends | jq -r --arg c "$fallback_cutoff" '
+    select(.fallback_from != null and ($c == "" or .ts >= $c)) |
+    "fallback \(.run): rescued by \(.engine) after \(.fallback_from) rc=\(.primary_rc)"
+  ')
 fi
 
 # --- 2. a plan to grade against -----------------------------------------------
@@ -75,6 +121,7 @@ if [ -x "$us" ]; then
   case "$urc" in
     0) ;;
     2) say_bad "changes from a lane that was cut short — verify with green.sh and codex-reviewer, then keep or revert" ;;
+    3) say_bad "an orphaned implement lane may own working-tree changes — census before discarding" ;;
     *) say_bad "working-tree changes that no dispatch produced — discard them whole" ;;
   esac
   [ "$urc" -ne 0 ] && echo "$out" | sed -n '1,2p' | sed 's/^/         /'

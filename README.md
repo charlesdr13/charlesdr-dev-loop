@@ -10,9 +10,9 @@ cd your-repo
 /charlesdr-dev-loop:feature add rate limiting to the API
 ```
 
-That single command runs the whole loop: brainstorm, three parallel explorers,
-an adversarial grill of the plan, a ground-truth gate, implementation, isolated
-review, then your test command until it passes.
+That single command runs the whole loop: brainstorm, three direct background
+Codex explore calls, an adversarial grill of the plan, a ground-truth gate,
+implementation, isolated review, then your test command until it passes.
 
 ---
 
@@ -25,7 +25,7 @@ flowchart TD
     INIT --> GATE
     GATE -->|yes| BRAIN["brainstorm<br/><i>superpowers</i>"]
 
-    BRAIN --> EXP["explore fleet — 3x parallel<br/><b>luna @ max</b> · read-only"]
+    BRAIN --> EXP["explore fleet — 3x background Bash calls<br/><b>luna @ max</b> · read-only"]
     EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
     GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
     TRUTH -->|any fails| GRILL
@@ -215,9 +215,12 @@ for a deliberately wide, cheap sweep.
 | review | 1.7 min | 3.2 min | never |
 
 The Bash tool caps a single call at 600s, so **57% of successful explores and
-56% of successful implements cannot finish in the foreground.** Explore and
-implement run backgrounded with `--timeout 1800` and are polled through
-`lane-status.sh`; review runs in the foreground.
+56% of successful implements cannot finish in the foreground.** The orchestrator
+runs explore and implement directly with `codex-run --lane <lane> --dir <repo>
+--timeout 1800 "<task>"` as separate Bash calls with `run_in_background: true`.
+The harness re-invokes the orchestrator when each process exits. `lane-status.sh`
+is only the recovery probe when a session restart or harness death loses that
+completion signal; review runs in the foreground.
 
 **Speed.** `--fast` is shorthand for `--effort high`; `--effort max|high|medium`
 sets it directly. Codex's `fast_mode` feature is globally on by default, so it is
@@ -228,36 +231,39 @@ ran 101s. Those were different questions, so treat it as a direction, not a
 benchmark.
 
 ```bash
-scripts/codex-run.sh --lane explore   --dir REPO "why does the refresh path 401?"
-scripts/codex-run.sh --lane implement --dir REPO "add the RangeError guard from the plan"
-scripts/codex-run.sh --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
+# Each explore/implement command is a separate Bash call with run_in_background: true.
+codex-run --lane explore   --dir REPO --timeout 1800 "why does the refresh path 401?"
+codex-run --lane implement --dir REPO --timeout 1800 "add the RangeError guard from the plan"
+# Review stays foreground and isolated.
+codex-run --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
 ```
 
-(After `install-skills.sh` the same script is on PATH as `codex-run`. Under the
-plugin install, the agents call it at `${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.sh`
-and you rarely invoke it by hand.)
+(`codex-run` is on PATH after `install-skills.sh` or the plugin's SessionStart
+hook. The orchestrator invokes it directly; no wrapper agent is needed for
+explore or implement.)
 
 Exploration and implementation both run on the strongest available reasoning,
 on the view that a wrong exploration is more expensive than an expensive one.
 The tradeoff is real: a five-wide luna sweep is not cheap, so size fleets to the
 question rather than to the ceiling — and note that nothing enforces it, so it's judgment.
 
-A dispatch that fails on luna retries once on deepseek, then hard-stops. It never falls
-back to Claude doing the work inline. A fallback that fires on any error turns
-"always dispatch" into "dispatch when convenient", which is the same as not
-having the system.
+A dispatch that fails on luna gets one deepseek rescue. The wrapper prints a
+loud `fallback_from:<engine> primary_rc:<n>` receipt; if the rescue also fails,
+the dispatch stops. It never falls back to Claude doing the work inline. A
+fallback that fires on any error turns "always dispatch" into "dispatch when
+convenient", which is the same as not having the system.
 
 ---
 
 ### The dispatcher has a stable path
 
 A `SessionStart` hook symlinks `~/.local/bin/codex-run` to the installed
-plugin's copy of the script. Agents resolve `codex-run` from PATH first and only
-fall back to `${CLAUDE_PLUGIN_ROOT}`.
+plugin's copy of the script. The orchestrator resolves `codex-run` from PATH
+first and only falls back to `${CLAUDE_PLUGIN_ROOT}`.
 
-That variable does not reliably expand inside an agent's shell. When it did not,
-agents searched the filesystem, found the author's working checkout, and one of
-them executed it mid-edit and died on a syntax error. Pointing at the installed
+That variable does not reliably expand inside Codex's shell. When it did not,
+dispatches searched the filesystem, found the author's working checkout, and one
+executed it mid-edit and died on a syntax error. Pointing at the installed
 snapshot fixes both problems: the path is stable, and it is never someone's live
 working tree.
 
@@ -335,11 +341,11 @@ interaction states, micro-interactions, content, icons and forms — and nine of
 its references already handle the perf/a11y floor. Rebuilding that would have
 produced a worse copy.
 
-The router adds only what impeccable lacks: durable run state, one codex
-explorer for the *mechanical* audit (token drift, off-scale spacing, duplicate
-variants, dead styles — grep-shaped findings an eye misses), gsap routing for
-motion work, and a `codex-reviewer` pass for scope creep, which is how polish
-work actually goes wrong.
+The router adds only what impeccable lacks: durable run state, one direct
+background `codex-run --lane explore` call for the *mechanical* audit (token
+drift, off-scale spacing, duplicate variants, dead styles — grep-shaped findings
+an eye misses), gsap routing for motion work, and a `codex-reviewer` pass for
+scope creep, which is how polish work actually goes wrong.
 
 Taste never goes to a lane. luna gets a diff, never a picture, so anything
 needing an eye becomes a `BLOCKED-HUMAN` item rather than a guess.
@@ -358,9 +364,10 @@ and everything when `CHARLES_INLINE_OK=1`.
 **Subagents** — `PreToolUse` on `Agent|Task`. Stopping Claude from typing the
 code achieves nothing if it can hand the same work to one of its own subagents
 instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
-language specialist in an opted-in repo asks you to use a codex lane instead.
-It is a denylist of agents that do repo code work — `google-drive`,
-`claude-code-guide` and the rest are none of this hook's business.
+language specialist in an opted-in repo asks you to make a direct background
+`codex-run --lane ... --dir ... --timeout 1800 "<task>"` call instead. It is a
+denylist of agents that do repo code work — `google-drive`, `claude-code-guide`
+and the rest are none of this hook's business.
 
 **Unclosed runs** — a `Stop` hook warns when a run has `FAILED` items. Only
 `FAILED`: the others already resurface via `tasks-axi`, and warning twice is
@@ -421,12 +428,14 @@ closing is where you declare the work done. `--force` overrides. `doctor`
 reports the same as warnings, because a repo mid-flow legitimately has ungraded
 work — the blocking check belongs at the finish line, not on every health check.
 
-## A lane that stopped answering
+## Recovery after a lost completion signal
 
-Never decide a dispatch is alive by looking for its output file. `.last` appears
-only on success, so a killed lane leaves nothing and a waiter cannot tell "still
-working" from "died twelve minutes ago" — which is exactly how an agent ends up
-stuck for half an hour on an engine that already exited.
+Normally the harness callback tells the re-invoked orchestrator that a background
+dispatch exited. If a session restarts or the harness dies before that signal
+arrives, use `lane-status.sh` as the recovery probe. Never use periodic polling
+as the primary wait or decide liveness from an output file: `.last` appears only
+on success, so a killed lane leaves nothing and a waiter cannot tell "still
+working" from "died twelve minutes ago".
 
 ```bash
 scripts/lane-status.sh        # 0 RUNNING · 1 DONE · 2 DEAD
@@ -498,7 +507,7 @@ convinces itself it is finished.
 ## Test
 
 ```bash
-bash scripts/selftest.sh   # 23 assertions: both PreToolUse hooks, run state, Stop hook
+bash scripts/selftest.sh   # selftests for both PreToolUse hooks, run state, Stop hook
 bash scripts/doctor.sh     # every lane, every dependency, this repo's config
 ```
 

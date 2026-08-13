@@ -14,6 +14,7 @@
 #
 # exit 0  every change is accounted for by a successful implement dispatch
 # exit 1  changes exist that no dispatch produced — discard them whole
+# exit 3  orphan census is impossible or an implement start is unresolved
 set -uo pipefail
 
 DIR="${1:-$PWD}"; shift || true
@@ -28,14 +29,63 @@ git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1 || { echo "unsourced.sh: not a
 # requires it. Only code the orchestrator did NOT author should be lane-sourced.
 ignore='(\.charles/|\.charles\.toml|docs/specs/|backlog\.md)'
 changed="$(git -C "$DIR" status --porcelain -uall 2>/dev/null | grep -vE "$ignore" | wc -l)"
-[ "${changed:-0}" -eq 0 ] && { echo "clean tree — nothing to account for"; exit 0; }
 
 log="$DIR/.charles/dispatches.jsonl"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ORPHAN CENSUS IMPOSSIBLE: jq is required to inspect $log" >&2
+  exit 3
+fi
+if [ -e "$log" ] || [ -L "$log" ]; then
+  if [ ! -f "$log" ] || [ ! -r "$log" ] || ! jq -e -s 'all(.[]; type == "object")' "$log" >/dev/null 2>&1; then
+    echo "ORPHAN CENSUS IMPOSSIBLE: cannot read or parse $log" >&2
+    exit 3
+  fi
+fi
+
+# A start without any end owns an unresolved write window. Ask the liveness
+# probe before making any provenance claim; a live or killed lane may still own
+# the changes on disk.
+orphan_runs=""
+if [ -s "$log" ]; then
+  orphan_runs="$(jq -r -s '
+    ([.[] | select(.event == "start" and .lane == "implement") |
+      ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $starts |
+    ([.[] | select((has("event") | not) or .event == "end") |
+      ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $ends |
+    ($starts - $ends)[]
+  ' "$log" 2>/dev/null)"
+fi
+if [ -n "$orphan_runs" ]; then
+  while IFS= read -r run; do
+    [ -n "$run" ] || continue
+    status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$run" 2>&1)"; status_rc=$?
+    if [ "$status_rc" -eq 0 ]; then
+      echo "ORPHAN: $run — lane in flight; do not classify tree changes yet." >&2
+    else
+      echo "ORPHAN: $run — killed lane may own these changes — census before discarding" >&2
+    fi
+    echo "  $status_out" >&2
+  done <<<"$orphan_runs"
+  exit 3
+fi
+
+[ "${changed:-0}" -eq 0 ] && { echo "clean tree — nothing to account for"; exit 0; }
+
+last_ends() {
+  jq -c -s '
+    map(select((has("event") | not) or .event == "end")) |
+    reduce .[] as $r ({};
+      .[(($r.run // "") | tostring | split("/") | last)] = $r) |
+    .[]
+  ' "$log" 2>/dev/null
+}
+
 ok_impl=0
-if [ -s "$log" ] && command -v jq >/dev/null; then
+if [ -s "$log" ]; then
   cutoff="$(date -u -d "-${SINCE} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
-  ok_impl="$(jq -r --arg c "$cutoff" \
-    'select(.lane=="implement" and .rc==0 and ($c=="" or .ts>=$c)) | .ts' "$log" 2>/dev/null | wc -l)"
+  ok_impl="$(last_ends | jq -r --arg c "$cutoff" \
+    'select(.lane=="implement" and .rc==0 and ($c=="" or .ts>=$c)) | .ts' | wc -l)"
 fi
 
 if [ "${ok_impl:-0}" -gt 0 ]; then
@@ -48,9 +98,9 @@ fi
 # provenance whatsoever. Conflating them either discards good code or accepts
 # fabricated code.
 failed_impl=0
-if [ -s "$log" ] && command -v jq >/dev/null; then
-  failed_impl="$(jq -r --arg c "$cutoff" \
-    'select(.lane=="implement" and .rc!=0 and ($c=="" or .ts>=$c)) | .ts' "$log" 2>/dev/null | wc -l)"
+if [ -s "$log" ]; then
+  failed_impl="$(last_ends | jq -r --arg c "$cutoff" \
+    'select(.lane=="implement" and .rc!=0 and ($c=="" or .ts>=$c)) | .ts' | wc -l)"
 fi
 
 if [ "${failed_impl:-0}" -gt 0 ]; then

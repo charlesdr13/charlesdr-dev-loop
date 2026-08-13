@@ -3,8 +3,7 @@
 #
 # The edit hook stops Claude typing code itself. This stops Claude handing the
 # same work to one of ITS OWN subagents, which is the same bypass wearing a hat:
-# a general-purpose agent exploring the repo is exactly the dispatch that was
-# supposed to go to a codex lane.
+# a general-purpose agent exploring the repo belongs in a direct codex lane.
 #
 # Denylist, not allowlist: only agents that do repo code work are challenged.
 # The google-drive agent, claude-code-guide, statusline-setup and friends are
@@ -39,8 +38,8 @@ done
 sub="$(jq -r '.tool_input.subagent_type // empty' <<<"$payload")"
 [ -n "$sub" ] || exit 0
 
-# Already the right thing: these ARE the codex lanes.
-case "$sub" in codex-explorer|codex-implementer|codex-reviewer) exit 0 ;; esac
+# Review keeps its isolated agent; explore and implement use direct dispatch.
+case "$sub" in codex-reviewer) exit 0 ;; esac
 
 # Agents that do repo code work, and therefore belong on a lane.
 case "$sub" in
@@ -52,11 +51,11 @@ esac
 
 case "$sub" in
   Explore|Plan|general-purpose|claude|feature-dev:code-explorer)
-    alt="codex-explorer (lane: explore, gpt-5.6-luna @ max, read-only)" ;;
+    alt='codex-run --lane explore --dir <repo> --timeout 1800 "<task>" (Bash with run_in_background: true)' ;;
   feature-dev:code-reviewer)
     alt="codex-reviewer (lane: review, isolated — it cannot see the implementer)" ;;
   *)
-    alt="codex-implementer (lane: implement, gpt-5.6-luna @ max)" ;;
+    alt='codex-run --lane implement --dir <repo> --timeout 1800 "<task>" (Bash with run_in_background: true)' ;;
 esac
 
 jq -nc --arg r "This repo routes code work to a codex lane, and '$sub' is not one. Spawn $alt instead. Approve only if this genuinely is not repo code work — reading docs, a non-code lookup, or a one-off question. Bypass the session with CHARLES_INLINE_OK=1." \

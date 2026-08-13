@@ -81,6 +81,7 @@ command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2;
 DIR="$(cd "$DIR" && pwd)"
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
+RUN_ID="${RUN##*/}"
 
 # --- always announce termination ---------------------------------------------
 # .last is written only on success, so a dispatch that dies leaves nothing and
@@ -126,13 +127,25 @@ prevents data loss, security controls, accessibility basics, or anything the
 brief explicitly asked for. If the brief and this instruction conflict, the
 brief wins and you say which rung you skipped and why.'
 
-# --- append a dispatch receipt: mechanical, no model cooperation required -----
+# --- append dispatch events: mechanical, no model cooperation required ---------
 # This is both halves of the fix: it is the receipt an agent must echo back
 # (closing the inline-fallback hole) and the record `resolve` correlates on.
-log_dispatch() { # log_dispatch ENGINE RC
+log_start() {
+  local f="$DIR/.charles/dispatches.jsonl" event_engine="$ENGINE"
+  mkdir -p "$DIR/.charles" 2>/dev/null || return 1
+  touch "$RUN.jsonl" 2>/dev/null || return 1
+  [ "$LANE" = "review" ] && event_engine="review"
+  jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
+     --arg engine "$event_engine" --arg run "$RUN_ID" --arg dir "$DIR" \
+     --arg task "$(printf '%.200s' "$TASK")" \
+     '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}' \
+     >> "$f" 2>/dev/null
+}
+
+log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
   local f="$DIR/.charles/dispatches.jsonl"
   mkdir -p "$DIR/.charles" 2>/dev/null || return 0
-  local model
+  local model fallback_from="${3:-}" primary_rc="${4:-}"
   case "$1" in
     luna)     model="gpt-5.6-luna" ;;
     terra)    model="gpt-5.6-terra" ;;
@@ -143,9 +156,11 @@ log_dispatch() { # log_dispatch ENGINE RC
     *)        model="$1" ;;
   esac
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
-     --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN" \
-     --arg task "$(printf '%.200s' "$TASK")" \
-     '{ts:$ts,lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,task:$task}' \
+     --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN_ID" \
+     --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
+     --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" \
+     '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,dir:$dir,task:$task}
+      | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
      >> "$f" 2>/dev/null || true
 }
 
@@ -196,7 +211,15 @@ run_deepseek() {
   local args=(--dir "$DIR" --timeout "$TIMEOUT")
   [ "$SANDBOX" = "read-only" ] && args+=(--read-only)
   [ "$RESUME" -eq 1 ] && args+=(--resume)
-  "$DS_SCRIPT" "${args[@]}" "$TASK"
+  : > "$RUN.last"
+  local rc=0
+  "$DS_SCRIPT" "${args[@]}" "$TASK" > "$RUN.last" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+  else
+    : > "$RUN.last"
+  fi
+  return "$rc"
 }
 
 # --- lane: review (sol @ medium, isolated temp dir) ---------------------------
@@ -291,6 +314,21 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   return $rc
 }
 
+# The role and its required inputs are validated before the start event. A
+# refused or malformed dispatch therefore has no start to orphan.
+case "$LANE" in
+  explore)   SANDBOX="read-only" ;;
+  implement) ;;
+  review)
+    [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; exit 2; }
+    [ -f "$PLAN" ] || { echo "codex-run.sh: no such plan file: $PLAN" >&2; exit 2; }
+    ;;
+  *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
+esac
+if [ "$LANE" != "review" ]; then
+  case "$ENGINE" in luna|terra|deepseek) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek)" >&2; exit 2 ;; esac
+fi
+
 # --- refuse a second writer on the same tree ---------------------------------
 # Two workspace-write dispatches on one directory interleave their edits and the
 # loser is silently overwritten. Observed live: a dispatch killed by the harness
@@ -318,13 +356,13 @@ if [ "$LANE" = "implement" ] && [ "$SANDBOX" = "workspace-write" ]; then
   fi
 fi
 
-# The role fixes the sandbox; the engine is what actually runs.
-case "$LANE" in
-  explore)   SANDBOX="read-only" ;;
-  implement) ;;                       # keeps workspace-write unless --read-only
-  review)    ;;
-  *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
-esac
+if ! log_start; then
+  if [ "$LANE" = "implement" ]; then
+    echo "codex-run.sh: failed to write implement start event; aborting dispatch (exit 6)" >&2
+    exit 6
+  fi
+  echo "codex-run.sh: WARNING — failed to write $LANE start event; continuing without receipt" >&2
+fi
 
 dispatch() { # dispatch ENGINE
   case "$1" in
@@ -347,9 +385,18 @@ else
   # There is deliberately NO fallback to inline editing: that would defeat the
   # entire point of routing this work out in the first place.
   if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && { [ "$ENGINE" = "luna" ] || [ "$ENGINE" = "terra" ]; }; then
-    echo "codex-run.sh: $ENGINE failed (exit $RC) — falling back to deepseek for this $LANE" >&2
+    primary_rc="$RC"
+    echo "codex-run.sh: $ENGINE failed (exit $primary_rc) — falling back to deepseek for this $LANE" >&2
     set +e; dispatch deepseek; RC=$?; set -e
-    log_dispatch deepseek "$RC"
+    if [ "$RC" -eq 0 ]; then
+      if [ -s "$RUN.last" ]; then
+        printf '\nfallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" >> "$RUN.last"
+      else
+        printf 'fallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" > "$RUN.last"
+      fi
+    fi
+    echo "codex-run.sh: fallback receipt fallback_from:$ENGINE primary_rc:$primary_rc" >&2
+    log_dispatch deepseek "$RC" "$ENGINE" "$primary_rc"
   fi
 fi
 

@@ -2,7 +2,7 @@
 # route-to-codex.sh — PreToolUse gate on Edit|Write|MultiEdit.
 #
 # Big change in an opted-in repo -> "ask", with a reason telling Claude to
-# dispatch codex-implementer instead. Small change -> silent allow.
+# dispatch the implement lane directly. Small change -> silent allow.
 #
 # Opt-in is per repo: this does nothing unless a .charles.toml exists at or
 # above the edited file. Known hole: writes via Bash (sed -i, heredocs) are not
@@ -28,6 +28,13 @@ path="$(jq -r '.tool_input.file_path // empty' <<<"$payload")"
 # realpath first: a relative path makes dirname "." return "." forever and the
 # walk never terminates. Confirmed hanging at rc 124 before this line existed.
 path="$(realpath -m "$path" 2>/dev/null || echo "$path")"
+
+# Claude Code worktrees are managed copies: allow them without touching the
+# root repo's inline-edit counter.
+case "$path" in
+  */.claude/worktrees/*) exit 0 ;;
+esac
+
 root=""
 d="$(dirname "$path")"
 while [ -n "$d" ] && [ "$d" != "/" ]; do
@@ -74,12 +81,12 @@ nfiles="$(sort -u "$touched" 2>/dev/null | grep -c . || echo 0)"
 
 reason=""
 if [ "$lines" -ge "$max_lines" ]; then
-  reason="This edit touches ~$lines lines (threshold $max_lines)."
+  reason="This edit touches ~$lines lines (inline_lines=$max_lines)."
 elif [ "$nfiles" -ge "$max_files" ]; then
-  reason="$nfiles distinct files edited since the last codex dispatch (threshold $max_files) — this is a feature, not a tweak."
+  reason="$nfiles distinct files edited since the last codex dispatch (inline_files=$max_files) — this is a feature, not a tweak."
 fi
 [ -n "$reason" ] || exit 0
 
-jq -nc --arg r "$reason Dispatch the codex-implementer agent (lane: implement, gpt-5.6-luna @ max) instead of editing inline. Approve only if this genuinely is a small local fix. Bypass for the session with CHARLES_INLINE_OK=1." \
+jq -nc --arg r "$reason Dispatch the implement lane via a background Bash call: codex-run --lane implement --dir <repo> --timeout 1800 \"<task>\" (run_in_background: true) instead of editing inline. Approve only if this genuinely is a small local fix. Controls: inline_lines and inline_files in .charles.toml; session bypass: CHARLES_INLINE_OK=1." \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'
 exit 0

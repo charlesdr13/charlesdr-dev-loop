@@ -1,5 +1,5 @@
 ---
-description: UI/UX polish — routes to impeccable for taste, dispatches codex for the mechanical audit, wraps both in run state and a scope-creep review
+description: UI/UX polish — routes to impeccable for taste, dispatches direct background codex for the mechanical audit, wraps both in run state and a scope-creep review
 ---
 
 Polish the interface for: $ARGUMENTS (no argument = the current route)
@@ -45,10 +45,15 @@ Motion work also routes: `gsap-scrolltrigger` for scroll-linked or pinned
 sections, `gsap-react` in React or Next (cleanup on unmount is where this breaks),
 `gsap-timeline` for sequencing, and `gsap-performance` before shipping any of it.
 
-## 3. In parallel — one codex explorer for the mechanical audit
+## 3. In parallel — one direct background codex explore call for the mechanical audit
 
-Dispatch a single `codex-explorer` while you do the visual pass. It cannot see,
-so give it only what is legible in source:
+While you do the visual pass, make this a separate Bash tool call with
+`run_in_background: true`. It cannot see, so give it only what is legible in
+source:
+
+```bash
+codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<audit task>"
+```
 
 > Audit `<route>` and the components it imports for **mechanical** inconsistency
 > only — no aesthetic opinions, they are not yours to give. Report with

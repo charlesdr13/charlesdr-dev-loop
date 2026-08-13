@@ -59,6 +59,30 @@ check "3rd file trips file threshold" ask \
 check "counter cleared after dispatch" allow \
   "$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
 
+# --- Claude Code worktrees are exempt and do not count -----------------------
+WT="$BOX/repo/.claude/worktrees/fixture"; mkdir -p "$WT"
+echo "x" > "$WT/a.ts"
+: > "$BOX/repo/.charles/touched"
+worktree_out="$(jq -nc --arg p "$WT/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}' | CHARLES_INLINE_OK=0 bash "$HOOK" 2>/dev/null)"
+worktree_count="$(wc -l < "$BOX/repo/.charles/touched")"
+if [ -z "$worktree_out" ] && [ "$worktree_count" -eq 0 ]; then
+  echo "  PASS  worktree edit is silent and not counted"; pass=$((pass+1))
+else
+  echo "  FAIL  worktree edit should be silent and leave the counter empty"; fail=$((fail+1))
+fi
+
+check "same over-threshold edit outside worktrees still asks" ask \
+  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
+
+ask_text="$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}' | CHARLES_INLINE_OK=0 bash "$HOOK" 2>/dev/null)"
+if grep -qF 'CHARLES_INLINE_OK' <<<"$ask_text" \
+  && grep -qF 'inline_lines' <<<"$ask_text" \
+  && grep -qF 'inline_files' <<<"$ask_text"; then
+  echo "  PASS  ask text names the bypass and threshold keys"; pass=$((pass+1))
+else
+  echo "  FAIL  ask text must name CHARLES_INLINE_OK, inline_lines, and inline_files"; fail=$((fail+1))
+fi
+
 # --- subagent routing hook ----------------------------------------------------
 SUBHOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-subagents.sh"
 
@@ -76,8 +100,22 @@ scheck() { # scheck NAME EXPECT SUBAGENT_TYPE CWD
 
 echo
 scheck "opted-out repo, general-purpose" allow general-purpose "$BOX/plain"
-scheck "codex-explorer is the right thing" allow codex-explorer "$BOX/repo"
-scheck "codex-implementer is the right thing" allow codex-implementer "$BOX/repo"
+scheck "codex-reviewer remains allowed" allow codex-reviewer "$BOX/repo"
+
+message_check() { # message_check NAME SUBAGENT_TYPE CWD EXPECTED-DISPATCH
+  local name="$1" out
+  out="$(jq -nc --arg s "$2" --arg c "$3" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
+  if grep -qF "$4" <<<"$out" && grep -qF 'run_in_background: true' <<<"$out"; then
+    echo "  PASS  $name"; pass=$((pass+1))
+  else
+    echo "  FAIL  $name — expected direct background dispatch"; echo "        $out"; fail=$((fail+1))
+  fi
+}
+
+message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
+  "codex-run --lane explore --dir <repo> --timeout 1800"
+message_check "implement block points to direct dispatch" python-pro "$BOX/repo" \
+  "codex-run --lane implement --dir <repo> --timeout 1800"
 scheck "google-drive is not code work"  allow google-drive "$BOX/repo"
 scheck "Explore must route to a lane"    ask Explore "$BOX/repo"
 scheck "general-purpose must route"      ask general-purpose "$BOX/repo"
@@ -147,33 +185,64 @@ printf '#!/usr/bin/env bash\nsleep 25\n' > "$LOCKDIR/bin/codex"; chmod +x "$LOCK
 
 mkdir -p "$LOCKDIR/.charles"
 # hold the real lock the way a live writer would, then try to start a second
-( flock 9 && sleep 20 ) 9>"$LOCKDIR/.charles/implement.lock" &
+( flock 9 && touch "$LOCKDIR/lock-ready" && while [ ! -f "$LOCKDIR/release-lock" ]; do sleep 0.05; done ) 9>"$LOCKDIR/.charles/implement.lock" &
 decoy=$!
-sleep 1
+lock_ready=0
+for _ in $(seq 1 100); do
+  if [ -f "$LOCKDIR/lock-ready" ]; then lock_ready=1; break; fi
+  kill -0 "$decoy" 2>/dev/null || break
+  sleep 0.05
+done
 
-out="$(PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" "second writer" 2>&1)"; rc=$?
-if [ "$rc" -eq 4 ] && grep -q 'REFUSING' <<<"$out"; then
-  echo "  PASS  second writer on the same tree is refused"; pass=$((pass+1))
+if [ "$lock_ready" -eq 1 ]; then
+  out="$(CHARLES_STATE_DIR="$LOCKDIR/state" PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" "second writer" 2>&1)"; rc=$?
+  if [ "$rc" -eq 4 ] && grep -q 'REFUSING' <<<"$out"; then
+    echo "  PASS  second writer on the same tree is refused"; pass=$((pass+1))
+  else
+    echo "  FAIL  second writer should have been refused (rc=$rc)"; fail=$((fail+1))
+  fi
+  if [ ! -s "$LOCKDIR/.charles/dispatches.jsonl" ]; then
+    echo "  PASS  refused second writer writes no dispatch event"; pass=$((pass+1))
+  else
+    echo "  FAIL  refused second writer must not write a dispatch event"; fail=$((fail+1))
+  fi
 else
-  echo "  FAIL  second writer should have been refused (rc=$rc)"; fail=$((fail+1))
+  echo "  FAIL  lock holder did not report readiness after flock"; fail=$((fail+1))
 fi
 
-out="$(CHARLES_ALLOW_CONCURRENT_WRITES=1 PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" --timeout 2 "override" 2>&1)"
-if grep -q 'override set' <<<"$out"; then
-  echo "  PASS  explicit override is honoured"; pass=$((pass+1))
-else
-  echo "  FAIL  override should have been honoured"; fail=$((fail+1))
-fi
-
-# a read-only explore alongside a writer is fine and must NOT be refused
-out="$(PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$LOCKDIR" --timeout 2 "reader" 2>&1)"
+# A read-only explore alongside the held writer is fine and must NOT be refused.
+out="$(CHARLES_STATE_DIR="$LOCKDIR/state" PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$LOCKDIR" --no-fallback --timeout 2 "reader" 2>&1)"
 if grep -q 'REFUSING' <<<"$out"; then
   echo "  FAIL  explore was refused; the lock must only guard writers"; fail=$((fail+1))
 else
   echo "  PASS  explore alongside a writer is allowed"; pass=$((pass+1))
 fi
 
-kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
+rm -f "$LOCKDIR/.charles/dispatches.jsonl"
+touch "$LOCKDIR/release-lock"
+wait "$decoy" 2>/dev/null
+out="$(CHARLES_STATE_DIR="$LOCKDIR/state" PATH="$LOCKDIR/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$LOCKDIR" --no-fallback --timeout 2 "accepted" 2>&1)"; accepted_rc=$?
+start_count="$(jq -r 'select(.event == "start") | .run' "$LOCKDIR/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+if [ "$accepted_rc" -ne 4 ] && [ "$start_count" -eq 1 ]; then
+  echo "  PASS  accepted writer records one start after the lock"; pass=$((pass+1))
+else
+  echo "  FAIL  accepted writer should record one start after the lock (rc=$accepted_rc, got $start_count)"; fail=$((fail+1))
+fi
+lock_run="$(jq -r 'select(.event == "start") | .run' "$LOCKDIR/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+if jq -e --arg d "$LOCKDIR" --arg r "$lock_run" \
+  'select(.event == "start" and .run == $r and .dir == $d) | select((.run | contains("/")) | not)' \
+  "$LOCKDIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  new start carries resolved dir and basename run"; pass=$((pass+1))
+else
+  echo "  FAIL  new start identity fields are incomplete"; fail=$((fail+1))
+fi
+if jq -e --arg d "$LOCKDIR" --arg r "$lock_run" \
+  'select(.event == "end" and .run == $r and .dir == $d)' \
+  "$LOCKDIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  new end carries resolved dir and basename run"; pass=$((pass+1))
+else
+  echo "  FAIL  new end identity fields are incomplete"; fail=$((fail+1))
+fi
 
 # --- dispatcher symlink hook --------------------------------------------------
 # Agents cannot rely on ${CLAUDE_PLUGIN_ROOT} expanding in their shell; when it
@@ -186,14 +255,14 @@ chmod +x "$FAKEROOT/scripts/codex-run.sh"
 
 HOME_ORIG="$HOME"
 export HOME="$BOX/fakehome"; mkdir -p "$HOME"
-CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" >/dev/null 2>&1
+( cd "$BOX" && CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" ) >/dev/null 2>&1
 if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$FAKEROOT/scripts/codex-run.sh" ]; then
   echo "  PASS  session hook links codex-run onto PATH"; pass=$((pass+1))
 else
   echo "  FAIL  session hook did not create the codex-run symlink"; fail=$((fail+1))
 fi
 
-second="$(CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" 2>&1)"
+second="$(cd "$BOX" && CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" 2>&1)"
 if [ -z "$second" ]; then
   echo "  PASS  hook is idempotent on reinstall"; pass=$((pass+1))
 else
@@ -201,7 +270,7 @@ else
 fi
 
 # with no plugin root it must exit quietly rather than erroring
-if CLAUDE_PLUGIN_ROOT="" bash "$LINK" >/dev/null 2>&1; then
+if ( cd "$BOX" && CLAUDE_PLUGIN_ROOT="" bash "$LINK" ) >/dev/null 2>&1; then
   echo "  PASS  hook is a no-op without a plugin root"; pass=$((pass+1))
 else
   echo "  FAIL  hook errored when CLAUDE_PLUGIN_ROOT was empty"; fail=$((fail+1))
@@ -241,11 +310,58 @@ bash "$VR" "$VD" --since 5 >/dev/null 2>&1
 [ $? -eq 1 ] && { echo "  PASS  a stale receipt does not count"; pass=$((pass+1)); } \
              || { echo "  FAIL  time window should reject"; fail=$((fail+1)); }
 
+# identity-bound receipt selection and last-end-wins pairing
+VID="$BOX/identity-receipts"; mkdir -p "$VID/.charles"
+VSTART="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"start","lane":"implement","engine":"luna","run":"one","dir":"%s","task":"one"}\n' "$VSTART" "$VID" > "$VID/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"one","dir":"%s","task":"one"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"start","lane":"implement","engine":"luna","run":"two","dir":"%s","task":"two"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"two","dir":"%s","task":"two"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+identity_out="$(bash "$VR" "$VID" --run "$VID/one" 2>&1)"; identity_rc=$?
+if [ "$identity_rc" -eq 0 ] && grep -q '"run":"one"' <<<"$identity_out" && ! grep -q '"run":"two"' <<<"$identity_out"; then
+  echo "  PASS  --run verifies only the requested dispatch and prints its end"; pass=$((pass+1))
+else
+  echo "  FAIL  --run must isolate one dispatch (rc=$identity_rc)"; fail=$((fail+1))
+fi
+
+printf '{"ts":"%s","event":"start","lane":"implement","engine":"luna","run":"last","dir":"%s","task":"last"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"last","dir":"%s","task":"last"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":7,"run":"last","dir":"%s","task":"last"}\n' "$VSTART" "$VID" >> "$VID/.charles/dispatches.jsonl"
+identity_out="$(bash "$VR" "$VID" --run last --since 99999 2>&1)"; identity_rc=$?
+if [ "$identity_rc" -eq 2 ] && grep -q '"rc":7' <<<"$identity_out" && ! grep -q '"rc":0' <<<"$identity_out"; then
+  echo "  PASS  last end wins when a run has multiple ends"; pass=$((pass+1))
+else
+  echo "  FAIL  last end should be authoritative (rc=$identity_rc)"; fail=$((fail+1))
+fi
+
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"missing-start","dir":"%s","task":"missing"}\n' "$VSTART" "$VID" > "$VID/.charles/dispatches.jsonl"
+identity_out="$(bash "$VR" "$VID" --run missing-start 2>&1)"; identity_rc=$?
+if [ "$identity_rc" -eq 1 ] && grep -q 'start record is missing' <<<"$identity_out"; then
+  echo "  PASS  unmatched new-format end is rejected as missing its start"; pass=$((pass+1))
+else
+  echo "  FAIL  unmatched new-format end should name the missing start (rc=$identity_rc)"; fail=$((fail+1))
+fi
+
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"legacy","task":"legacy"}\n' "$VSTART" > "$VID/.charles/dispatches.jsonl"
+bash "$VR" "$VID" --run legacy >/dev/null 2>&1; identity_rc=$?
+if [ "$identity_rc" -eq 0 ]; then
+  echo "  PASS  legacy no-event receipt remains valid"; pass=$((pass+1))
+else
+  echo "  FAIL  legacy no-event receipt should remain valid (rc=$identity_rc)"; fail=$((fail+1))
+fi
+
 # --- lane liveness ------------------------------------------------------------
 # Waiting on .last cannot distinguish "not finished yet" from "killed"; agents
 # sat stuck 27 minutes on dead engines. lane-status asks the process instead.
 LS="$(cd "$(dirname "$0")/.." && pwd)/scripts/lane-status.sh"
 LD="$BOX/lanes"; mkdir -p "$LD"
+
+missing_dir_out="$(timeout 2 bash "$LS" --dir 2>&1)"; missing_dir_rc=$?
+if [ "$missing_dir_rc" -eq 2 ] && grep -q 'usage:' <<<"$missing_dir_out"; then
+  echo "  PASS  --dir without an operand exits 2 with usage"; pass=$((pass+1))
+else
+  echo "  FAIL  --dir without an operand should exit 2 with usage (rc=$missing_dir_rc)"; fail=$((fail+1))
+fi
 
 touch "$LD/20260101-000000-111111-explore.jsonl"
 printf '124\n' > "$LD/20260101-000000-111111-explore.done"
@@ -263,6 +379,50 @@ printf 'result\n' > "$LD/20260101-000000-333333-explore.last"
 CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-333333-explore >/dev/null 2>&1
 [ $? -eq 1 ] && { echo "  PASS  finished dispatch reports DONE"; pass=$((pass+1)); } \
              || { echo "  FAIL  dispatch with a result should be DONE"; fail=$((fail+1)); }
+
+# --dir scopes newest selection to the repo's dispatch log, even when another
+# fixture repo has a newer state file.
+SCOPE_STATE="$BOX/scoped-state"; SCOPE_A="$BOX/scoped-a"; SCOPE_B="$BOX/scoped-b"
+mkdir -p "$SCOPE_STATE" "$SCOPE_A/.charles" "$SCOPE_B/.charles"
+SCOPE_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"start","lane":"explore","engine":"luna","run":"scope-a","dir":"%s","task":"a"}\n{"ts":"%s","event":"end","lane":"explore","engine":"luna","rc":0,"run":"scope-a","dir":"%s","task":"a"}\n' "$SCOPE_NOW" "$SCOPE_A" "$SCOPE_NOW" "$SCOPE_A" > "$SCOPE_A/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"start","lane":"explore","engine":"luna","run":"scope-b","dir":"%s","task":"b"}\n{"ts":"%s","event":"end","lane":"explore","engine":"luna","rc":0,"run":"scope-b","dir":"%s","task":"b"}\n' "$SCOPE_NOW" "$SCOPE_B" "$SCOPE_NOW" "$SCOPE_B" > "$SCOPE_B/.charles/dispatches.jsonl"
+touch "$SCOPE_STATE/scope-a.jsonl" "$SCOPE_STATE/scope-b.jsonl"
+printf 'result\n' > "$SCOPE_STATE/scope-a.last"
+printf 'result\n' > "$SCOPE_STATE/scope-b.last"
+touch -d '+1 minute' "$SCOPE_STATE/scope-b.jsonl" 2>/dev/null || true
+scope_out="$(CHARLES_STATE_DIR="$SCOPE_STATE" bash "$LS" --dir "$SCOPE_A" 2>&1)"; scope_rc=$?
+if [ "$scope_rc" -eq 1 ] && grep -q 'scope-a' <<<"$scope_out" && ! grep -q 'scope-b' <<<"$scope_out"; then
+  echo "  PASS  --dir lane status ignores another repo's newer state"; pass=$((pass+1))
+else
+  echo "  FAIL  --dir must select the state named by this repo (rc=$scope_rc)"; fail=$((fail+1))
+fi
+
+# A start is recorded before Codex creates a transcript. The empty state file
+# must remain alive-pending while the process is being checked.
+PENDING="$BOX/pending"; mkdir -p "$PENDING/bin"
+printf '#!/usr/bin/env bash\nwhile [ ! -f "$CHARLES_TEST_RELEASE" ]; do sleep 0.05; done\n' > "$PENDING/bin/codex"
+chmod +x "$PENDING/bin/codex"
+( CHARLES_STATE_DIR="$PENDING/state" CHARLES_TEST_RELEASE="$PENDING/release" PATH="$PENDING/bin:$PATH" \
+  bash "$RUN_SH" --lane explore --dir "$PENDING" --no-fallback --timeout 5 "pending" ) \
+  >"$PENDING/run.out" 2>&1 &
+pending_pid=$!
+pending_run=""
+for _ in $(seq 1 40); do
+  pending_run="$(jq -r 'select(.event == "start") | .run' "$PENDING/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+  [ -n "$pending_run" ] && break
+  sleep 0.05
+done
+pending_out="$(CHARLES_STATE_DIR="$PENDING/state" bash "$LS" --dir "$PENDING" "$pending_run" 2>&1)"; pending_rc=$?
+if [ "$pending_rc" -eq 0 ] && grep -q 'RUNNING: ' <<<"$pending_out" \
+  && grep -q 'state pending' <<<"$pending_out" \
+  && [ -f "$PENDING/state/$pending_run.jsonl" ] && [ ! -s "$PENDING/state/$pending_run.jsonl" ]; then
+  echo "  PASS  start with empty state is alive-pending"; pass=$((pass+1))
+else
+  echo "  FAIL  start with empty state should remain alive-pending (rc=$pending_rc)"; fail=$((fail+1))
+fi
+touch "$PENDING/release"
+wait "$pending_pid" 2>/dev/null
 
 # --- flow completeness --------------------------------------------------------
 # A dispatch succeeding is not a flow finishing. The audit that motivated this
@@ -390,6 +550,61 @@ else
   echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
 fi
 
+# A missing start-event write is fatal for implement, but read-only lanes warn
+# and continue so their investigation result is still available.
+STARTFAIL="$BOX/start-write-fail"; mkdir -p "$STARTFAIL/bin" "$STARTFAIL/.charles"
+mkdir "$STARTFAIL/.charles/dispatches.jsonl"
+printf '#!/usr/bin/env bash\ntouch "%s/codex-ran"\n' "$STARTFAIL" > "$STARTFAIL/bin/codex"
+chmod +x "$STARTFAIL/bin/codex"
+start_out="$(CHARLES_STATE_DIR="$STARTFAIL/state" PATH="$STARTFAIL/bin:$PATH" bash "$RUN_SH" --lane implement --dir "$STARTFAIL" --no-fallback --timeout 5 "start write failure" 2>&1)"; start_rc=$?
+if [ "$start_rc" -eq 6 ] && grep -q 'failed to write implement start event' <<<"$start_out" \
+  && [ ! -e "$STARTFAIL/codex-ran" ]; then
+  echo "  PASS  implement aborts when its start event cannot be written"; pass=$((pass+1))
+else
+  echo "  FAIL  implement start-write failure should abort distinctly (rc=$start_rc)"; fail=$((fail+1))
+fi
+
+STARTWARN="$BOX/start-write-warn"; mkdir -p "$STARTWARN/bin" "$STARTWARN/.charles"
+mkdir "$STARTWARN/.charles/dispatches.jsonl"
+printf '#!/usr/bin/env bash\ntouch "%s/codex-ran"\n' "$STARTWARN" > "$STARTWARN/bin/codex"
+chmod +x "$STARTWARN/bin/codex"
+start_out="$(CHARLES_STATE_DIR="$STARTWARN/state" PATH="$STARTWARN/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$STARTWARN" --no-fallback --timeout 5 "start write warning" 2>&1)"; start_rc=$?
+if [ "$start_rc" -eq 0 ] && grep -q 'WARNING.*failed to write explore start event' <<<"$start_out" \
+  && [ -e "$STARTWARN/codex-ran" ]; then
+  echo "  PASS  explore warns loudly and continues when its start event fails"; pass=$((pass+1))
+else
+  echo "  FAIL  explore start-write failure should warn and continue (rc=$start_rc)"; fail=$((fail+1))
+fi
+
+# fallback receipt fields stay on the rescue end and the shared result file
+FB="$BOX/fallback"; mkdir -p "$FB/bin" "$FB/home/.claude/skills/codex-deepseek/scripts" "$FB/repo"
+printf '#!/usr/bin/env bash\ncase " $* " in *" -p luna "*) exit 7;; esac\nexit 0\n' > "$FB/bin/codex"
+chmod +x "$FB/bin/codex"
+printf '#!/usr/bin/env bash\nprintf "deepseek result\\n"\n' > "$FB/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$FB/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+fb_out="$(HOME="$FB/home" CHARLES_STATE_DIR="$FB/state" PATH="$FB/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$FB/repo" --timeout 2 "fallback" 2>&1)"; fb_rc=$?
+fb_run="$(jq -r 'select(.event == "end") | .run' "$FB/repo/.charles/dispatches.jsonl" 2>/dev/null | tail -1)"
+if [ "$fb_rc" -eq 0 ] && grep -q 'fallback_from:luna' <<<"$fb_out" && grep -q 'primary_rc:7' <<<"$fb_out"; then
+  echo "  PASS  fallback receipt is printed on stderr"; pass=$((pass+1))
+else
+  echo "  FAIL  fallback stderr receipt is missing its fields (rc=$fb_rc)"; fail=$((fail+1))
+fi
+if jq -e --arg r "$fb_run" 'select(.event == "end" and .run == $r and .fallback_from == "luna" and .primary_rc == 7)' "$FB/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  rescue end carries fallback fields"; pass=$((pass+1))
+else
+  echo "  FAIL  rescue end should carry fallback fields"; fail=$((fail+1))
+fi
+if ! jq -e --arg r "$fb_run" 'select(.event == "end" and .run == $r and .engine == "luna" and has("fallback_from"))' "$FB/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  primary end does not carry fallback fields"; pass=$((pass+1))
+else
+  echo "  FAIL  fallback fields belong on the rescue end only"; fail=$((fail+1))
+fi
+if grep -q 'fallback_from:luna' "$FB/state/$fb_run.last" 2>/dev/null && grep -q 'primary_rc:7' "$FB/state/$fb_run.last" 2>/dev/null; then
+  echo "  PASS  fallback result carries the same fields"; pass=$((pass+1))
+else
+  echo "  FAIL  fallback result should carry the same fields"; fail=$((fail+1))
+fi
+
 # --- relative paths must not hang the parent walk -----------------------------
 # dirname "." is "." forever. Both hooks span-locked at rc 124 when a payload
 # carried a relative path from a directory with no .charles.toml above it.
@@ -433,6 +648,67 @@ printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"
 bash "$US" "$PW" >/dev/null 2>&1
 [ $? -eq 0 ] && { echo "  PASS  successful lane -> accounted for (0)"; pass=$((pass+1)); } \
              || { echo "  FAIL  successful dispatch should exit 0"; fail=$((fail+1)); }
+
+# orphaned implement start: census is required before classifying tree changes
+OR="$BOX/orphan"; OR_STATE="$BOX/orphan-state"; OR_RUN="orphan-run"
+mkdir -p "$OR/.charles" "$OR_STATE"
+( cd "$OR" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'orig\n' > a.ts && git add -A && git commit -qm init && printf 'changed\n' > a.ts ) >/dev/null 2>&1
+OR_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"start","lane":"implement","engine":"luna","run":"%s","dir":"%s","task":"orphan"}\n' "$OR_NOW" "$OR_RUN" "$OR" > "$OR/.charles/dispatches.jsonl"
+touch "$OR_STATE/$OR_RUN.jsonl"
+printf '143\n' > "$OR_STATE/$OR_RUN.done"
+orphan_out="$(CHARLES_STATE_DIR="$OR_STATE" bash "$US" "$OR" 2>&1)"; orphan_rc=$?
+if [ "$orphan_rc" -eq 3 ] && grep -q 'killed lane may own these changes' <<<"$orphan_out"; then
+  echo "  PASS  orphaned implement start gets census exit 3"; pass=$((pass+1))
+else
+  echo "  FAIL  orphaned implement start should exit 3 (rc=$orphan_rc)"; fail=$((fail+1))
+fi
+orphan_flow="$(CHARLES_STATE_DIR="$OR_STATE" bash "$FS" "$OR" 2>&1)"; orphan_flow_rc=$?
+if [ "$orphan_flow_rc" -eq 1 ] && grep -q 'ISSUE.*orphan' <<<"$orphan_flow"; then
+  echo "  PASS  flow status lists the orphan as an ISSUE"; pass=$((pass+1))
+else
+  echo "  FAIL  flow status should list the orphan (rc=$orphan_flow_rc)"; fail=$((fail+1))
+fi
+bash "$RS" init "$OR" feature "orphan close" >/dev/null 2>&1
+orphan_close="$(CHARLES_STATE_DIR="$OR_STATE" bash "$RS" close "$OR" done 2>&1)"; orphan_close_rc=$?
+if [ "$orphan_close_rc" -eq 5 ] && grep -q 'orphan' <<<"$orphan_close"; then
+  echo "  PASS  close refuses while an orphan exists"; pass=$((pass+1))
+else
+  echo "  FAIL  close should refuse on an orphan (rc=$orphan_close_rc)"; fail=$((fail+1))
+fi
+
+# The orphan census must fail closed when it cannot inspect the dispatch log.
+CF="$BOX/census-fail"; mkdir -p "$CF"
+( cd "$CF" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'orig\n' > a.ts && git add -A && git commit -qm init && printf 'changed\n' > a.ts ) >/dev/null 2>&1
+NOJQ_BIN="$BOX/no-jq-bin"; mkdir -p "$NOJQ_BIN"
+ln -s "$(command -v bash)" "$NOJQ_BIN/bash"
+ln -s "$(command -v git)" "$NOJQ_BIN/git"
+census_out="$(PATH="$NOJQ_BIN" bash "$US" "$CF" 2>&1)"; census_rc=$?
+if [ "$census_rc" -eq 3 ] && grep -qi 'census impossible' <<<"$census_out"; then
+  echo "  PASS  missing jq makes the orphan census fail closed"; pass=$((pass+1))
+else
+  echo "  FAIL  missing jq should return orphan code 3 (rc=$census_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$CF/.charles"
+printf '{malformed\n' > "$CF/.charles/dispatches.jsonl"
+census_out="$(bash "$US" "$CF" 2>&1)"; census_rc=$?
+if [ "$census_rc" -eq 3 ] && grep -qi 'census impossible' <<<"$census_out"; then
+  echo "  PASS  malformed dispatch log makes the orphan census fail closed"; pass=$((pass+1))
+else
+  echo "  FAIL  malformed dispatch log should return orphan code 3 (rc=$census_rc)"; fail=$((fail+1))
+fi
+
+chmod 000 "$CF/.charles/dispatches.jsonl"
+census_out="$(bash "$US" "$CF" 2>&1)"; census_rc=$?
+chmod 644 "$CF/.charles/dispatches.jsonl"
+if [ "$census_rc" -eq 3 ] && grep -qi 'census impossible' <<<"$census_out"; then
+  echo "  PASS  unreadable dispatch log makes the orphan census fail closed"; pass=$((pass+1))
+else
+  echo "  FAIL  unreadable dispatch log should return orphan code 3 (rc=$census_rc)"; fail=$((fail+1))
+fi
 
 # --- review engine selection --------------------------------------------------
 # Two models reviewing the same code overlapped on 1 finding out of 13, and
