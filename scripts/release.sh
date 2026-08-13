@@ -76,6 +76,12 @@ if ! claude plugin marketplace update charlesdr-dev-loop \
   || ! claude plugin install charlesdr-dev-loop@charlesdr-dev-loop; then
   exit 1
 fi
+# `install` is a no-op when the plugin is already installed; `update` is what
+# actually copies the new version into the cache.
+CACHE_ROOT="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop"
+if [ ! -d "$CACHE_ROOT/$VERSION" ]; then
+  claude plugin update charlesdr-dev-loop@charlesdr-dev-loop || exit 1
+fi
 
 CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VERSION"
 TARGET="$CACHE/scripts/codex-run.sh"
