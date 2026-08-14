@@ -702,7 +702,7 @@ else
 fi
 printf 'current\n' > "$DD/repo/scripts/other.sh"
 printf 'installed\n' > "$DRIFT_CACHE/scripts/other.sh"
-doctor_other_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" bash scripts/doctor.sh 2>&1)"; doctor_other_rc=$?
+doctor_other_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" CHARLES_RELEASING=0 bash scripts/doctor.sh 2>&1)"; doctor_other_rc=$?
 if [ "$doctor_other_rc" -ne 0 ] && grep -q '^  FAIL.*non-spec' <<<"$doctor_other_out"; then
   echo "  PASS  doctor keeps non-spec drift as FAIL"; pass=$((pass+1))
 else
