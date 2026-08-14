@@ -21,7 +21,67 @@ done
 [ -d "$DIR" ] || { echo "flow-status.sh: no such directory: $DIR" >&2; exit 1; }
 DIR="$(cd "$DIR" && pwd)"
 log="$DIR/.charles/dispatches.jsonl"
+FLOW_FILE="$(dirname "$0")/flow.json"
 issues=0
+
+flow_graph=1
+if ! command -v jq >/dev/null 2>&1 || [ ! -r "$FLOW_FILE" ] || ! jq -e '
+  def strings: type == "array" and all(.[]; type == "string");
+  . as $root |
+  ($root | type == "object") and
+  all(["feature", "debug", "polish", "ui"][];
+    . as $flow |
+    ($root[$flow] | type == "object") and
+    ($root[$flow].phases | type == "object") and
+    ($root[$flow].first | type == "string") and
+    ($root[$flow].terminal | strings) and
+    ([$root[$flow].phases[] | type == "object" and (.next | strings) and (.proof | type == "string")] | all)
+  )
+' "$FLOW_FILE" >/dev/null 2>&1; then
+  echo "flow-status.sh: WARN flow.json missing or unparseable; flow guidance disabled" >&2
+  flow_graph=0
+fi
+
+flow_ready() {
+  local flow="$1"
+  if [ "$flow_graph" -eq 0 ] || ! jq -e --arg f "$flow" '.[$f] != null' "$FLOW_FILE" >/dev/null 2>&1; then
+    [ "$flow_graph" -eq 0 ] || echo "flow-status.sh: WARN flow '$flow' is not in flow.json; flow guidance disabled" >&2
+    return 1
+  fi
+}
+
+flow_match() {
+  local flow="$1" phase="$2" lower
+  lower="${phase,,}"
+  jq -r --arg f "$flow" --arg p "$lower" '
+    [.[$f].phases | keys[]? | . as $name | select($p | startswith($name))] |
+    sort_by(length) | reverse | .[0] // ""
+  ' "$FLOW_FILE" 2>/dev/null
+}
+
+flow_next() {
+  jq -r --arg f "$1" --arg p "$2" '.[$f].phases[$p].next | join(" | ")' "$FLOW_FILE" 2>/dev/null
+}
+
+flow_first() {
+  jq -r --arg f "$1" '.[$f].first' "$FLOW_FILE" 2>/dev/null
+}
+
+last_phase() {
+  awk '
+    /^## Phases$/ { inside=1; next }
+    /^## Open items$/ && !proof { inside=0 }
+    inside {
+      if ($0 == "  ```") { proof = !proof; next }
+      if (!proof && /^- \[[0-9][0-9]:[0-9][0-9]Z\] /) {
+        phase=$0
+        sub(/^- \[[^]]*\] /, "", phase)
+        last=phase
+      }
+    }
+    END { print last }
+  ' "$1"
+}
 
 say_bad() { echo "  ISSUE  $1"; issues=$((issues+1)); }
 say_ok()  { echo "  ok     $1"; }
@@ -132,8 +192,31 @@ fi
 open=0
 for d in "$DIR"/.charles/runs/*/; do
   [ -f "$d/RUN.md" ] || continue
-  [ -n "$CLOSING" ] && [ "${d%/}" = "${CLOSING%/}" ] && continue
-  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null || open=$((open+1))
+  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
+  run_id="$(basename "${d%/}")"
+  flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
+  phase="$(last_phase "$d/RUN.md")"
+  phase_label="${phase:-"(none)"}"
+  if [ "$flow_graph" -eq 1 ] && flow_ready "$flow"; then
+      if [ -z "$phase" ]; then
+        say_ok "run $run_id: last phase: (none) | expected next: $(flow_first "$flow")"
+      else
+        canonical="$(flow_match "$flow" "$phase")"
+        if [ -z "$canonical" ]; then
+          echo "  NOTE   run $run_id: last phase: $phase | expected next: (unmapped)"
+        else
+          expected="$(flow_next "$flow" "$canonical")"
+          if jq -e --arg f "$flow" --arg p "$canonical" '.[$f].terminal | index($p) != null' "$FLOW_FILE" >/dev/null 2>&1; then
+            say_ok "run $run_id: last phase: $phase | expected next: $expected"
+          else
+            say_bad "run $run_id: last phase: $phase | expected next: $expected — died mid-flow at $canonical"
+          fi
+        fi
+      fi
+  else
+    echo "  NOTE   run $run_id: last phase: $phase_label | expected next: (no guidance)"
+  fi
+  [ -n "$CLOSING" ] && [ "${d%/}" = "${CLOSING%/}" ] || open=$((open+1))
 done
 if [ "$open" -gt 0 ]; then
   say_bad "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"

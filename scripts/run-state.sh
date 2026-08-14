@@ -21,6 +21,44 @@ DIR="${1:-$PWD}"; shift || true
 [ -d "$DIR" ] || { echo "run-state.sh: no such directory: $DIR" >&2; exit 2; }
 DIR="$(cd "$DIR" && pwd)"
 RUNS="$DIR/.charles/runs"
+FLOW_FILE="$(dirname "$0")/flow.json"
+
+flow_ready() {
+  local flow="$1"
+  if ! command -v jq >/dev/null 2>&1 || [ ! -r "$FLOW_FILE" ] || ! jq -e --arg f "$flow" '
+    def strings: type == "array" and all(.[]; type == "string");
+    (.[$f] | type == "object") and
+    (.[$f].phases | type == "object") and
+    (.[$f].first | type == "string") and
+    (.[$f].terminal | strings) and
+    ([.[$f].phases[] | type == "object" and (.next | strings) and (.proof | type == "string")] | all)
+  ' "$FLOW_FILE" >/dev/null 2>&1; then
+    echo "run-state.sh: WARN flow.json missing or unparseable; flow guidance disabled" >&2
+    return 1
+  fi
+}
+
+flow_match() {
+  local flow="$1" phase="$2" lower
+  lower="${phase,,}"
+  jq -r --arg f "$flow" --arg p "$lower" '
+    [.[$f].phases | keys[]? | . as $name | select($p | startswith($name))] |
+    sort_by(length) | reverse | .[0] // ""
+  ' "$FLOW_FILE" 2>/dev/null
+}
+
+flow_next() {
+  jq -r --arg f "$1" --arg p "$2" '.[$f].phases[$p].next | join(" | ")' "$FLOW_FILE"
+}
+
+flow_first() {
+  jq -r --arg f "$1" '.[$f].first' "$FLOW_FILE"
+}
+
+last_phase() {
+  sed -n '/^## Phases$/,/^## Open items$/p' "$1" |
+    sed -n 's/^- \[[^]]*\] //p' | tail -1
+}
 
 newest_open() { # newest run with no ## Outcome section
   local d
@@ -36,7 +74,7 @@ case "$cmd" in
 
 init)
   flow="${1:?flow required}"; goal="${2:?goal required}"
-  id="$(date +%Y%m%d-%H%M%S)-$flow"
+  id="$(date +%Y%m%d-%H%M%S)-$flow-$$"
   d="$RUNS/$id"; mkdir -p "$d"
   {
     # `--` first: these format strings start with '-', which printf would
@@ -52,6 +90,11 @@ init)
 phase)
   d="$(newest_open)" || { echo "run-state.sh: no open run — call init first" >&2; exit 1; }
   phase="${1:?phase required}"; proof="${2:-}"
+  flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
+  if flow_ready "$flow"; then
+    canonical="$(flow_match "$flow" "$phase")"
+    [ -n "$canonical" ] || echo "run-state.sh: WARN unmapped phase '$phase' for flow '$flow' — recording anyway" >&2
+  fi
   # insert under ## Phases so phases stay in order and items stay below
   tmp="$(mktemp)"
   awk -v p="- [$(date -u +%H:%M)Z] ${phase}" -v pr="$proof" '
@@ -147,6 +190,18 @@ show)
   fi
   d="$(newest_open)" || { echo "no open run in $DIR"; exit 0; }
   cat "$d/RUN.md"
+  flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
+  if flow_ready "$flow"; then
+    phase="$(last_phase "$d/RUN.md")"
+    if [ -z "$phase" ]; then
+      expected="$(flow_first "$flow")"
+    else
+      canonical="$(flow_match "$flow" "$phase")"
+      if [ -n "$canonical" ]; then expected="$(flow_next "$flow" "$canonical")"; else expected="(unmapped)"; fi
+    fi
+    echo
+    echo "next expected: $expected"
+  fi
   # correlate the mechanical dispatch log — this is where FAILED lanes surface
   log="$DIR/.charles/dispatches.jsonl"
   if [ -s "$log" ] && command -v jq >/dev/null; then

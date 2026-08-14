@@ -53,20 +53,27 @@ if [ ! -d "$CACHE" ]; then
   say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop"
 else
   drift=0
+  spec_drift=0
   while IFS= read -r -d '' installed_file; do
     rel="${installed_file#"$CACHE"/}"
     case "$rel" in .charles|.charles/*) continue ;; esac
     [ -f "$REPO_ROOT/$rel" ] || continue
     if ! cmp -s "$installed_file" "$REPO_ROOT/$rel"; then
-      drift=$((drift+1))
-      echo "         drifted: $rel"
+      case "$rel" in
+        docs/specs/*) spec_drift=$((spec_drift+1)); echo "         drifted (WARN): $rel" ;;
+        *) drift=$((drift+1)); echo "         drifted: $rel" ;;
+      esac
     fi
   done < <(find "$CACHE" -type f -print0 2>/dev/null)
   # The installed plugin is a COPY taken at install time, not a live view. Editing
   # the repo changes nothing until you bump the version and reinstall. This check
   # exists because that surprise has now cost three separate debugging detours.
-  [ "$drift" -eq 0 ] && say OK "installed v$VER matches this repo" \
-    || say FAIL "$drift file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+  if [ "$drift" -eq 0 ] && [ "$spec_drift" -eq 0 ]; then
+    say OK "installed v$VER matches this repo"
+  else
+    [ "$spec_drift" -eq 0 ] || say WARN "$spec_drift docs/specs file(s) differ from installed v$VER — expected after close-time outcome updates"
+    [ "$drift" -eq 0 ] || say FAIL "$drift non-spec file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+  fi
 
   # The codex-run symlink is only refreshed by the SessionStart hook, so a
   # reinstall leaves it pointing at the previous version until the next session.

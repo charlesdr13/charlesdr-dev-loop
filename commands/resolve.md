@@ -16,6 +16,10 @@ failed, which is the one thing nothing else tracks.
 
 If there is no open run, say so and stop. Do not invent one.
 
+Read the `next expected:` line after the phase list. It identifies where the
+run stopped and the legal next phase(s); treat it as advisory guidance for the
+resume, alongside the recorded proof and open items.
+
 ## 2. Work the items, in this order
 
 **`BLOCKED-HUMAN` first.** These are usually two minutes of the user's time and

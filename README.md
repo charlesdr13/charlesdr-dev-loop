@@ -427,6 +427,9 @@ scripts/flow-status.sh .      # 0 clean · 1 outstanding
 closing is where you declare the work done. `--force` overrides. `doctor`
 reports the same as warnings, because a repo mid-flow legitimately has ungraded
 work — the blocking check belongs at the finish line, not on every health check.
+The small transition table in `scripts/flow.json` drives the expected-next hints;
+`scripts/runs-sweep.sh [root...]` is the standing read-only hygiene sweep across
+opted-in repos, so run it when `doctor` warns about open runs.
 
 ## Recovery after a lost completion signal
 

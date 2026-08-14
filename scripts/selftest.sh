@@ -86,9 +86,9 @@ fi
 # --- subagent routing hook ----------------------------------------------------
 SUBHOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-subagents.sh"
 
-scheck() { # scheck NAME EXPECT SUBAGENT_TYPE CWD
-  local name="$1" expect="$2" out decision
-  out="$(jq -nc --arg s "$3" --arg c "$4" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
+scheck_tool() { # scheck_tool NAME EXPECT TOOL SUBAGENT_TYPE CWD
+  local name="$1" expect="$2" tool="$3" out decision
+  out="$(jq -nc --arg t "$tool" --arg s "$4" --arg c "$5" '{tool_name:$t,cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
   if [ -z "$out" ]; then decision=allow
   else decision="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null)"; fi
   if [ "$decision" = "$expect" ]; then
@@ -99,8 +99,22 @@ scheck() { # scheck NAME EXPECT SUBAGENT_TYPE CWD
 }
 
 echo
-scheck "opted-out repo, general-purpose" allow general-purpose "$BOX/plain"
-scheck "codex-reviewer remains allowed" allow codex-reviewer "$BOX/repo"
+
+routing_cases=(
+  "opted-out repo, general-purpose|allow|general-purpose|$BOX/plain"
+  "codex-reviewer remains allowed|allow|codex-reviewer|$BOX/repo"
+  "google-drive is not code work|allow|google-drive|$BOX/repo"
+  "Explore must route to a lane|ask|Explore|$BOX/repo"
+  "general-purpose must route|ask|general-purpose|$BOX/repo"
+  "python-pro must route|ask|python-pro|$BOX/repo"
+  "feature-dev:code-explorer routes|ask|feature-dev:code-explorer|$BOX/repo"
+)
+for tool in Agent Task; do
+  for test_case in "${routing_cases[@]}"; do
+    IFS='|' read -r name expect sub cwd <<<"$test_case"
+    scheck_tool "$tool $name" "$expect" "$tool" "$sub" "$cwd"
+  done
+done
 
 message_check() { # message_check NAME SUBAGENT_TYPE CWD EXPECTED-DISPATCH
   local name="$1" out
@@ -116,11 +130,60 @@ message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
   "codex-run --lane explore --dir <repo> --timeout 1800"
 message_check "implement block points to direct dispatch" python-pro "$BOX/repo" \
   "codex-run --lane implement --dir <repo> --timeout 1800"
-scheck "google-drive is not code work"  allow google-drive "$BOX/repo"
-scheck "Explore must route to a lane"    ask Explore "$BOX/repo"
-scheck "general-purpose must route"      ask general-purpose "$BOX/repo"
-scheck "python-pro must route"           ask python-pro "$BOX/repo"
-scheck "feature-dev:code-explorer routes" ask "feature-dev:code-explorer" "$BOX/repo"
+
+# The Claude hook harness cannot be exercised from selftest; this matcher string
+# guard is the accepted wiring limit.
+HOOKS_JSON="$(cd "$(dirname "$0")/.." && pwd)/hooks/hooks.json"
+if jq -e '.hooks.PreToolUse[]?.matcher | strings | select(contains("Agent") and contains("Task"))' \
+  "$HOOKS_JSON" >/dev/null 2>&1; then
+  echo "  PASS  hooks matcher wires both Agent and Task"; pass=$((pass+1))
+else
+  echo "  FAIL  hooks matcher must contain both Agent and Task"; fail=$((fail+1))
+fi
+
+# --- script hardening ---------------------------------------------------------
+GREEN="$(cd "$(dirname "$0")/.." && pwd)/scripts/green.sh"
+GD="$BOX/green"; mkdir -p "$GD"
+printf 'green = "exit 124"\ngreen_timeout = 7\n' > "$GD/.charles.toml"
+green_out="$(bash "$GREEN" "$GD" 2>&1)"; green_rc=$?
+if [ "$green_rc" -eq 124 ] \
+  && grep -qF 'RED (rc 124 — timed out at 7s, or the command itself returned 124)' <<<"$green_out"; then
+  echo "  PASS  green reports the configured rc-124 ambiguity"; pass=$((pass+1))
+else
+  echo "  FAIL  green must report configured rc-124 ambiguity (rc=$green_rc)"; fail=$((fail+1))
+fi
+
+printf 'green = "exit 124"\n' > "$GD/.charles.toml"
+green_out="$(bash "$GREEN" "$GD" 2>&1)"; green_rc=$?
+if [ "$green_rc" -eq 124 ] \
+  && grep -qF 'RED (rc 124 — timed out at 480s, or the command itself returned 124)' <<<"$green_out"; then
+  echo "  PASS  green uses the 480s default"; pass=$((pass+1))
+else
+  echo "  FAIL  green must use the 480s default (rc=$green_rc)"; fail=$((fail+1))
+fi
+
+printf 'green = "exit 124"\ngreen_timeout = 12junk\n' > "$GD/.charles.toml"
+green_out="$(bash "$GREEN" "$GD" 2>&1)"; green_rc=$?
+if [ "$green_rc" -eq 124 ] \
+  && grep -qF 'WARN: invalid green_timeout; using default 480' <<<"$green_out" \
+  && grep -qF 'timed out at 480s' <<<"$green_out"; then
+  echo "  PASS  green rejects a non-integer timeout and warns"; pass=$((pass+1))
+else
+  echo "  FAIL  green must reject a non-integer timeout with a warning (rc=$green_rc)"; fail=$((fail+1))
+fi
+
+PARALLEL="$(cd "$(dirname "$0")/.." && pwd)/scripts/parallel-chunks.sh"
+PD="$BOX/parallel"; mkdir -p "$PD/bin" "$PD/repo"
+( cd "$PD/repo" && git init -q ) >/dev/null 2>&1
+printf '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/spec.json"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$PD/bin/treehouse"; chmod +x "$PD/bin/treehouse"
+parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
+if [ "$parallel_rc" -eq 3 ] && grep -q 'alpha.*FAILED\|FAILED.*alpha' <<<"$parallel_out" \
+  && grep -q 'beta.*FAILED\|FAILED.*beta' <<<"$parallel_out"; then
+  echo "  PASS  failed chunk leases force parallel exit 3"; pass=$((pass+1))
+else
+  echo "  FAIL  failed chunk leases must force parallel exit 3 (rc=$parallel_rc)"; fail=$((fail+1))
+fi
 
 # --- run state lifecycle ------------------------------------------------------
 RS="$(cd "$(dirname "$0")/.." && pwd)/scripts/run-state.sh"
@@ -451,6 +514,200 @@ printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n' > "$FD/docs/specs/p.md"
 bash "$FS" "$FD" >/dev/null 2>&1
 [ $? -eq 0 ] && { echo "  PASS  reviewed, grilled and closed reports clean"; pass=$((pass+1)); } \
              || { echo "  FAIL  a complete flow should report clean"; fail=$((fail+1)); }
+
+# --- flow graph lookup -------------------------------------------------------
+FG="$BOX/flow-graph"; mkdir -p "$FG"
+bash "$RS" init "$FG" feature "prefix mapping" >/dev/null 2>&1
+bash "$RS" phase "$FG" "implement-chunk-A" >/dev/null 2>"$FG/prefix.err"
+prefix_show="$(bash "$RS" show "$FG" 2>"$FG/prefix-show.err")"
+if grep -q 'next expected: review' <<<"$prefix_show"; then
+  echo "  PASS  prefixed implement phase expects review"; pass=$((pass+1))
+else
+  echo "  FAIL  prefixed implement phase should expect review"; fail=$((fail+1))
+fi
+
+UNKNOWN="$BOX/flow-unknown"; mkdir -p "$UNKNOWN"
+bash "$RS" init "$UNKNOWN" debug "unknown phase" >/dev/null 2>&1
+unknown_stdout="$(bash "$RS" phase "$UNKNOWN" "mystery-step" 2>"$UNKNOWN/phase.err")"
+unknown_show="$(bash "$RS" show "$UNKNOWN" 2>/dev/null)"
+if grep -qi 'WARN.*unmapped' "$UNKNOWN/phase.err"; then
+  echo "  PASS  unknown phase warns on stderr"; pass=$((pass+1))
+else
+  echo "  FAIL  unknown phase should warn on stderr"; fail=$((fail+1))
+fi
+if grep -q 'mystery-step' <<<"$unknown_stdout$unknown_show"; then
+  echo "  PASS  unknown phase is still recorded"; pass=$((pass+1))
+else
+  echo "  FAIL  unknown phase should still be recorded"; fail=$((fail+1))
+fi
+
+TERMINAL="$BOX/flow-terminal"; mkdir -p "$TERMINAL"
+bash "$RS" init "$TERMINAL" feature "terminal phase" >/dev/null 2>&1
+bash "$RS" phase "$TERMINAL" verify >/dev/null 2>&1
+terminal_show="$(bash "$RS" show "$TERMINAL" 2>/dev/null)"
+if grep -q 'next expected: close' <<<"$terminal_show"; then
+  echo "  PASS  terminal phase expects close"; pass=$((pass+1))
+else
+  echo "  FAIL  terminal phase should expect close"; fail=$((fail+1))
+fi
+
+FIRST="$BOX/flow-first"; mkdir -p "$FIRST"
+bash "$RS" init "$FIRST" polish "first phase" >/dev/null 2>&1
+first_show="$(bash "$RS" show "$FIRST" 2>/dev/null)"
+if grep -q 'next expected: explore' <<<"$first_show"; then
+  echo "  PASS  no-phase run expects the flow first phase"; pass=$((pass+1))
+else
+  echo "  FAIL  no-phase run should expect the flow first phase"; fail=$((fail+1))
+fi
+
+MID="$BOX/flow-mid"; mkdir -p "$MID"
+bash "$RS" init "$MID" feature "mid-flow run" >/dev/null 2>&1
+bash "$RS" phase "$MID" "implement-chunk-A" >/dev/null 2>&1
+mid_out="$(bash "$FS" "$MID" 2>&1)"; mid_rc=$?
+if [ "$mid_rc" -eq 1 ] && grep -q 'ISSUE.*died mid-flow at implement' <<<"$mid_out" \
+  && grep -q 'expected next: review' <<<"$mid_out"; then
+  echo "  PASS  open mapped mid-flow run is an ISSUE with its next phase"; pass=$((pass+1))
+else
+  echo "  FAIL  open mapped mid-flow run should be an ISSUE (rc=$mid_rc)"; fail=$((fail+1))
+fi
+
+UNKNOWN_FLOW="$BOX/flow-unknown-name"; mkdir -p "$UNKNOWN_FLOW"
+bash "$RS" init "$UNKNOWN_FLOW" mystery-flow "unknown flow" >/dev/null 2>&1
+unknown_flow_status="$(bash "$FS" "$UNKNOWN_FLOW" 2>&1)"; unknown_flow_rc=$?
+if [ "$unknown_flow_rc" -eq 1 ] \
+  && grep -q 'run .*last phase: (none) | expected next: (no guidance)' <<<"$unknown_flow_status"; then
+  echo "  PASS  unknown flow still gets a no-guidance status line"; pass=$((pass+1))
+else
+  echo "  FAIL  unknown flow must still get a no-guidance status line (rc=$unknown_flow_rc)"; fail=$((fail+1))
+fi
+
+NOFLOW="$BOX/no-flow"; mkdir -p "$NOFLOW/scripts"
+cp "$RS" "$NOFLOW/scripts/run-state.sh"
+cp "$FS" "$NOFLOW/scripts/flow-status.sh"
+chmod +x "$NOFLOW/scripts/run-state.sh" "$NOFLOW/scripts/flow-status.sh"
+bash "$NOFLOW/scripts/run-state.sh" init "$NOFLOW" feature "missing graph" >/dev/null 2>&1
+noflow_phase="$(bash "$NOFLOW/scripts/run-state.sh" phase "$NOFLOW" mystery 2>"$NOFLOW/phase.err")"
+noflow_show="$(bash "$NOFLOW/scripts/run-state.sh" show "$NOFLOW" 2>"$NOFLOW/show.err")"
+noflow_status="$(bash "$NOFLOW/scripts/flow-status.sh" "$NOFLOW" 2>"$NOFLOW/status.err")" || true
+if ! grep -qi 'WARN' <<<"$noflow_phase$noflow_show$noflow_status" \
+  && grep -qi 'WARN' "$NOFLOW/phase.err" \
+  && grep -qi 'WARN' "$NOFLOW/show.err" \
+  && grep -qi 'WARN' "$NOFLOW/status.err" \
+  && grep -q 'expected next: (no guidance)' <<<"$noflow_status"; then
+  echo "  PASS  absent flow graph degrades on stdout and warns on stderr"; pass=$((pass+1))
+else
+  echo "  FAIL  absent flow graph should warn only on stderr"; fail=$((fail+1))
+fi
+
+# --- read-only cross-repo run sweep -------------------------------------------
+SWEEP="$(cd "$(dirname "$0")/.." && pwd)/scripts/runs-sweep.sh"
+SW="$BOX/sweep"; mkdir -p "$SW/root/fixture-repo/.charles/runs/mapped-run" \
+  "$SW/root/fixture-repo/.charles/runs/fallback-run" \
+  "$SW/root/fixture-repo/.charles/runs/closed-run" \
+  "$SW/root/fixture-repo/.charles/runs/unreadable-run" \
+  "$SW/env-root/env-repo/.charles/runs/env-run"
+printf 'green = "true"\n' > "$SW/root/fixture-repo/.charles.toml"
+printf 'green = "true"\n' > "$SW/env-root/env-repo/.charles.toml"
+printf '# Run env-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$SW/env-root/env-repo/.charles/runs/env-run/RUN.md"
+mapped_started="$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+printf '# Run mapped-run\n\n- flow: feature\n- goal: sweep\n- started: %s\n\n## Phases\n\n- [12:00Z] implement-chunk-C\n  ```\n- [99:99Z] proof-suffix\n  ```\n\n## Open items\n\n- [ ] **FAILED** — one\n- [ ] **PENDING-DECISION** — two\n\n## Rollback\n\n' \
+  "$mapped_started" > "$SW/root/fixture-repo/.charles/runs/mapped-run/RUN.md"
+printf '# Run fallback-run\n\n- flow: feature\n- goal: fallback\n\n## Phases\n\n- [12:00Z] mystery-step\n\n## Open items\n\n## Rollback\n\n' \
+  > "$SW/root/fixture-repo/.charles/runs/fallback-run/RUN.md"
+touch -d '5 days ago' "$SW/root/fixture-repo/.charles/runs/fallback-run/RUN.md"
+printf '# Run closed-run\n\n- flow: feature\n- started: %s\n\n## Outcome\n\ndone\n' \
+  "$mapped_started" > "$SW/root/fixture-repo/.charles/runs/closed-run/RUN.md"
+UNREADABLE_RUN="$SW/root/fixture-repo/.charles/runs/unreadable-run/RUN.md"
+printf '# Run unreadable-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$UNREADABLE_RUN"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "  SKIP  unreadable RUN.md assertion as root"
+else
+  chmod 000 "$UNREADABLE_RUN"
+  unreadable_out="$(bash "$SWEEP" "$SW/root" 2>&1)"; unreadable_rc=$?
+  chmod 644 "$UNREADABLE_RUN"
+  if [ "$unreadable_rc" -eq 0 ] && grep -q 'unreadable:.*unreadable-run' <<<"$unreadable_out"; then
+    echo "  PASS  sweep reports an unreadable RUN.md"; pass=$((pass+1))
+  else
+    echo "  FAIL  sweep must report an unreadable RUN.md (rc=$unreadable_rc)"; fail=$((fail+1))
+  fi
+fi
+missing_root="$SW/missing-root"
+sweep_before="$(find "$SW/root" -type f -printf '%P %T@ %s\n' | sort)"
+sweep_out="$(CHARLES_SWEEP_ROOTS="$SW/env-root" bash "$SWEEP" "$missing_root" "$SW/root" 2>"$SW/args.err")"; sweep_rc=$?
+sweep_after="$(find "$SW/root" -type f -printf '%P %T@ %s\n' | sort)"
+if [ "$sweep_rc" -eq 0 ] && grep -qF "root not found: $missing_root" <<<"$sweep_out" \
+  && ! grep -q 'env-repo' <<<"$sweep_out"; then
+  echo "  PASS  sweep args override env and missing roots stay non-fatal"; pass=$((pass+1))
+else
+  echo "  FAIL  sweep must prefer args and report missing roots (rc=$sweep_rc)"; fail=$((fail+1))
+fi
+if grep -qF 'fixture-repo · mapped-run · 3 · 2 · implement-chunk-C → review' <<<"$sweep_out" \
+  && grep -qF 'fixture-repo · fallback-run · 5 · 0 · mystery-step → (unmapped)' <<<"$sweep_out" \
+  && ! grep -q 'closed-run' <<<"$sweep_out"; then
+  echo "  PASS  sweep reports started/mtime ages, items, and expected phases"; pass=$((pass+1))
+else
+  echo "  FAIL  sweep format or age/phase lookup is wrong"; fail=$((fail+1))
+fi
+sweep_flow_out="$(bash "$FS" "$SW/root/fixture-repo" 2>&1 || true)"
+if grep -q 'run mapped-run: last phase: implement-chunk-C' <<<"$sweep_flow_out" \
+  && ! grep -q 'proof-suffix' <<<"$sweep_out$sweep_flow_out"; then
+  echo "  PASS  flow status and sweep ignore proof content when finding the phase"; pass=$((pass+1))
+else
+  echo "  FAIL  proof content must not become the displayed phase"; fail=$((fail+1))
+fi
+if [ "$sweep_before" = "$sweep_after" ]; then
+  echo "  PASS  sweep is read-only"; pass=$((pass+1))
+else
+  echo "  FAIL  sweep changed its fixture"; fail=$((fail+1))
+fi
+sweep_env_out="$(CHARLES_SWEEP_ROOTS="$SW/root:$SW/env-root" bash "$SWEEP" 2>"$SW/env.err")"
+if grep -q 'fixture-repo' <<<"$sweep_env_out" && grep -q 'env-repo' <<<"$sweep_env_out"; then
+  echo "  PASS  sweep accepts colon-separated roots from env"; pass=$((pass+1))
+else
+  echo "  FAIL  sweep must scan colon-separated env roots"; fail=$((fail+1))
+fi
+
+# --- doctor drift classes -----------------------------------------------------
+DOCTOR="$(cd "$(dirname "$0")/.." && pwd)/scripts/doctor.sh"
+DD="$BOX/doctor-drift"; mkdir -p "$DD/bin" "$DD/repo/scripts" "$DD/repo/docs/specs" \
+  "$DD/repo/.claude-plugin" "$DD/home/.codex" "$DD/home/.config/lg-cc-deepseek" \
+  "$DD/home/.claude/skills/codex-deepseek/scripts"
+printf 'green = "true"\n' > "$DD/repo/.charles.toml"
+printf '{"version":"fixture"}\n' > "$DD/repo/.claude-plugin/plugin.json"
+cp "$DOCTOR" "$DD/repo/scripts/doctor.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/repo/scripts/codex-run.sh"
+chmod +x "$DD/repo/scripts/doctor.sh" "$DD/repo/scripts/codex-run.sh"
+printf 'current\n' > "$DD/repo/docs/specs/plan.md"
+DRIFT_CACHE="$DD/home/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/fixture"
+mkdir -p "$DRIFT_CACHE/docs/specs" "$DRIFT_CACHE/scripts"
+printf 'installed\n' > "$DRIFT_CACHE/docs/specs/plan.md"
+cp "$DD/repo/scripts/codex-run.sh" "$DRIFT_CACHE/scripts/codex-run.sh"
+ln -s "$DRIFT_CACHE/scripts/codex-run.sh" "$DD/bin/codex-run"
+for tool in codex treehouse tasks-axi; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/bin/$tool"
+  chmod +x "$DD/bin/$tool"
+done
+touch "$DD/home/.codex/luna.config.toml" "$DD/home/.codex/terra.config.toml" \
+  "$DD/home/.codex/deepseek.config.toml" "$DD/home/.config/lg-cc-deepseek/key.env"
+printf 'model = "gpt-5.6-sol"\n' > "$DD/home/.codex/config.toml"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$DD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+doctor_spec_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" bash scripts/doctor.sh 2>&1)"; doctor_spec_rc=$?
+if [ "$doctor_spec_rc" -eq 0 ] && grep -q 'WARN.*docs/specs' <<<"$doctor_spec_out" \
+  && ! grep -q '^  FAIL' <<<"$doctor_spec_out"; then
+  echo "  PASS  doctor downgrades docs/specs drift to WARN"; pass=$((pass+1))
+else
+  echo "  FAIL  docs/specs-only drift must not fail doctor (rc=$doctor_spec_rc)"; fail=$((fail+1))
+fi
+printf 'current\n' > "$DD/repo/scripts/other.sh"
+printf 'installed\n' > "$DRIFT_CACHE/scripts/other.sh"
+doctor_other_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" bash scripts/doctor.sh 2>&1)"; doctor_other_rc=$?
+if [ "$doctor_other_rc" -ne 0 ] && grep -q '^  FAIL.*non-spec' <<<"$doctor_other_out"; then
+  echo "  PASS  doctor keeps non-spec drift as FAIL"; pass=$((pass+1))
+else
+  echo "  FAIL  non-spec drift must fail doctor (rc=$doctor_other_rc)"; fail=$((fail+1))
+fi
 
 # --- simplicity ladder --------------------------------------------------------
 # codex cannot load Claude Code skills, so ponytail's constraint has to travel in

@@ -1,0 +1,51 @@
+{
+  "feature": {
+    "phases": {
+      "brainstorm": {"next": ["explore"], "proof": "design direction"},
+      "explore": {"next": ["plan"], "proof": "evidence-backed exploration"},
+      "plan": {"next": ["grill"], "proof": "plan in docs/specs"},
+      "grill": {"next": ["grill", "implement"], "proof": "Grill verdict"},
+      "implement": {"next": ["review"], "proof": "implementation receipt"},
+      "review": {"next": ["implement", "verify"], "proof": "review receipt"},
+      "verify": {"next": ["close"], "proof": "green output"}
+    },
+    "first": "brainstorm",
+    "terminal": ["verify"]
+  },
+  "debug": {
+    "phases": {
+      "diagnose": {"next": ["explore"], "proof": "cause with file:line evidence"},
+      "explore": {"next": ["plan"], "proof": "evidence-backed exploration"},
+      "plan": {"next": ["implement"], "proof": "plan in docs/specs"},
+      "implement": {"next": ["review"], "proof": "implementation receipt"},
+      "review": {"next": ["implement", "verify"], "proof": "review receipt"},
+      "verify": {"next": ["close"], "proof": "green output"}
+    },
+    "first": "diagnose",
+    "terminal": ["verify"]
+  },
+  "polish": {
+    "phases": {
+      "explore": {"next": ["brainstorm"], "proof": "evidence-backed exploration"},
+      "brainstorm": {"next": ["grill"], "proof": "design direction"},
+      "grill": {"next": ["grill", "implement"], "proof": "Grill verdict"},
+      "implement": {"next": ["review"], "proof": "implementation receipt"},
+      "review": {"next": ["implement", "verify"], "proof": "review receipt"},
+      "verify": {"next": ["close"], "proof": "green output"}
+    },
+    "first": "explore",
+    "terminal": ["verify"]
+  },
+  "ui": {
+    "phases": {
+      "baseline": {"next": ["route"], "proof": "baseline green output"},
+      "route": {"next": ["audit"], "proof": "impeccable route selected"},
+      "audit": {"next": ["plan"], "proof": "mechanical audit receipt"},
+      "plan": {"next": ["verify"], "proof": "scope plan in docs/specs"},
+      "verify": {"next": ["review"], "proof": "green output and accessibility check"},
+      "review": {"next": ["close"], "proof": "scope review receipt"}
+    },
+    "first": "baseline",
+    "terminal": ["review"]
+  }
+}

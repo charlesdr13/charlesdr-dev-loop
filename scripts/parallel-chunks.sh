@@ -46,7 +46,8 @@ if [ -n "$dupes" ]; then
 fi
 
 echo "dispatching $n chunks in parallel"
-declare -a CH_WT CH_NAME CH_PID   # prefixed: bare NAME collides with the environment
+rc=0
+declare -a CH_WT CH_NAME CH_PID CH_RC   # prefixed: bare NAME collides with the environment
 for i in $(seq 0 $((n-1))); do
   name="$(jq -r ".[$i].name" "$SPEC")"
   task="$(jq -r ".[$i].task" "$SPEC")"
@@ -54,7 +55,8 @@ for i in $(seq 0 $((n-1))); do
   # treehouse operates on the cwd's repo and has no --repo flag
   wt="$( cd "$REPO" && treehouse get --lease --lease-holder "chunk-$name" 2>/dev/null )" || wt=""
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
-    echo "  $name: could not lease a worktree — skipping (run this chunk serially)" >&2
+    echo "  $name: FAILED — could not lease a worktree (run this chunk serially)" >&2
+    rc=3
     continue
   fi
   CH_WT+=("$wt"); CH_NAME+=("$name")
@@ -69,12 +71,23 @@ done within them, stop and say so instead of widening the scope." \
   echo "  $name -> $wt"
 done
 
-for p in "${CH_PID[@]:-}"; do wait "$p" 2>/dev/null; done
+for i in "${!CH_PID[@]}"; do
+  if wait "${CH_PID[$i]}" 2>/dev/null; then
+    CH_RC[$i]=0
+  else
+    CH_RC[$i]=$?
+    echo "  ${CH_NAME[$i]}: REJECTED — child exited ${CH_RC[$i]}" >&2
+    rc=3
+  fi
+done
 
 # --- merge only what stayed inside its declaration ----------------------------
-rc=0
 for i in "${!CH_WT[@]}"; do
   wt="${CH_WT[$i]}"; name="${CH_NAME[$i]}"
+  if [ "${CH_RC[$i]}" -ne 0 ]; then
+    echo "  $name: not merged — child exited ${CH_RC[$i]}" >&2
+    continue
+  fi
   declared="$(jq -r ".[] | select(.name==\"$name\") | .files[]" "$SPEC" | sort)"
   # .charles/ is the wrapper's own record and .chunk.* is our capture; neither
   # is the chunk's work, and counting them rejects every chunk.
@@ -92,7 +105,12 @@ for i in "${!CH_WT[@]}"; do
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     mkdir -p "$REPO/$(dirname "$f")" 2>/dev/null
-    cp "$wt/$f" "$REPO/$f" && echo "  $name: merged $f"
+    if cp "$wt/$f" "$REPO/$f"; then
+      echo "  $name: merged $f"
+    else
+      echo "  $name: FAILED — could not merge $f" >&2
+      rc=3
+    fi
   done <<< "$changed"
 done
 

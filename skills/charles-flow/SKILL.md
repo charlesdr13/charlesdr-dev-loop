@@ -142,6 +142,9 @@ It reports implements with no later review, plans with no grill verdict, and
 runs left open. `run-state.sh close` runs it and **refuses to close** when it
 fails (exit 5) — closing is where you declare the work done, so it is where the
 check belongs. `--force` closes anyway, deliberately.
+The small transition table in `scripts/flow.json` drives the expected-next hints;
+`scripts/runs-sweep.sh [root...]` is the standing read-only hygiene sweep across
+opted-in repos, so run it when `doctor` warns about open runs.
 
 Run it before you tell the user you are finished. "The implementer succeeded" is
 not an answer to "is it done".

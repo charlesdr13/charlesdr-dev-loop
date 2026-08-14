@@ -28,8 +28,17 @@ if [ ! -f "$root/.charles.toml" ]; then
   exit 2
 fi
 
+cfg() { # cfg KEY DEFAULT  — read `key = value` from .charles.toml
+  local v; v="$(sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*(#.*)?[[:space:]]*$/\1/p" "$root/.charles.toml" 2>/dev/null | head -1)"
+  if [ -z "$v" ] && grep -qE "^[[:space:]]*$1[[:space:]]*=" "$root/.charles.toml" 2>/dev/null; then
+    echo "green.sh: WARN: invalid $1; using default $2" >&2
+  fi
+  echo "${v:-$2}"
+}
+
 green="$(grep -oE '^[[:space:]]*green[[:space:]]*=[[:space:]]*".*"' "$root/.charles.toml" \
          | head -1 | sed 's/.*=[[:space:]]*"//; s/"[[:space:]]*$//')"
+green_timeout="$(cfg green_timeout 480)"
 
 if [ -z "$green" ]; then
   echo "green.sh: no green command set in $root/.charles.toml" >&2
@@ -38,13 +47,20 @@ if [ -z "$green" ]; then
 fi
 
 echo "green.sh: $green" >&2
-out="$(cd "$root" && eval "$green" 2>&1)"
+if command -v timeout >/dev/null 2>&1; then
+  out="$(cd "$root" && timeout "${green_timeout}s" bash -c "$green" 2>&1)"
+else
+  echo "green.sh: WARN: timeout binary not found; running unbounded" >&2
+  out="$(cd "$root" && eval "$green" 2>&1)"
+fi
 rc=$?
 
 if [ "$QUIET" -eq 1 ]; then printf '%s\n' "$out" | tail -20; else printf '%s\n' "$out"; fi
 
 if [ $rc -eq 0 ]; then
   echo "GREEN — \`$green\` passed" >&2
+elif [ $rc -eq 124 ]; then
+  echo "RED (rc 124 — timed out at ${green_timeout}s, or the command itself returned 124)" >&2
 else
   echo "RED (exit $rc) — \`$green\` failed" >&2
 fi
