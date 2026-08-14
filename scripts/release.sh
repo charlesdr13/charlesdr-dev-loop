@@ -19,7 +19,7 @@ if [ -n "$dirty" ]; then
   exit 1
 fi
 
-if ! bash scripts/green.sh "$REPO_ROOT"; then
+if ! CHARLES_RELEASING=1 bash scripts/green.sh "$REPO_ROOT"; then
   echo "release.sh: refusing — green command failed" >&2
   exit 1
 fi

@@ -72,7 +72,12 @@ else
     say OK "installed v$VER matches this repo"
   else
     [ "$spec_drift" -eq 0 ] || say WARN "$spec_drift docs/specs file(s) differ from installed v$VER — expected after close-time outcome updates"
-    [ "$drift" -eq 0 ] || say FAIL "$drift non-spec file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+    if [ "$drift" -gt 0 ] && [ "${CHARLES_RELEASING:-0}" = "1" ]; then
+      # release.sh greens BEFORE bumping, so pre-release drift is the point
+      say WARN "$drift non-spec file(s) differ from installed v$VER — expected: releasing"
+    elif [ "$drift" -gt 0 ]; then
+      say FAIL "$drift non-spec file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
+    fi
   fi
 
   # The codex-run symlink is only refreshed by the SessionStart hook, so a
