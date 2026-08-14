@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "charlesdr-dev-loop: personal dev-loop plugin — codex lanes, grilling, adversarial review.",
-    "version": "2.15.0"
+    "version": "2.15.1"
   },
   "plugins": [
     {
       "name": "charlesdr-dev-loop",
       "source": "./",
       "description": "Orchestrator-only Claude Code: codex explore/implement lanes, bounded grilling, isolated adversarial review",
-      "version": "2.15.0",
+      "version": "2.15.1",
       "category": "productivity"
     }
   ]
