@@ -150,3 +150,7 @@ because close captures and discards stdout (f.8); resolve.md step framed as
 new behaviour (f.9). DEFERRED (recorded as run item): newest_open can update
 the wrong run when two runs are open — pre-existing, out of this spec's scope.
 Zero BLOCKED-HUMAN items.
+
+## Run outcome — 2026-08-14
+
+Shipped 2.15.0: flow.json transition table with prefix-family matching over free-text phases (next-expected in show/flow-status/resolve, mid-flow deaths now mechanical ISSUEs); green.sh bounded at 480s default; parallel-chunks exit-0 now means all chunks dispatched+passed+merged; Task-payload parity tests from the shared Agent matrix; runs-sweep.sh cross-repo janitor; docs/specs drift WARN with CHARLES_RELEASING handshake. Grill-verdict ISSUE is the historical 2026-08-13 spec only; both 2026-08-14 specs carry verdicts. DEFERRED item carried in tasks-axi cdl-1786688980-3638. Selftest 87 to 115. Rollback: git revert of this run's commits, then bash scripts/release.sh 2.14.0
