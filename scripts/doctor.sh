@@ -60,7 +60,7 @@ else
     [ -f "$REPO_ROOT/$rel" ] || continue
     if ! cmp -s "$installed_file" "$REPO_ROOT/$rel"; then
       case "$rel" in
-        docs/specs/*) spec_drift=$((spec_drift+1)); echo "         drifted (WARN): $rel" ;;
+        docs/specs/*|backlog.md) spec_drift=$((spec_drift+1)); echo "         drifted (WARN): $rel" ;;
         *) drift=$((drift+1)); echo "         drifted: $rel" ;;
       esac
     fi

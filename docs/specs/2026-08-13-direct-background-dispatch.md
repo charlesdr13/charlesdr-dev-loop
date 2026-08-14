@@ -57,3 +57,9 @@ and it is why polling guidance is being deleted rather than tuned.
 ## Run outcome — 2026-08-13
 
 Explorer/implementer wrapper agents deleted; explore and implement lanes now dispatch via background Bash directly from the orchestrator, with the harness completion callback replacing all polling. Reviewer agent and review lane unchanged. Hooks, selftest, doctor, commands, README updated to match. Version 2.13.0. Grill skipped deliberately: plan was the user-approved design from conversation; sol review graded diff against plan (GAPS FOUND -> fixed). Rollback: git checkout -- . && git checkout agents/
+
+## Grill verdict
+
+Waived: the plan was the user-approved design from conversation; the isolated
+sol review graded the diff against it (GAPS FOUND → fixed) in place of a
+pre-implementation grill. Recorded at close on 2026-08-13.
