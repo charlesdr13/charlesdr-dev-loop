@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 # codex-run.sh — dispatch work to a Codex lane.
 #
@@ -78,6 +79,18 @@ TASK="${1:-}"
 [ -d "$DIR" ]  || { echo "codex-run.sh: no such directory: $DIR" >&2; exit 2; }
 command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 
+# --- global engine switch ------------------------------------------------------
+# ponytail: a file, not just an env var — each harness Bash call is a fresh shell,
+# so `export CHARLES_ENGINE=deepseek` cannot persist across dispatches. Written by
+# the /engine command; an explicit --engine on the call still wins.
+if [ "$ENGINE_SET" -eq 0 ]; then
+  pick="${CHARLES_ENGINE:-}"
+  [ -n "$pick" ] || pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"
+  case "$pick" in
+    luna|terra|deepseek) ENGINE="$pick"; ENGINE_SET=1 ;;   # review honours it too
+  esac
+fi
+
 DIR="$(cd "$DIR" && pwd)"
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
@@ -93,10 +106,13 @@ trap 'rc=$?; printf "%s\n" "$rc" > "$RUN.done" 2>/dev/null || true' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-GUARD='Work ONLY inside the working directory. Never run git clean, git reset --hard,
-git checkout -- ., or anything that discards uncommitted work. Never commit, push, or
-force-push. If the task is ambiguous or you cannot finish, STOP and report what blocked
-you rather than improvising a different design or tidying unrelated files.'
+GUARD='Work ONLY inside the working directory. Git is READ-ONLY for you: status, diff,
+log, show are fine; NEVER run any git command that mutates repository state — no reset
+(any mode), checkout, switch, restore, rebase, merge, clean, stash, branch changes,
+commit, push, or force-push. Never delete or move any file you did not create in this
+dispatch, tracked or untracked. If the task is ambiguous or you cannot finish, STOP and
+report what blocked you rather than improvising a different design or tidying unrelated
+files.'
 
 # The implement lane writes code and inherits no Claude Code skills, so the
 # prompt is the only channel. ponytail ships a real Codex plugin, and a lane
@@ -274,6 +290,11 @@ run_review() {
     case "$ENGINE" in
       luna)  rmodel="gpt-5.6-luna";  rprofile=(-p luna) ;;
       terra) rmodel="gpt-5.6-terra"; rprofile=(-p terra) ;;
+      deepseek)
+        rmodel="deepseek-v4-flash"; rprofile=(-p deepseek)
+        # the deepseek profile resolves its key from the environment
+        ds_env="${LG_CC_DEEPSEEK_HOME:-$HOME/.config/lg-cc-deepseek}/key.env"
+        [ -f "$ds_env" ] && { set -a; . "$ds_env"; set +a; } ;;
       *)     rmodel="gpt-5.6-sol";   rprofile=() ;;
     esac
   else

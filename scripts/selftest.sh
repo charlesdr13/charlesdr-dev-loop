@@ -991,6 +991,32 @@ else
   echo "  FAIL  review --engine terra not honoured"; fail=$((fail+1))
 fi
 
+# --- global engine switch -----------------------------------------------------
+# Codex quota runs out; the lanes should move to another engine without a
+# restart or a reinstall. The file is read at dispatch time, so they do.
+printf 'deepseek\n' > "$RD/engine"
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-p deepseek' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  engine file switches the review lane to deepseek"; pass=$((pass+1))
+else
+  echo "  FAIL  engine file must switch the review lane"; fail=$((fail+1))
+fi
+
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine terra --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-m gpt-5.6-terra' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  --engine still beats the engine file"; pass=$((pass+1))
+else
+  echo "  FAIL  --engine must override the engine file"; fail=$((fail+1))
+fi
+
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" CHARLES_ENGINE=luna bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-m gpt-5.6-luna' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  CHARLES_ENGINE beats the engine file"; pass=$((pass+1))
+else
+  echo "  FAIL  CHARLES_ENGINE must beat the engine file"; fail=$((fail+1))
+fi
+rm -f "$RD/engine"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

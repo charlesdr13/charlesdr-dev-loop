@@ -206,6 +206,13 @@ luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
 fallback, tried automatically when luna fails, or forced with `--engine deepseek`
 for a deliberately wide, cheap sweep.
 
+To move every lane — explore, implement and review — onto one engine without a
+restart, run `/charlesdr-dev-loop:engine deepseek` (`luna`, `terra`, `default`
+are the other values). It writes `$CHARLES_STATE_DIR/engine`, read at the start
+of each dispatch, so it takes effect on the next lane with no restart. A
+per-call `--engine` flag, or CHARLES_ENGINE in the environment, still wins. Use
+it when codex quota is short: deepseek bills a separate key.
+
 **How long dispatches actually take** (measured over 179 runs, not estimated):
 
 | lane | median | p90 | over 25 min |
