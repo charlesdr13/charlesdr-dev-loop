@@ -119,9 +119,11 @@ is being paid for its planning judgment, and handing it your ordered steps both
 wastes that and tends to make the result worse, because it follows your sequence
 instead of finding a better one.
 
-When the plan yields 2+ disjoint file slices, the plan phase also writes
-`docs/specs/YYYY-MM-DD-<topic>.chunks.json` alongside the plan and commits both.
-The manifest schema is one object per slice:
+When a plan yields 2+ disjoint file slices, write or rewrite
+`docs/specs/YYYY-MM-DD-<topic>.chunks.json` only after the plan is settled; in
+flows with `grill-rounds`, that means after the grill settles, never during the
+initial plan phase. Commit it alongside the plan. The manifest schema is one
+object per slice:
 
 ```json
 [
@@ -217,11 +219,10 @@ Measured, per lane:
 
 - **explore** — median 5.7 min, p90 22 min. The slow lane, and already benefits
   from a 3+ background fan-out. This is where fan-out earns its cost.
-- **implement** — across 229 completed implement dispatches in all opted-in
-  repos: median 9.9 min, p75 15.1 min, p90 25.7 min, max 39.6 min; 49% ran over
-  10 min and 16% finished under 3 min. Method: pair start/end events in
-  `.charles/dispatches.jsonl` across all opted-in repos. Parallel chunks are the
-  default for disjoint slices.
+- **implement** — the canonical measurement (full figures in `README.md`) covers
+  successful dispatches only (`rc=0`): n=233 across all opted-in repos. Timeouts
+  are counted separately: 25 of 258 ends (about 10%) hit the old 1800s cap.
+  Parallel chunks are the default for disjoint slices.
 - **review** — median 1.7 min, read-only, no shared state. The cheapest lane,
   and the one place a second run is nearly free.
 
@@ -258,10 +259,11 @@ still carry a long requirement list.
 - **11+** — three or more, and reconsider whether this is one plan. A plan with
   fifteen requirements is usually two features that have not been separated yet.
 
-**Parallel is the default at 2+ disjoint chunks.** Three chunks at the measured
-p90 cost about 77 min serially against 26 min in parallel, before any extra
-setup. Read `parallel_min_chunks` from `.charles.toml`; it defaults to `2` and
-may be raised when a repo's measurements justify a higher threshold.
+**Parallel is the default at 2+ disjoint chunks.** Three chunks at the canonical
+successful-dispatch p90 of 19.1 min cost about 57 min serially against 19.1 min
+in parallel, before any extra setup. Read `parallel_min_chunks` from
+`.charles.toml`; it defaults to `2` and may be raised when a repo's measurements
+justify a higher threshold.
 
 Use parallel when the valid manifest reaches that configured threshold, its file
 declarations are disjoint, and `treehouse` is available. Use serial when there
@@ -349,19 +351,22 @@ from inside a report, which is why the check reads that instead.
    look like. Give each call its own `.charles/` log and synthesise the reports
    yourself; do not hand the raw reports to the user.
 3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
-   not after. If it yields 2+ disjoint file slices, also write the companion
-   `.chunks.json` manifest beside it. `grill-rounds` needs a file to attack and
-   the review lane needs one to judge against; a plan that exists only in
-   conversation can be neither. Write **checkable requirements**, not steps:
-   what must be true when this is done, which files are in scope, what must keep
-   working.
+   not after. If it yields 2+ disjoint file slices, record that a companion
+   `.chunks.json` manifest will be needed, but do not write it yet.
+   `grill-rounds` needs a file to attack and the review lane needs one to judge
+   against; a plan that exists only in conversation can be neither. Write
+   **checkable requirements**, not steps: what must be true when this is done,
+   which files are in scope, what must keep working.
 4. **Grill.** `grill-rounds`, 2-3 rounds, amending the plan in place. Round 1 is
    adversarial and unattended. **Everything it could not settle is then
    collected and surfaced to the user in one message**, each item recorded as a
    `BLOCKED-HUMAN` run item first so the list survives a dead session. Nothing
    proceeds to implementation while one is unanswered. Three rounds is the
    ceiling — a fourth means the plan is wrong at a level grilling cannot fix.
-5. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
+   After the grill settles, write or rewrite the companion `.chunks.json`
+   manifest beside the settled plan if it still yields 2+ disjoint slices. Never
+   dispatch a manifest written before the grill settled.
+5. **Ground to truth.** The hard gate below. Do not proceed until all four pass.
 6. **Implement.** For 2+ disjoint slices, use the companion manifest and the
    parallel default when its configured threshold and guards permit it;
    otherwise issue the direct `codex-run --lane implement` command as a
@@ -383,10 +388,11 @@ from inside a report, which is why the check reads that instead.
    cause **plus** the `file:line` evidence trail, never a patch.
 3. Ground to truth: confirm the cause yourself against source before fixing.
 4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
-   the intended fix scope, and the green command. If it yields 2+ disjoint file
-   slices, also write the companion `.chunks.json` manifest beside it. Three
-   short sections. This is what makes step 6 possible at all — the review lane
-   needs a plan, and without one a debug fix ships unreviewed.
+   the intended fix scope, and the green command. Three short sections. If it
+   yields 2+ disjoint file slices, write or rewrite the companion `.chunks.json`
+   manifest only after the plan is settled. This is what makes step 6 possible
+   at all — the review lane needs a plan, and without one a debug fix ships
+   unreviewed.
 5. For 2+ disjoint slices, use the companion manifest and the parallel default
    when its configured threshold and guards permit it; otherwise use direct
    `codex-run --lane implement` for the fix as a background Bash call with
@@ -405,9 +411,9 @@ from inside a report, which is why the check reads that instead.
    and quality-of-life wins — one call per lens, not three asked the same
    question.
 2. Brainstorm the shortlist with the user.
-3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. If it yields
-   2+ disjoint file slices, also write the companion `.chunks.json` manifest
-   beside it.
+3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. After the
+   grill settles, write or rewrite the companion `.chunks.json` manifest beside
+   it if it yields 2+ disjoint file slices.
 4. For 2+ disjoint slices, use the companion manifest and the parallel default
    when its configured threshold and guards permit it; otherwise use a direct
    background `codex-run --lane implement` call.
@@ -442,7 +448,7 @@ user, never to a lane: luna gets a diff, never a picture.
 
 ## The ground-truth gate
 
-A hard gate, not a checklist to wave at. All three, before any implementation:
+A hard gate, not a checklist to wave at. All four, before any implementation:
 
 1. **Claims are sourced.** Every factual claim in the plan cites `file:line` in
    this repo. Unsourced claims get verified or deleted — extrapolating from a
@@ -453,6 +459,8 @@ A hard gate, not a checklist to wave at. All three, before any implementation:
 3. **Prior art checked.** Search the repo, then whatever knowledge base this
    team keeps (a wiki, an ADR directory, a KG tool if one is configured). If the
    thing already exists, building it again is the most expensive possible outcome.
+4. **Manifest scope matches.** When present, a companion manifest's declared
+   files match the plan's stated scope.
 
 ## The sign-off gate
 
@@ -491,8 +499,9 @@ Report the failure and let the user decide.
 
 - Plan and grill verdict → `docs/specs/YYYY-MM-DD-<topic>.md`, committed.
   **Every flow writes one** — debug and polish included, or their fix cannot be
-  reviewed. A plan with 2+ disjoint file slices also commits the adjacent
-  `.chunks.json` manifest.
+  reviewed. A settled plan with 2+ disjoint file slices also commits the
+  adjacent `.chunks.json` manifest, written or rewritten after the grill
+  settles.
 - Run state, dispatch log, transcripts, hook state → `.charles/`, gitignored.
 - The closing outcome paragraph is appended to the committed plan, so the
   durable half survives without committing forensic detail nobody rereads.

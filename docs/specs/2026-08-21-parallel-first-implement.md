@@ -2,14 +2,16 @@
 
 ## Why
 
-Measured across 229 completed implement dispatches in opted-in repos: median
-9.9 min, p75 15.1, p90 25.7, max 39.6. 49% run over 10 minutes; only 16% finish
-under 3. The flow's stated basis for "serial by default" is a 1.9-minute median
-that no longer holds — implement is now 5x slower than the docs claim, so
-wall-clock savings from parallel chunks are real rather than theoretical.
+The canonical measurement uses successful implement dispatches only (`rc=0`):
+n=233 across opted-in repos. Timeouts are counted separately: 25 of 258 ends,
+about 10%, hit the old 1800s cap. The flow's stated basis for "serial by
+default" is a 1.9-minute median that no longer holds — implement is still
+roughly five times slower than the docs claim, so wall-clock savings from
+parallel chunks are real rather than theoretical.
 
-In those same 229 dispatches, `parallel-chunks.sh` ran **zero** times. Overlapping
-implements in one repo: 0. The script has never executed against a real repo.
+In that successful-dispatch population, `parallel-chunks.sh` ran **zero** times.
+Overlapping implements in one repo: 0. The script has never executed against a
+real repo.
 
 Three causes, each verified against source:
 
@@ -123,8 +125,9 @@ Chunk A — make the machinery trustworthy (`scripts/parallel-chunks.sh`,
 
 Chunk B — make parallel the default (docs and flow contract):
 
-- [ ] **B1. The plan phase emits a chunk manifest.** Flows write
-  `docs/specs/YYYY-MM-DD-<topic>.chunks.json` alongside the plan whenever the
+- [ ] **B1. The settled plan emits a chunk manifest.** After `grill-rounds`
+  settles the plan, flows write or rewrite
+  `docs/specs/YYYY-MM-DD-<topic>.chunks.json` alongside it whenever the settled
   plan yields 2+ disjoint file slices. Committed next to the plan, since
   `.charles/` is gitignored and `unsourced.sh:28-31` treats `docs/specs/` as
   orchestrator-authored.
@@ -144,16 +147,17 @@ Chunk B — make parallel the default (docs and flow contract):
 - [ ] **B3. The documented invocation runs as written.** Every
   `parallel-chunks.sh` call site resolves the script the way `commands/ui.md:22`
   does, so no snippet depends on an unassigned `$SCRIPTS`.
-- [ ] **B4. Stale implement statistics are corrected.** Every occurrence of the
-  1.9-minute median / 19.5-minute p90 pair is replaced with the measured
-  n=229 median 9.9 / p75 15.1 / p90 25.7 / max 39.6, and the derived "30 min
-  serial vs 10 parallel" arithmetic is recomputed from those. Known sites:
-  `SKILL.md:194-202`, `:235-237`, `README.md:216-227`, `parallel-chunks.sh:4-6`.
-  The older 179-run population (`SKILL.md:23-25`, `README.md:216-222`) stays, but
-  is labelled as covering all lanes and predating this measurement — only the
-  implement figures are remeasured here. The measurement is start/end pairing on
-  `.charles/dispatches.jsonl` across all opted-in repos; that method is recorded
-  in this spec so the number can be reproduced rather than trusted.
+- [ ] **B4. Stale implement statistics are corrected.** The canonical
+  successful-dispatch measurement is n=233 successful implement dispatches
+  (`rc=0`): median 8.9 / p75 13.8 / p90 19.1 / p95 23.1 / max 39.6. Durations
+  are successful dispatches only; timeouts are counted separately: 25 of 258
+  ends (about 10%) hit the old 1800s cap. The derived "57 min serial vs 19.1
+  parallel" arithmetic is based on this population. Known sites are
+  `SKILL.md`, `README.md`, both script comments, and this spec. The older 179-run
+  population (`SKILL.md:23-25`, `README.md:216-222`) stays, but is labelled as
+  covering all lanes and predating this measurement. The measurement is
+  start/end pairing on `.charles/dispatches.jsonl` across all opted-in repos;
+  the full figures are recorded in `README.md`.
 - [ ] **B5. Version bumped in all three places** to the same value:
   `.claude-plugin/plugin.json` and both `version` fields in
   `.claude-plugin/marketplace.json`.
@@ -193,6 +197,9 @@ flow at unhardened machinery is worse than the status quo.
   - B2 threshold made configurable via `parallel_min_chunks`.
   - B4 keeps the older 179-run population, labelled, rather than silently
     implying it was remeasured; records the measurement method.
+  - B4's measurement was recomputed after review found the inconsistency in the
+    unfiltered population; durations now use successful `rc=0` ends and timeouts
+    are counted separately.
 - Accepted risks:
   - **Merge is still not atomic across files.** A2 removes the failed-sibling
     partial merge, but a `cp` failing midway through an accepted batch still
@@ -211,9 +218,10 @@ flow at unhardened machinery is worse than the status quo.
     defence, and it is a real one; a dependency graph is explicitly out of scope.
   - **Paths containing newlines are not supported.** `-z` parsing handles them,
     but nothing else in the pipeline does, and no such path exists in these repos.
-  - **`parallel_min_chunks = 2` is a judgment, not a measurement.** The 9.9-minute
-    median is per whole dispatch, not per chunk, and worktree/merge/green overhead
-    is unmeasured. The knob exists so this can be corrected by evidence later.
+  - **`parallel_min_chunks = 2` is a judgment, not a measurement.** The canonical
+    8.9-minute successful-dispatch median is per whole dispatch, not per chunk,
+    and worktree/merge/green overhead is unmeasured. The knob exists so this can
+    be corrected by evidence later.
   - **Aggregated child receipts widen what `unsourced.sh` counts as sourced**
     (`unsourced.sh:84-93` treats any rc=0 implement as accounting for root
     changes). That is intended here — the root changes did come from those
@@ -252,8 +260,8 @@ Green at close: `bash scripts/selftest.sh && bash scripts/doctor.sh` -> `155 pas
 - [x] **A8** — six parallel cases now run, five of which the old suite never
   reached: successful two-chunk merge, out-of-bounds rejection, failed-sibling
   block, combined-green failure, partial lease recovery. Suite went 150 -> 155.
-- [x] **B1** — the chunk manifest is documented as a plan-phase artifact at
-  `docs/specs/YYYY-MM-DD-<topic>.chunks.json`, alongside the plan.
+- [x] **B1** — after the grill settles, the chunk manifest is written or
+  rewritten at `docs/specs/YYYY-MM-DD-<topic>.chunks.json`, alongside the plan.
 - [x] **B1b** — manifest validation before any lease (`:40-68`): array of objects,
   required fields, unique names, no absolute or `..` paths.
 - [x] **B2** — `SKILL.md` states parallel at 2+ disjoint chunks with serial as the
@@ -268,9 +276,11 @@ Green at close: `bash scripts/selftest.sh && bash scripts/doctor.sh` -> `155 pas
 - [x] **B3** — `SKILL.md:264` assigns `SCRIPTS` with the
   `readlink -f "$(command -v codex-run)"` idiom, so the documented invocation runs
   as written. Verified: `grep -n 'SCRIPTS=' skills/charles-flow/SKILL.md` -> hit.
-- [x] **B4** — `grep -rn '1\.9|19\.5'` over `SKILL.md`, `README.md` and
-  `parallel-chunks.sh` returns nothing; replaced with n=229 median 9.9 / p75 15.1
-  / p90 25.7 / max 39.6 and the measurement method recorded.
+- [x] **B4** — paired events are filtered to successful `rc=0` implements only:
+  n=233; median 8.9 / p75 13.8 / p90 19.1 / p95 23.1 / max 39.6. Timeouts are
+  counted separately: 25 of 258 ends (about 10%) at the old 1800s cap; the full
+  measurement is recorded in `README.md` and the other sites refer to this
+  population.
 - [x] **B5** — 2.20.1 in `.claude-plugin/plugin.json:3` and both
   `.claude-plugin/marketplace.json:8,15`; installed build matches
   (`doctor: OK installed v2.20.1 matches this repo`).
@@ -283,4 +293,4 @@ round 2, which found no new defects.
 
 ## Run outcome — 2026-08-21
 
-Parallel-first implement shipped at v2.20.1. parallel-chunks.sh went from never-executed, never-merge-tested code to a hardened runner: combined green gates exit 0, acceptance is all-or-nothing, leases are taken before any dispatch and released on refusal, failed chunks keep their worktree for recovery, receipts aggregate to the root, and -z parsing handles deletes, renames and spaces. The flow now defaults to parallel at 2+ disjoint chunks with serial as the fallback, and the stale 1.9-minute implement median was replaced with the measured 9.9 across n=229 dispatches.
+Parallel-first implement shipped at v2.20.1. parallel-chunks.sh went from never-executed, never-merge-tested code to a hardened runner: combined green gates exit 0, acceptance is all-or-nothing, leases are taken before any dispatch and released on refusal, failed chunks keep their worktree for recovery, receipts aggregate to the root, and -z parsing handles deletes, renames and spaces. The flow now defaults to parallel at 2+ disjoint chunks with serial as the fallback, and the stale 1.9-minute implement median was replaced with the canonical successful-only median of 8.9 across n=233 dispatches.

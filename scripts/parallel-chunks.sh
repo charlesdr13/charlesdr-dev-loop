@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # parallel-chunks.sh — run disjoint implement chunks concurrently, safely.
 #
-# Serial chunking localises failure but pays for it in wall clock: across 229
-# implement runs the median is 9.9 min, p75 is 15.1, p90 is 25.7, and the max
-# is 39.6, so three p90 chunks cost about 77 min serially versus 26 in parallel.
+# Serial chunking localises failure but pays for it in wall clock. README's
+# canonical measurement uses successful implement dispatches only (rc=0):
+# n=233 across all opted-in repos; timeouts are counted separately (25 of 258
+# ends, about 10%, at the old 1800s cap). Its p90 is 19.1 min, so three p90
+# chunks cost about 57 min serially versus 19.1 in parallel.
 #
 # What makes it safe is not the worktrees, it is the check afterwards. Each
 # chunk DECLARES the files it may touch; a chunk that wrote outside its

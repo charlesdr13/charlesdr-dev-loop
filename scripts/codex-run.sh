@@ -42,13 +42,11 @@ EFFORT="max"         # default reasoning effort: max | high | medium. high is ma
 DIR="$PWD"
 SANDBOX="workspace-write"
 RESUME=0
-TIMEOUT=2700       # measured across all opted-in repos: rc=124 was 11 percent
-                   # of implements (29 of 262) at the old 1800s cap. Of 25
-                   # timeouts with measurable duration, median was 30.0 min and
-                   # 16 died in the 30-33 min cluster exactly at that cap.
-                   # Successful implements reached p90 19.1 min, p95 22.2 min,
-                   # and max 39.6 min; 2700s (45 min) covers that maximum with
-                   # headroom.
+TIMEOUT=2700       # README's canonical timing filters durations to successful
+                   # implement dispatches only (rc=0): n=233. Timeouts are
+                   # counted separately: 25 of 258 ends (about 10%) hit the old
+                   # 1800s cap. The successful population's max is 39.6 min;
+                   # 2700s (45 min) covers it with headroom.
 PLAN=""
 BASE=""
 FILES=""

@@ -29,7 +29,7 @@ flowchart TD
     EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
     GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
     TRUTH -->|any fails| GRILL
-    TRUTH -->|all pass| PLAN["plan → docs/specs/<br/>(+ chunks manifest for 2+ disjoint slices)"]
+    TRUTH -->|all pass| PLAN["settled plan → docs/specs/<br/>(manifest written/re-written after grill settles)"]
 
     PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
     IMPL --> REV["review<br/><b>sol @ medium · luna/terra @ max</b><br/>--effort overrides · isolated"]
@@ -223,12 +223,15 @@ remeasurement below):
 | explore | 5.7 min | 22.0 min | |
 | review | 1.7 min | 3.2 min | never |
 
-**Current implement timing** (262 implement dispatches across all opted-in repos):
-29 ended rc=124 (timeout), about 11%. Of the 25 timeouts whose duration is
-measurable, median was 30.0 min, and 16 died in a 30-33 min cluster exactly at
-the old 1800s cap. Successful implements reached p90 19.1 min, p95 22.2 min,
-max 39.6 min. Method: pair start/end events in `.charles/dispatches.jsonl`
-across all opted-in repos.
+**Current implement timing** (successful implement dispatches only; n=233 across
+all opted-in repos):
+
+Durations are SUCCESSFUL implement dispatches only (`rc=0`): median 8.9 min,
+p75 13.8 min, p90 19.1 min, p95 23.1 min, max 39.6 min. Method: pair
+start/end events in `.charles/dispatches.jsonl` across all opted-in repos and
+filter durations to `rc=0`. Timeouts are counted separately: 25 of 258 ends,
+about 10%, hit the old 1800s cap. The successful median remains roughly five
+times the old 1.9-minute documentation claim, so parallel chunking still pays.
 
 The Bash tool caps a single call at 600s, so **57% of successful explores cannot
 finish in the foreground**. The orchestrator runs explore and implement directly
@@ -506,8 +509,9 @@ enough, because one coherent slice can still carry a long list.
 
 Chunks are counted in **plan requirements**, not files or lines: 1-5 is usually
 one slice, 6-10 is two, and 11+ means three or more and probably means this is
-two plans wearing one name. When a plan yields 2+ disjoint file slices, the plan
-phase commits `docs/specs/YYYY-MM-DD-<topic>.chunks.json` beside the plan.
+two plans wearing one name. When the settled plan yields 2+ disjoint file
+slices, write or rewrite `docs/specs/YYYY-MM-DD-<topic>.chunks.json` beside it
+after the grill settles, never during the initial plan phase.
 
 Parallel is the default at 2+ disjoint chunks, using the `parallel_min_chunks`
 value from `.charles.toml` (default `2`). Use serial only for one chunk, below a
@@ -516,7 +520,7 @@ raised threshold, overlapping declarations, an invalid manifest, or an absent
 
 ## The ground-truth gate
 
-Three checks, before any implementation, none of them optional:
+Four checks, before any implementation, none of them optional:
 
 1. **Claims are sourced.** Every factual claim in the plan cites `file:line`.
    Extrapolating from a package name is not verification.
@@ -524,6 +528,8 @@ Three checks, before any implementation, none of them optional:
    attribute an existing failure to your change.
 3. **Prior art checked.** If the thing already exists, building it again is the
    most expensive available outcome.
+4. **Manifest scope matches.** When present, a companion manifest's declared
+   files match the plan's stated scope.
 
 And the proof protocol throughout: `"47 passed, 0 failed"`, not "tests pass".
 `"312 lines"`, not "file written". Assertions without output are how a loop
