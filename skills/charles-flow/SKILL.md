@@ -18,7 +18,7 @@ the flow, and do not silently skip it either.
 |---|---|---|---|
 | Explore | `--lane explore` | gpt-5.6-luna @ max | read-only |
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
-| Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
+| Review | `--lane review` | gpt-5.6-sol @ max | read-only, isolated temp dir |
 
 **Long dispatches are normal — measured, not guessed.** Older all-lane baseline
 (179 real runs; predates the implement remeasurement below): median successful

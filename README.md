@@ -32,7 +32,7 @@ flowchart TD
     TRUTH -->|all pass| PLAN["plan → docs/specs/<br/>(+ chunks manifest for 2+ disjoint slices)"]
 
     PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
-    IMPL --> REV["review<br/><b>sol @ medium</b> · isolated"]
+    IMPL --> REV["review<br/><b>sol @ max</b> · isolated"]
     REV --> GREEN{"green.sh<br/>real exit code"}
 
     GREEN -->|"red, under 3 cycles"| IMPL
@@ -95,7 +95,7 @@ flowchart LR
 
     SPEC -->|copied| PLANMD
     SRC -->|git diff HEAD| DIFF
-    BOX --> REV["reviewer<br/>sol @ medium · read-only"]
+    BOX --> REV["reviewer<br/>sol @ max · read-only"]
 
     TRANS -.->|"unreachable — different filesystem"| REV
     SRC  -.->|"unreachable"| REV
@@ -201,7 +201,7 @@ cannot verify itself cannot honestly say it is finished.
 |---|---|---|---|
 | explore | gpt-5.6-luna | max | read-only |
 | implement | gpt-5.6-luna | max | workspace-write |
-| review | gpt-5.6-sol | medium | read-only, isolated temp dir |
+| review | gpt-5.6-sol | max | read-only, isolated temp dir |
 
 luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
 fallback, tried automatically when luna fails, or forced with `--engine deepseek`

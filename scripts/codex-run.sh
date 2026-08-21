@@ -4,7 +4,7 @@
 # Roles (--lane):
 #   explore   read-only investigation
 #   implement writes into the working tree
-#   review    adversarial grading, ISOLATED. sol @ medium by default; --engine
+#   review    adversarial grading, ISOLATED. sol @ max by default; --engine
 #             luna|terra runs the same isolated review on another model. Review
 #             is read-only and the cheapest lane, so two in parallel is cheap —
 #             and measured, two models overlapped on 1 finding out of 13.
@@ -252,7 +252,7 @@ run_deepseek() {
   return "$rc"
 }
 
-# --- lane: review (sol @ medium, isolated temp dir) ---------------------------
+# --- lane: review (sol @ max, isolated temp dir) ------------------------------
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
   [ -f "$PLAN" ] || { echo "codex-run.sh: no such plan file: $PLAN" >&2; return 2; }
@@ -336,7 +336,7 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
 
   set +e
   ( cd "$box" && timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
-      -s read-only -C "$box" -m "$rmodel" -c model_reasoning_effort=medium \
+      -s read-only -C "$box" -m "$rmodel" -c model_reasoning_effort="$EFFORT" \
       --disable fast_mode \
       --json -o "$RUN.last" "$prompt" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
   rc=$?
@@ -345,7 +345,7 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   rm -rf "$box"
   [ -s "$RUN.last" ] && cat "$RUN.last"
   echo "" >&2
-  echo "— codex/$rmodel · effort=medium · isolated · raw: $RUN.jsonl" >&2
+  echo "— codex/$rmodel · effort=$EFFORT · isolated · raw: $RUN.jsonl" >&2
   return $rc
 }
 

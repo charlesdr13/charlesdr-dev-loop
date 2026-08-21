@@ -1203,6 +1203,18 @@ if grep -q -- '-m gpt-5.6-sol' "$RD/args.txt" 2>/dev/null; then
 else
   echo "  FAIL  review must default to sol"; fail=$((fail+1))
 fi
+if grep -q -- '-c model_reasoning_effort=max' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  review defaults to max effort"; pass=$((pass+1))
+else
+  echo "  FAIL  review must default to max effort"; fail=$((fail+1))
+fi
+
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --effort medium --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-c model_reasoning_effort=medium' "$RD/args.txt" 2>/dev/null; then
+  echo "  PASS  review honours --effort medium"; pass=$((pass+1))
+else
+  echo "  FAIL  review --effort medium must reach codex"; fail=$((fail+1))
+fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine terra --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
 if grep -q -- '-m gpt-5.6-terra' "$RD/args.txt" 2>/dev/null; then
