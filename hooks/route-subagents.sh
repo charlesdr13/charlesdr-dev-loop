@@ -67,11 +67,11 @@ esac
 
 case "$sub" in
   Explore|Plan|general-purpose|claude|feature-dev:code-explorer)
-    alt='codex-run --lane explore --dir <repo> --timeout 1800 "<task>" (Bash with run_in_background: true)' ;;
+    alt='codex-run --lane explore --dir <repo> --timeout 2700 "<task>" (Bash with run_in_background: true)' ;;
   feature-dev:code-reviewer)
     alt="codex-reviewer (lane: review, isolated — it cannot see the implementer)" ;;
   *)
-    alt='codex-run --lane implement --dir <repo> --timeout 1800 "<task>" (Bash with run_in_background: true)' ;;
+    alt='codex-run --lane implement --dir <repo> --timeout 2700 "<task>" (Bash with run_in_background: true)' ;;
 esac
 
 # PostToolUse turns this into inline-ok if the spawn actually happens (= approved).

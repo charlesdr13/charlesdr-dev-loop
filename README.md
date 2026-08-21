@@ -223,19 +223,22 @@ remeasurement below):
 | explore | 5.7 min | 22.0 min | |
 | review | 1.7 min | 3.2 min | never |
 
-**Current implement timing** (229 completed implement dispatches across all
-opted-in repos): median 9.9 min, p75 15.1 min, p90 25.7 min, max 39.6 min; 49%
-ran over 10 min and 16% finished under 3 min. Method: pair start/end events in
-`.charles/dispatches.jsonl` across all opted-in repos.
+**Current implement timing** (262 implement dispatches across all opted-in repos):
+29 ended rc=124 (timeout), about 11%. Of the 25 timeouts whose duration is
+measurable, median was 30.0 min, and 16 died in a 30-33 min cluster exactly at
+the old 1800s cap. Successful implements reached p90 19.1 min, p95 22.2 min,
+max 39.6 min. Method: pair start/end events in `.charles/dispatches.jsonl`
+across all opted-in repos.
 
 The Bash tool caps a single call at 600s, so **57% of successful explores cannot
-finish in the foreground**; 49% of the measured implement dispatches ran over
-10 minutes. The orchestrator runs explore and implement directly with
-`codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"` as separate Bash
+finish in the foreground**. The orchestrator runs explore and implement directly
+with `codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"` as separate Bash
 calls with `run_in_background: true`.
 The harness re-invokes the orchestrator when each process exits. `lane-status.sh`
 is only the recovery probe when a session restart or harness death loses that
 completion signal; review runs in the foreground.
+
+Raising the cap does not fix the underlying cause of the 30-minute cluster, which is oversized dispatches; chunking the requirement list is the real remedy and the cap is the backstop.
 
 **Speed.** `--fast` is shorthand for `--effort high`; `--effort max|high|medium`
 sets it directly. Codex's `fast_mode` feature is globally on by default, so it is
@@ -247,8 +250,8 @@ benchmark.
 
 ```bash
 # Each explore/serial-implement command is a separate Bash call with run_in_background: true.
-codex-run --lane explore   --dir REPO --timeout 1800 "why does the refresh path 401?"
-codex-run --lane implement --dir REPO --timeout 1800 "add the RangeError guard from the plan"
+codex-run --lane explore   --dir REPO --timeout 2700 "why does the refresh path 401?"
+codex-run --lane implement --dir REPO --timeout 2700 "add the RangeError guard from the plan"
 # Review stays foreground and isolated.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
 # Review committed work, including any uncommitted changes on top.
@@ -386,7 +389,7 @@ and everything when `CHARLES_INLINE_OK=1`.
 code achieves nothing if it can hand the same work to one of its own subagents
 instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
 language specialist in an opted-in repo asks you to make a direct background
-`codex-run --lane ... --dir ... --timeout 1800 "<task>"` call instead. It is a
+`codex-run --lane ... --dir ... --timeout 2700 "<task>"` call instead. It is a
 denylist of agents that do repo code work — `google-drive`, `claude-code-guide`
 and the rest are none of this hook's business.
 
@@ -427,7 +430,7 @@ Three outcomes, because they need different answers:
 | 2 | **a lane ran and was cut short** (124/143) | its report is worthless, its code may not be — verify with `green.sh` and `codex-reviewer`, then keep or revert |
 
 Exit 1 is the fabrication case: discard it whole, do not keep the parts that
-look correct. Exit 2 is a clock, not a liar — a dispatch killed at 1800s may
+look correct. Exit 2 is a clock, not a liar — a dispatch killed at 2700s may
 have written good code first, and throwing that away is its own kind of waste.
 
 Every rule against this previously lived in agent prose, which is precisely what

@@ -21,7 +21,7 @@ set -uo pipefail
 
 REPO="${1:?usage: parallel-chunks.sh <repo> <spec.json>}"; shift
 SPEC="${1:?spec.json required}"; shift || true
-TIMEOUT=1800
+TIMEOUT=2700
 NO_GREEN=0
 while [ $# -gt 0 ]; do
   case "$1" in

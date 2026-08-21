@@ -31,7 +31,7 @@ dispatch 8.8 min, p90 22.8 min, only 4% over 25 min. The Bash tool caps one call
 at 600s, so **more than half of legitimate work cannot finish in the foreground.**
 Explore and implement therefore use one primary mechanism:
 the orchestrator invokes the Bash tool with `run_in_background: true` to run
-`codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"`. The harness
+`codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"`. The harness
 re-invokes the orchestrator when the process exits — that callback is the
 completion signal. Do not add polling loops or periodic `lane-status.sh` polling
 as the primary wait. Review runs in the foreground: its p90 is 3.2 min and none
@@ -72,7 +72,7 @@ Explore and serial implement are dispatched directly by the orchestrator. For
 each, make a Bash tool call with `run_in_background: true`:
 
 ```bash
-codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"
+codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"
 ```
 
 Do not redirect output — the harness captures each background call's output to
@@ -82,8 +82,8 @@ background Bash calls:
 
 ```bash
 # Each line is a separate Bash tool call with run_in_background: true.
-codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<task 1>"
-codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<task 2>"
+codex-run --lane explore --dir "$(pwd)" --timeout 2700 "<task 1>"
+codex-run --lane explore --dir "$(pwd)" --timeout 2700 "<task 2>"
 ```
 
 When you dispatch directly, you see the receipt yourself and nothing between
@@ -363,7 +363,7 @@ from inside a report, which is why the check reads that instead.
 6. **Implement.** For 2+ disjoint slices, use the companion manifest and the
    parallel default when its configured threshold and guards permit it;
    otherwise issue the direct `codex-run --lane implement` command as a
-   background Bash call with `--timeout 1800` and its own `.charles/` log.
+   background Bash call with `--timeout 2700` and its own `.charles/` log.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
 8. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
@@ -388,7 +388,7 @@ from inside a report, which is why the check reads that instead.
 5. For 2+ disjoint slices, use the companion manifest and the parallel default
    when its configured threshold and guards permit it; otherwise use direct
    `codex-run --lane implement` for the fix as a background Bash call with
-   `--timeout 1800`.
+   `--timeout 2700`.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.

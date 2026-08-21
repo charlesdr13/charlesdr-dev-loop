@@ -52,7 +52,7 @@ While you do the visual pass, make this a separate Bash tool call with
 source:
 
 ```bash
-codex-run --lane explore --dir "$(pwd)" --timeout 1800 "<audit task>"
+codex-run --lane explore --dir "$(pwd)" --timeout 2700 "<audit task>"
 ```
 
 > Audit `<route>` and the components it imports for **mechanical** inconsistency

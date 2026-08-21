@@ -42,10 +42,13 @@ EFFORT="max"         # default reasoning effort: max | high | medium. high is ma
 DIR="$PWD"
 SANDBOX="workspace-write"
 RESUME=0
-TIMEOUT=1800       # measured: median successful run 8.8 min, p90 22.8 min. A 540s
-                   # cap (chosen to fit the Bash tool) would have truncated 57% of
-                   # successful explores. Long runs are normal; see the agent docs
-                   # for the background + lane-status pattern that survives them.
+TIMEOUT=2700       # measured across all opted-in repos: rc=124 was 11 percent
+                   # of implements (29 of 262) at the old 1800s cap. Of 25
+                   # timeouts with measurable duration, median was 30.0 min and
+                   # 16 died in the 30-33 min cluster exactly at that cap.
+                   # Successful implements reached p90 19.1 min, p95 22.2 min,
+                   # and max 39.6 min; 2700s (45 min) covers that maximum with
+                   # headroom.
 PLAN=""
 BASE=""
 FILES=""

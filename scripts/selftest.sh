@@ -214,9 +214,9 @@ scheck_tool "grant older than 10min re-arms the subagent gate" ask Agent Explore
 rm -f "$BOX/repo/.charles/inline-ok"
 
 message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
-  "codex-run --lane explore --dir <repo> --timeout 1800"
+  "codex-run --lane explore --dir <repo> --timeout 2700"
 message_check "implement block points to direct dispatch" python-pro "$BOX/repo" \
-  "codex-run --lane implement --dir <repo> --timeout 1800"
+  "codex-run --lane implement --dir <repo> --timeout 2700"
 
 # The Claude hook harness cannot be exercised from selftest; this matcher string
 # guard is the accepted wiring limit.
@@ -463,6 +463,11 @@ rcheck "outcome promoted to committed plan" "Run outcome" cat "$RT/docs/specs/p.
 # A fake `codex` on PATH lets us produce a process whose cmdline matches what the
 # lock greps for, without dispatching anything real.
 RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
+if grep -qE '^TIMEOUT=2700([[:space:]]|$)' "$RUN_SH"; then
+  echo "  PASS  codex-run uses the 2700s default"; pass=$((pass+1))
+else
+  echo "  FAIL  codex-run must use the 2700s default"; fail=$((fail+1))
+fi
 LOCKDIR="$BOX/locktest"; mkdir -p "$LOCKDIR/bin"
 printf '#!/usr/bin/env bash\nsleep 25\n' > "$LOCKDIR/bin/codex"; chmod +x "$LOCKDIR/bin/codex"
 
