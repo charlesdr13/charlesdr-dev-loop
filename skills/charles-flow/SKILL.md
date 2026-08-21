@@ -20,10 +20,11 @@ the flow, and do not silently skip it either.
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | gpt-5.6-sol @ medium | read-only, isolated temp dir |
 
-**Long dispatches are normal — measured, not guessed.** Across 179 real runs:
-median successful dispatch 8.8 min, p90 22.8 min, only 4% over 25 min. The Bash
-tool caps one call at 600s, so **more than half of legitimate work cannot finish
-in the foreground.** Explore and implement therefore use one primary mechanism:
+**Long dispatches are normal — measured, not guessed.** Older all-lane baseline
+(179 real runs; predates the implement remeasurement below): median successful
+dispatch 8.8 min, p90 22.8 min, only 4% over 25 min. The Bash tool caps one call
+at 600s, so **more than half of legitimate work cannot finish in the foreground.**
+Explore and implement therefore use one primary mechanism:
 the orchestrator invokes the Bash tool with `run_in_background: true` to run
 `codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"`. The harness
 re-invokes the orchestrator when the process exits — that callback is the
@@ -47,10 +48,11 @@ This costs real money on wide fan-outs. A 5-explorer luna sweep is not the
 cents-per-task exercise the deepseek lane was, so size fleets to the question
 rather than to the cap.
 
-Fleet sizes: 3 explorers / 1 implementer / 1 reviewer by default, 5 explorers at
-the very most. Nothing enforces that ceiling — it is judgment, and at luna-at-max
-prices a 5-wide sweep is not free. More than one implementer requires the plan to
-declare the slices disjoint, and then each gets a `treehouse` worktree.
+Fleet sizes: 3 explorers / 1 reviewer by default, 5 explorers at the very most.
+Implementer count follows the plan: one for a serial slice, one per disjoint
+chunk for the parallel path. Nothing enforces the explorer ceiling — it is
+judgment, and at luna-at-max prices a 5-wide sweep is not free. Each parallel
+implementer gets a `treehouse` worktree.
 
 **This is now enforced, not advised.** A second `implement` dispatch on a
 directory that already has one refuses with exit 4. Give the second one its own
@@ -59,8 +61,8 @@ the loser is overwritten silently — observed live, not hypothetical.
 
 ### Direct background dispatch
 
-Explore and implement are dispatched directly by the orchestrator. For each,
-make a Bash tool call with `run_in_background: true`:
+Explore and serial implement are dispatched directly by the orchestrator. For
+each, make a Bash tool call with `run_in_background: true`:
 
 ```bash
 codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"
@@ -68,7 +70,7 @@ codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"
 
 Do not redirect output — the harness captures each background call's output to
 its own per-task file and tells you where. The harness re-invokes the
-orchestrator when the process exits. For a parallel fan-out, issue N separate
+orchestrator when the process exits. For an explore fan-out, issue N separate
 background Bash calls:
 
 ```bash
@@ -110,6 +112,19 @@ is being paid for its planning judgment, and handing it your ordered steps both
 wastes that and tends to make the result worse, because it follows your sequence
 instead of finding a better one.
 
+When the plan yields 2+ disjoint file slices, the plan phase also writes
+`docs/specs/YYYY-MM-DD-<topic>.chunks.json` alongside the plan and commits both.
+The manifest schema is one object per slice:
+
+```json
+[
+  {"name":"api","files":["src/a.ts"],"task":"..."}
+]
+```
+
+Do not write a manifest for a single slice. The plan remains the review artifact;
+the companion manifest is the dispatch contract for parallel implementers.
+
 What a dispatch actually needs is a **brief**, which the plan already contains:
 
 - what must be true when it is done, stated so a wrong answer is detectable
@@ -118,8 +133,8 @@ What a dispatch actually needs is a **brief**, which the plan already contains:
 - a nearby file to copy conventions from — point, do not describe
 
 The one exception is parallel implementers: disjoint file slices are a genuine
-implementation plan and the worktree path cannot work without one. A single
-implementer, which is the default, never needs it.
+implementation plan and the worktree path cannot work without the companion
+manifest. A single implementer never needs one.
 
 The same plan is consumed twice — by the grill before the work, and by the
 isolated reviewer after it. That is why it must be requirements rather than
@@ -189,15 +204,17 @@ interviewing to the round where a human is present.
 
 ## Where parallelism actually pays
 
-Not everywhere. Measured, per lane:
+Not everywhere. The explore and review figures below are from the older 179-run
+population covering all lanes and predating the current implement measurement.
+Measured, per lane:
 
 - **explore** — median 5.7 min, p90 22 min. The slow lane, and already benefits
   from a 3+ background fan-out. This is where fan-out earns its cost.
-- **implement** — median 1.9 min. Parallelising this buys almost nothing and
-  costs a worktree per writer plus a merge. Chunks run sequentially with
-  `green.sh` between them, which localises failure to four requirements instead
-  of twelve. Parallel implementers stay reserved for plans that genuinely
-  declare disjoint slices.
+- **implement** — across 229 completed implement dispatches in all opted-in
+  repos: median 9.9 min, p75 15.1 min, p90 25.7 min, max 39.6 min; 49% ran over
+  10 min and 16% finished under 3 min. Method: pair start/end events in
+  `.charles/dispatches.jsonl` across all opted-in repos. Parallel chunks are the
+  default for disjoint slices.
 - **review** — median 1.7 min, read-only, no shared state. The cheapest lane,
   and the one place a second run is nearly free.
 
@@ -226,21 +243,25 @@ still carry a long requirement list.
 
 **Count the checkable requirements in the plan before dispatching.**
 
-- **1-5** — one dispatch. Splitting costs more than it saves.
+- **1-5** — usually one slice; split when the plan has a natural disjoint seam.
 - **6-10** — two dispatches, split on a natural seam (a layer, a module, a
   user-visible behaviour), `green.sh` between them.
 - **11+** — three or more, and reconsider whether this is one plan. A plan with
   fifteen requirements is usually two features that have not been separated yet.
 
-**Serial by default, parallel when it actually pays.** The median implement is
-1.9 min, so parallelising two short chunks buys nothing. But p90 is 19.5 min,
-and three long disjoint chunks cost ~30 min serially against ~10 in parallel.
+**Parallel is the default at 2+ disjoint chunks.** Three chunks at the measured
+p90 cost about 77 min serially against 26 min in parallel, before any extra
+setup. Read `parallel_min_chunks` from `.charles.toml`; it defaults to `2` and
+may be raised when a repo's measurements justify a higher threshold.
 
-Go parallel when **all three** hold: 3+ chunks, genuinely disjoint file sets,
-and each chunk non-trivial. Otherwise sequential, with `green.sh` between chunks
-so a failure implicates four requirements instead of twelve.
+Use parallel when the valid manifest reaches that configured threshold, its file
+declarations are disjoint, and `treehouse` is available. Use serial when there
+is one chunk, the count is below a raised threshold, declarations overlap, the
+manifest is invalid, or `treehouse` is absent. Serial runs still use `green.sh`
+between chunks.
 
 ```bash
+SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 "$SCRIPTS/parallel-chunks.sh" "$(pwd)" chunks.json
 # chunks.json: [{"name":"api","files":["src/a.ts"],"task":"..."}, ...]
 ```
@@ -319,10 +340,12 @@ from inside a report, which is why the check reads that instead.
    look like. Give each call its own `.charles/` log and synthesise the reports
    yourself; do not hand the raw reports to the user.
 3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
-   not after. `grill-rounds` needs a file to attack and the review lane needs one
-   to judge against; a plan that exists only in conversation can be neither.
-   Write **checkable requirements**, not steps: what must be true when this is
-   done, which files are in scope, what must keep working.
+   not after. If it yields 2+ disjoint file slices, also write the companion
+   `.chunks.json` manifest beside it. `grill-rounds` needs a file to attack and
+   the review lane needs one to judge against; a plan that exists only in
+   conversation can be neither. Write **checkable requirements**, not steps:
+   what must be true when this is done, which files are in scope, what must keep
+   working.
 4. **Grill.** `grill-rounds`, 2-3 rounds, amending the plan in place. Round 1 is
    adversarial and unattended. **Everything it could not settle is then
    collected and surfaced to the user in one message**, each item recorded as a
@@ -330,7 +353,9 @@ from inside a report, which is why the check reads that instead.
    proceeds to implementation while one is unanswered. Three rounds is the
    ceiling — a fourth means the plan is wrong at a level grilling cannot fix.
 5. **Ground to truth.** The hard gate below. Do not proceed until all three pass.
-6. **Implement.** Issue the direct `codex-run --lane implement` command as a
+6. **Implement.** For 2+ disjoint slices, use the companion manifest and the
+   parallel default when its configured threshold and guards permit it;
+   otherwise issue the direct `codex-run --lane implement` command as a
    background Bash call with `--timeout 1800` and its own `.charles/` log.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
@@ -349,11 +374,14 @@ from inside a report, which is why the check reads that instead.
    cause **plus** the `file:line` evidence trail, never a patch.
 3. Ground to truth: confirm the cause yourself against source before fixing.
 4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
-   the intended fix scope, and the green command. Three short sections. This is
-   what makes step 6 possible at all — the review lane needs a plan, and without
-   one a debug fix ships unreviewed.
-5. Direct `codex-run --lane implement` for the fix, as a background Bash call
-   with `--timeout 1800`.
+   the intended fix scope, and the green command. If it yields 2+ disjoint file
+   slices, also write the companion `.chunks.json` manifest beside it. Three
+   short sections. This is what makes step 6 possible at all — the review lane
+   needs a plan, and without one a debug fix ships unreviewed.
+5. For 2+ disjoint slices, use the companion manifest and the parallel default
+   when its configured threshold and guards permit it; otherwise use direct
+   `codex-run --lane implement` for the fix as a background Bash call with
+   `--timeout 1800`.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
@@ -368,8 +396,12 @@ from inside a report, which is why the check reads that instead.
    and quality-of-life wins — one call per lens, not three asked the same
    question.
 2. Brainstorm the shortlist with the user.
-3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`.
-4. Direct background `codex-run --lane implement` call.
+3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. If it yields
+   2+ disjoint file slices, also write the companion `.chunks.json` manifest
+   beside it.
+4. For 2+ disjoint slices, use the companion manifest and the parallel default
+   when its configured threshold and guards permit it; otherwise use a direct
+   background `codex-run --lane implement` call.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
 7. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
@@ -450,7 +482,8 @@ Report the failure and let the user decide.
 
 - Plan and grill verdict → `docs/specs/YYYY-MM-DD-<topic>.md`, committed.
   **Every flow writes one** — debug and polish included, or their fix cannot be
-  reviewed.
+  reviewed. A plan with 2+ disjoint file slices also commits the adjacent
+  `.chunks.json` manifest.
 - Run state, dispatch log, transcripts, hook state → `.charles/`, gitignored.
 - The closing outcome paragraph is appended to the committed plan, so the
   durable half survives without committing forensic detail nobody rereads.

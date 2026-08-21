@@ -244,16 +244,149 @@ else
 fi
 
 PARALLEL="$(cd "$(dirname "$0")/.." && pwd)/scripts/parallel-chunks.sh"
-PD="$BOX/parallel"; mkdir -p "$PD/bin" "$PD/repo"
-( cd "$PD/repo" && git init -q ) >/dev/null 2>&1
+PD="$BOX/parallel"; mkdir -p "$PD/bin"
+
+parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND
+  local repo="$1" worktree="$2" green_command="$3"
+  mkdir -p "$repo" "$(dirname "$worktree")"
+  (
+    cd "$repo" && git init -q && git config user.name tester \
+      && git config user.email tester@example.invalid \
+      && printf 'green = "%s"\n' "$green_command" > .charles.toml \
+      && printf 'base\n' > alpha && printf 'base\n' > beta \
+      && git add . && git commit -qm init
+  )
+  git -C "$repo" worktree add -q "$worktree" HEAD
+}
+
+parallel_fixture "$PD/good-repo" "$PD/good-alpha" true
+parallel_fixture "$PD/oob-repo" "$PD/oob-alpha" true
+parallel_fixture "$PD/failed-repo" "$PD/failed-alpha" true
+parallel_fixture "$PD/red-repo" "$PD/red-alpha" false
+git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
+git -C "$PD/oob-repo" worktree add -q "$PD/oob-beta" HEAD
+git -C "$PD/failed-repo" worktree add -q "$PD/failed-beta" HEAD
+git -C "$PD/red-repo" worktree add -q "$PD/red-beta" HEAD
+
 printf '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/spec.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$PD/bin/treehouse"; chmod +x "$PD/bin/treehouse"
-parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
-if [ "$parallel_rc" -eq 3 ] && grep -q 'alpha.*FAILED\|FAILED.*alpha' <<<"$parallel_out" \
-  && grep -q 'beta.*FAILED\|FAILED.*beta' <<<"$parallel_out"; then
-  echo "  PASS  failed chunk leases force parallel exit 3"; pass=$((pass+1))
+mkdir -p "$PD/lease-repo"; ( cd "$PD/lease-repo" && git init -q ) >/dev/null 2>&1
+parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/lease-repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
+if [ "$parallel_rc" -eq 3 ] && grep -qF 'refusing the whole batch' <<<"$parallel_out" \
+  && ! grep -qF 'dispatching 2 chunks' <<<"$parallel_out"; then
+  echo "  PASS  failed chunk lease dispatches nothing and exits 3"; pass=$((pass+1))
 else
-  echo "  FAIL  failed chunk leases must force parallel exit 3 (rc=$parallel_rc)"; fail=$((fail+1))
+  echo "  FAIL  failed chunk lease must refuse the batch (rc=$parallel_rc)"; fail=$((fail+1))
+fi
+
+RECOVERY_REPO="$PD/recovery-repo"; RECOVERY_WT="$PD/recovery-first"
+mkdir -p "$RECOVERY_REPO" "$RECOVERY_WT"; ( cd "$RECOVERY_REPO" && git init -q ) >/dev/null 2>&1
+printf '0\n' > "$PD/recovery-get-count"; : > "$PD/recovery-returns"
+cat > "$PD/bin/treehouse" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  get)
+    count=0
+    [ -f "$PD/recovery-get-count" ] && read -r count < "$PD/recovery-get-count"
+    count=\$((count + 1))
+    printf '%s\n' "\$count" > "$PD/recovery-get-count"
+    if [ "\$count" -eq 1 ]; then printf '%s\n' "$RECOVERY_WT"; else exit 1; fi
+    ;;
+  return)
+    printf '%s\n' "\${2:-}" >> "$PD/recovery-returns"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$PD/bin/treehouse"
+recovery_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$RECOVERY_REPO" "$PD/spec.json" 2>&1)"; recovery_rc=$?
+if [ "$recovery_rc" -eq 3 ] && ! grep -qF 'dispatching 2 chunks' <<<"$recovery_out" \
+  && grep -qF "$RECOVERY_WT" "$PD/recovery-returns"; then
+  echo "  PASS  partial lease failure returns the first worktree without dispatching"; pass=$((pass+1))
+else
+  echo "  FAIL  partial lease failure must return the first worktree (rc=$recovery_rc)"; fail=$((fail+1))
+fi
+
+cat > "$PD/bin/treehouse" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  get)
+    holder="\${4:-}"
+    case "\${PWD##*/}:\$holder" in
+      good-repo:chunk-alpha) printf '%s\n' "$PD/good-alpha" ;;
+      good-repo:chunk-beta) printf '%s\n' "$PD/good-beta" ;;
+      oob-repo:chunk-alpha) printf '%s\n' "$PD/oob-alpha" ;;
+      oob-repo:chunk-beta) printf '%s\n' "$PD/oob-beta" ;;
+      failed-repo:chunk-alpha) printf '%s\n' "$PD/failed-alpha" ;;
+      failed-repo:chunk-beta) printf '%s\n' "$PD/failed-beta" ;;
+      red-repo:chunk-alpha) printf '%s\n' "$PD/red-alpha" ;;
+      red-repo:chunk-beta) printf '%s\n' "$PD/red-beta" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  return) exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$PD/bin/treehouse"
+
+cat > "$PD/bin/codex" <<'EOF'
+#!/usr/bin/env bash
+case "$PWD" in
+  */good-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
+  */good-beta) printf 'beta merged\n' > beta; exit 0 ;;
+  */oob-alpha) printf 'alpha changed\n' > alpha; printf 'not allowed\n' > outside; exit 0 ;;
+  */oob-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */failed-alpha) printf 'alpha changed\n' > alpha; exit 7 ;;
+  */failed-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */red-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
+  */red-beta) printf 'beta merged\n' > beta; exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$PD/bin/codex"
+
+good_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/good-repo" "$PD/spec.json" 2>&1)"; good_rc=$?
+good_runs="$(jq -r '.run // empty' "$PD/good-repo/.charles/dispatches.jsonl" 2>/dev/null | sort -u)"
+good_run_output=1
+while IFS= read -r run_id; do
+  [ -n "$run_id" ] || continue
+  grep -qF "run $run_id" <<<"$good_out" || good_run_output=0
+done <<<"$good_runs"
+if [ "$good_rc" -eq 0 ] && [ "$(cat "$PD/good-repo/alpha")" = "alpha merged" ] \
+  && [ "$(cat "$PD/good-repo/beta")" = "beta merged" ] \
+  && [ "$(printf '%s\n' "$good_runs" | sed '/^$/d' | wc -l)" -eq 2 ] \
+  && [ "$good_run_output" -eq 1 ]; then
+  echo "  PASS  successful two-chunk merge aggregates and prints receipts"; pass=$((pass+1))
+else
+  echo "  FAIL  successful two-chunk merge must land files and receipts (rc=$good_rc)"; fail=$((fail+1))
+fi
+
+oob_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/oob-repo" "$PD/spec.json" 2>&1)"; oob_rc=$?
+if [ "$oob_rc" -eq 3 ] && [ "$(cat "$PD/oob-repo/alpha")" = "base" ] \
+  && [ ! -e "$PD/oob-repo/outside" ] && grep -qF 'wrote outside' <<<"$oob_out" \
+  && grep -qF "$PD/oob-alpha" <<<"$oob_out"; then
+  echo "  PASS  out-of-bounds chunk is rejected and kept"; pass=$((pass+1))
+else
+  echo "  FAIL  out-of-bounds chunk must not merge (rc=$oob_rc)"; fail=$((fail+1))
+fi
+
+failed_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/failed-repo" "$PD/spec.json" 2>&1)"; failed_rc=$?
+if [ "$failed_rc" -eq 3 ] && [ "$(cat "$PD/failed-repo/alpha")" = "base" ] \
+  && [ "$(cat "$PD/failed-repo/beta")" = "base" ] \
+  && grep -qF 'child exited' <<<"$failed_out" && grep -qF "$PD/failed-alpha" <<<"$failed_out"; then
+  echo "  PASS  failed sibling blocks every merge"; pass=$((pass+1))
+else
+  echo "  FAIL  failed sibling must block every merge (rc=$failed_rc)"; fail=$((fail+1))
+fi
+
+red_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/red-repo" "$PD/spec.json" 2>&1)"; red_rc=$?
+if [ "$red_rc" -ne 0 ] && [ "$(cat "$PD/red-repo/alpha")" = "alpha merged" ] \
+  && [ "$(cat "$PD/red-repo/beta")" = "beta merged" ] \
+  && grep -qF 'running combined green check' <<<"$red_out"; then
+  echo "  PASS  combined-green failure fails the batch after merge"; pass=$((pass+1))
+else
+  echo "  FAIL  combined-green failure must fail the batch (rc=$red_rc)"; fail=$((fail+1))
 fi
 
 # --- run state lifecycle ------------------------------------------------------

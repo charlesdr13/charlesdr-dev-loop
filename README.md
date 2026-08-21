@@ -29,7 +29,7 @@ flowchart TD
     EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
     GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
     TRUTH -->|any fails| GRILL
-    TRUTH -->|all pass| PLAN["plan → docs/specs/"]
+    TRUTH -->|all pass| PLAN["plan → docs/specs/<br/>(+ chunks manifest for 2+ disjoint slices)"]
 
     PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
     IMPL --> REV["review<br/><b>sol @ medium</b> · isolated"]
@@ -178,6 +178,7 @@ Writes `.charles.toml`, committed on purpose:
 green = "bun test && bun run typecheck"   # what "all green" means here
 inline_lines = 40
 inline_files  = 3
+parallel_min_chunks = 2                    # raise to keep smaller sets serial
 ```
 
 Nothing in this plugin does anything in a repo without that file. No hook, no
@@ -213,18 +214,24 @@ of each dispatch, so it takes effect on the next lane with no restart. A
 per-call `--engine` flag, or CHARLES_ENGINE in the environment, still wins. Use
 it when codex quota is short: deepseek bills a separate key.
 
-**How long dispatches actually take** (measured over 179 runs, not estimated):
+**Older all-lane timing baseline** (179 runs; predates the implement
+remeasurement below):
 
 | lane | median | p90 | over 25 min |
 |---|---|---|---|
 | explore | 5.7 min | 22.0 min | |
-| implement | 1.9 min | 19.5 min | 4% of all runs |
 | review | 1.7 min | 3.2 min | never |
 
-The Bash tool caps a single call at 600s, so **57% of successful explores and
-56% of successful implements cannot finish in the foreground.** The orchestrator
-runs explore and implement directly with `codex-run --lane <lane> --dir <repo>
---timeout 1800 "<task>"` as separate Bash calls with `run_in_background: true`.
+**Current implement timing** (229 completed implement dispatches across all
+opted-in repos): median 9.9 min, p75 15.1 min, p90 25.7 min, max 39.6 min; 49%
+ran over 10 min and 16% finished under 3 min. Method: pair start/end events in
+`.charles/dispatches.jsonl` across all opted-in repos.
+
+The Bash tool caps a single call at 600s, so **57% of successful explores cannot
+finish in the foreground**; 49% of the measured implement dispatches ran over
+10 minutes. The orchestrator runs explore and implement directly with
+`codex-run --lane <lane> --dir <repo> --timeout 1800 "<task>"` as separate Bash
+calls with `run_in_background: true`.
 The harness re-invokes the orchestrator when each process exits. `lane-status.sh`
 is only the recovery probe when a session restart or harness death loses that
 completion signal; review runs in the foreground.
@@ -238,7 +245,7 @@ ran 101s. Those were different questions, so treat it as a direction, not a
 benchmark.
 
 ```bash
-# Each explore/implement command is a separate Bash call with run_in_background: true.
+# Each explore/serial-implement command is a separate Bash call with run_in_background: true.
 codex-run --lane explore   --dir REPO --timeout 1800 "why does the refresh path 401?"
 codex-run --lane implement --dir REPO --timeout 1800 "add the RangeError guard from the plan"
 # Review stays foreground and isolated.
@@ -487,15 +494,15 @@ An implementer given twelve requirements does about 60% of each — the diff loo
 plausible and the shortfall surfaces in review, or later. Capping scope is not
 enough, because one coherent slice can still carry a long list.
 
-Chunks are counted in **plan requirements**, not files or lines: 1-5 is one
-dispatch, 6-10 is two, 11+ means three or more and probably means this is two
-plans wearing one name. Chunks run **sequentially on the same tree** with
-`green.sh` between them — no worktrees needed, and a red result implicates four
-requirements instead of twelve.
+Chunks are counted in **plan requirements**, not files or lines: 1-5 is usually
+one slice, 6-10 is two, and 11+ means three or more and probably means this is
+two plans wearing one name. When a plan yields 2+ disjoint file slices, the plan
+phase commits `docs/specs/YYYY-MM-DD-<topic>.chunks.json` beside the plan.
 
-Parallel implementers remain reserved for plans that genuinely declare disjoint
-slices, since those need a worktree each and the writer lock will refuse them
-otherwise.
+Parallel is the default at 2+ disjoint chunks, using the `parallel_min_chunks`
+value from `.charles.toml` (default `2`). Use serial only for one chunk, below a
+raised threshold, overlapping declarations, an invalid manifest, or an absent
+`treehouse`; serial chunks still run `green.sh` between them.
 
 ## The ground-truth gate
 
