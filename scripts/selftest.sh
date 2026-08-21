@@ -293,16 +293,33 @@ parallel_fixture "$PD/oob-repo" "$PD/oob-alpha" true
 parallel_fixture "$PD/failed-repo" "$PD/failed-alpha" true
 parallel_fixture "$PD/red-repo" "$PD/red-alpha" false
 parallel_fixture "$PD/missing-repo" "$PD/missing-alpha" true
+parallel_fixture "$PD/ignored-repo" "$PD/ignored-alpha" true
+parallel_fixture "$PD/delete-repo" "$PD/delete-alpha" true
+parallel_fixture "$PD/rename-repo" "$PD/rename-alpha" true
+parallel_fixture "$PD/bad-receipt-repo" "$PD/bad-receipt-alpha" true
+parallel_fixture "$PD/space-repo" "$PD/space-alpha" false
 parallel_swap_fixture "$PD/swap-repo" "$PD/swap-alpha"
 git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
 git -C "$PD/oob-repo" worktree add -q "$PD/oob-beta" HEAD
 git -C "$PD/failed-repo" worktree add -q "$PD/failed-beta" HEAD
 git -C "$PD/red-repo" worktree add -q "$PD/red-beta" HEAD
 git -C "$PD/missing-repo" worktree add -q "$PD/missing-beta" HEAD
+git -C "$PD/ignored-repo" worktree add -q "$PD/ignored-beta" HEAD
+git -C "$PD/delete-repo" worktree add -q "$PD/delete-beta" HEAD
+git -C "$PD/rename-repo" worktree add -q "$PD/rename-beta" HEAD
+git -C "$PD/bad-receipt-repo" worktree add -q "$PD/bad-receipt-beta" HEAD
+printf 'base\n' > "$PD/space-repo/space file"
+git -C "$PD/space-repo" add -- 'space file' && git -C "$PD/space-repo" commit -qm 'space fixture'
+git -C "$PD/space-repo" worktree add -q "$PD/space-beta" HEAD
 git -C "$PD/swap-repo" worktree add -q "$PD/swap-gamma" HEAD
+printf 'ignored-outside\n' >> "$PD/ignored-repo/.git/info/exclude"
 
 printf '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/spec.json"
 printf '[{"name":"swap","files":["alpha","beta"],"task":"x"},{"name":"gamma","files":["gamma"],"task":"x"}]\n' > "$PD/swap-spec.json"
+printf '[{"name":"delete","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/delete-spec.json"
+printf '[{"name":"rename","files":["renamed"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/rename-spec.json"
+printf '[{"name":"bad","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/bad-receipt-spec.json"
+printf '[{"name":"space","files":["space file"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/space-spec.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$PD/bin/treehouse"; chmod +x "$PD/bin/treehouse"
 mkdir -p "$PD/lease-repo"; ( cd "$PD/lease-repo" && git init -q ) >/dev/null 2>&1
 parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/lease-repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
@@ -357,6 +374,16 @@ case "\${1:-}" in
       red-repo:chunk-beta) printf '%s\n' "$PD/red-beta" ;;
       missing-repo:chunk-alpha) printf '%s\n' "$PD/missing-alpha" ;;
       missing-repo:chunk-beta) printf '%s\n' "$PD/missing-beta" ;;
+      ignored-repo:chunk-alpha) printf '%s\n' "$PD/ignored-alpha" ;;
+      ignored-repo:chunk-beta) printf '%s\n' "$PD/ignored-beta" ;;
+      delete-repo:chunk-delete) printf '%s\n' "$PD/delete-alpha" ;;
+      delete-repo:chunk-beta) printf '%s\n' "$PD/delete-beta" ;;
+      rename-repo:chunk-rename) printf '%s\n' "$PD/rename-alpha" ;;
+      rename-repo:chunk-beta) printf '%s\n' "$PD/rename-beta" ;;
+      bad-receipt-repo:chunk-bad) printf '%s\n' "$PD/bad-receipt-alpha" ;;
+      bad-receipt-repo:chunk-beta) printf '%s\n' "$PD/bad-receipt-beta" ;;
+      space-repo:chunk-space) printf '%s\n' "$PD/space-alpha" ;;
+      space-repo:chunk-beta) printf '%s\n' "$PD/space-beta" ;;
       swap-repo:chunk-swap) printf '%s\n' "$PD/swap-alpha" ;;
       swap-repo:chunk-gamma) printf '%s\n' "$PD/swap-gamma" ;;
       *) exit 1 ;;
@@ -367,6 +394,23 @@ case "\${1:-}" in
 esac
 EOF
 chmod +x "$PD/bin/treehouse"
+
+manifest_check() { # manifest_check NAME JSON
+  local name="$1" manifest="$2" out rc
+  printf '%s\n' "$manifest" > "$PD/manifest-$name.json"
+  out="$(bash "$PARALLEL" "$PD/lease-repo" "$PD/manifest-$name.json" 2>&1)"; rc=$?
+  if [ "$rc" -eq 1 ] && grep -qF 'invalid manifest' <<<"$out"; then
+    echo "  PASS  invalid manifest is refused: $name"; pass=$((pass+1))
+  else
+    echo "  FAIL  invalid manifest must be refused: $name (rc=$rc)"; fail=$((fail+1))
+  fi
+}
+
+manifest_check "not-array" '{"name":"alpha"}'
+manifest_check "missing-field" '[{"name":"alpha","files":["alpha"]}]'
+manifest_check "duplicate-names" '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"alpha","files":["beta"],"task":"x"}]'
+manifest_check "absolute-path" '[{"name":"alpha","files":["/alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]'
+manifest_check "dot-dot-path" '[{"name":"alpha","files":["../alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]'
 
 cat > "$PD/bin/codex" <<'EOF'
 #!/usr/bin/env bash
@@ -379,12 +423,22 @@ case "$PWD" in
   */failed-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */red-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
   */red-beta) printf 'beta merged\n' > beta; exit 0 ;;
+  */ignored-alpha) printf 'alpha changed\n' > alpha; printf 'not allowed\n' > ignored-outside; exit 0 ;;
+  */ignored-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */delete-alpha) rm -f alpha; exit 0 ;;
+  */delete-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */rename-alpha) mv alpha renamed; exit 0 ;;
+  */rename-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */bad-receipt-alpha) printf 'alpha changed\n' > alpha; printf '{malformed\n' > .charles/dispatches.jsonl; exit 0 ;;
+  */bad-receipt-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */missing-alpha)
     printf 'alpha changed\n' > alpha
     rm -f .charles/dispatches.jsonl
     mkdir -p .charles/dispatches.jsonl
     exit 0 ;;
   */missing-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */space-alpha) printf 'space merged\n' > 'space file'; exit 0 ;;
+  */space-beta) printf 'beta merged\n' > beta; exit 0 ;;
   */swap-alpha)
     mv alpha .swap-alpha
     mv beta alpha
@@ -451,15 +505,39 @@ else
   echo "  FAIL  out-of-bounds chunk must not merge (rc=$oob_rc)"; fail=$((fail+1))
 fi
 
+: > "$PD/ignored-returns"
+ignored_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/ignored-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/ignored-repo" "$PD/spec.json" 2>&1)"; ignored_rc=$?
+if [ "$ignored_rc" -eq 3 ] && [ "$(cat "$PD/ignored-repo/alpha")" = "base" ] \
+  && [ ! -e "$PD/ignored-repo/ignored-outside" ] \
+  && grep -qF 'ignored-outside' <<<"$ignored_out"; then
+  echo "  PASS  gitignored out-of-bounds file is rejected"; pass=$((pass+1))
+else
+  echo "  FAIL  gitignored out-of-bounds file must be rejected (rc=$ignored_rc)"; fail=$((fail+1))
+fi
+
 : > "$PD/missing-returns"
+cp "$PD/missing-repo/alpha" "$PD/missing-alpha.before"
+cp "$PD/missing-repo/beta" "$PD/missing-beta.before"
 missing_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/missing-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/missing-repo" "$PD/spec.json" 2>&1)"; missing_rc=$?
 if [ "$missing_rc" -eq 3 ] && grep -qF 'missing receipt' <<<"$missing_out" \
   && grep -qF "$PD/missing-alpha" <<<"$missing_out" \
+  && cmp -s "$PD/missing-repo/alpha" "$PD/missing-alpha.before" \
+  && cmp -s "$PD/missing-repo/beta" "$PD/missing-beta.before" \
   && ! grep -Fxq "$PD/missing-alpha" "$PD/missing-returns" \
   && grep -Fxq "$PD/missing-beta" "$PD/missing-returns"; then
-  echo "  PASS  missing receipt fails and keeps its worktree"; pass=$((pass+1))
+  echo "  PASS  missing receipt fails before changing the root"; pass=$((pass+1))
 else
-  echo "  FAIL  missing receipt must fail and keep its worktree (rc=$missing_rc)"; fail=$((fail+1))
+  echo "  FAIL  missing receipt must fail before changing the root (rc=$missing_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/bad-receipt-returns"
+bad_receipt_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/bad-receipt-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/bad-receipt-repo" "$PD/bad-receipt-spec.json" 2>&1)"; bad_receipt_rc=$?
+if [ "$bad_receipt_rc" -eq 3 ] && grep -qF 'invalid receipt' <<<"$bad_receipt_out" \
+  && [ "$(cat "$PD/bad-receipt-repo/alpha")" = "base" ] \
+  && ! grep -Fxq "$PD/bad-receipt-alpha" "$PD/bad-receipt-returns"; then
+  echo "  PASS  malformed receipt fails before merge"; pass=$((pass+1))
+else
+  echo "  FAIL  malformed receipt must fail before merge (rc=$bad_receipt_rc)"; fail=$((fail+1))
 fi
 
 : > "$PD/swap-returns"
@@ -477,10 +555,41 @@ fi
 failed_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/failed-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/failed-repo" "$PD/spec.json" 2>&1)"; failed_rc=$?
 if [ "$failed_rc" -eq 3 ] && [ "$(cat "$PD/failed-repo/alpha")" = "base" ] \
   && [ "$(cat "$PD/failed-repo/beta")" = "base" ] \
-  && grep -qF 'child exited' <<<"$failed_out" && grep -qF "$PD/failed-alpha" <<<"$failed_out"; then
+  && grep -qF 'child exited' <<<"$failed_out" && grep -qF "$PD/failed-alpha" <<<"$failed_out" \
+  && ! grep -Fxq "$PD/failed-alpha" "$PD/failed-returns"; then
   echo "  PASS  failed sibling blocks every merge"; pass=$((pass+1))
 else
   echo "  FAIL  failed sibling must block every merge (rc=$failed_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/rename-returns"
+rename_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/rename-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/rename-repo" "$PD/rename-spec.json" 2>&1)"; rename_rc=$?
+if [ "$rename_rc" -eq 3 ] && [ "$(cat "$PD/rename-repo/alpha")" = "base" ] \
+  && [ ! -e "$PD/rename-repo/renamed" ] && grep -qF 'wrote outside' <<<"$rename_out"; then
+  echo "  PASS  one-sided rename is rejected"; pass=$((pass+1))
+else
+  echo "  FAIL  one-sided rename must be rejected (rc=$rename_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/delete-returns"
+delete_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/delete-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/delete-repo" "$PD/delete-spec.json" 2>&1)"; delete_rc=$?
+if [ "$delete_rc" -eq 0 ] && [ ! -e "$PD/delete-repo/alpha" ] \
+  && [ "$(cat "$PD/delete-repo/beta")" = "beta changed" ] \
+  && grep -qF 'merged deletion alpha' <<<"$delete_out"; then
+  echo "  PASS  declared deletion is removed from the root"; pass=$((pass+1))
+else
+  echo "  FAIL  declared deletion must be merged (rc=$delete_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/space-returns"
+space_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/space-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/space-repo" "$PD/space-spec.json" --no-green 2>&1)"; space_rc=$?
+if [ "$space_rc" -eq 0 ] && [ "$(cat "$PD/space-repo/space file")" = "space merged" ] \
+  && [ "$(cat "$PD/space-repo/beta")" = "beta merged" ] \
+  && grep -qF 'combined green check skipped (--no-green)' <<<"$space_out" \
+  && ! grep -qF 'running combined green check' <<<"$space_out"; then
+  echo "  PASS  spaced declaration merges and --no-green skips green"; pass=$((pass+1))
+else
+  echo "  FAIL  spaced declaration and --no-green must work (rc=$space_rc)"; fail=$((fail+1))
 fi
 
 : > "$PD/red-returns"

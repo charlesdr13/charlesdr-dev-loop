@@ -37,8 +37,8 @@ REPO="$(cd -- "$REPO" && pwd)"
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 1; }
 
-root="$REPO"
-root="$(realpath -m "$root" 2>/dev/null || echo "$root")"
+repo_root="$(realpath -m "$REPO" 2>/dev/null || echo "$REPO")"
+root="$repo_root"
 while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do
   parent="$(dirname "$root")"; [ "$parent" = "$root" ] && break; root="$parent"
 done
@@ -223,6 +223,17 @@ internal_path() {
   return 1
 }
 
+safe_copy() {
+  local wt="$1" path="$2" parent
+  parent="$(dirname -- "$path")"
+  mkdir -p -- "$REPO/$parent" || return 1
+  parent="$(realpath -- "$REPO/$parent" 2>/dev/null)" || return 1
+  case "$parent/" in
+    "$repo_root/"*) cp -a -- "$wt/$path" "$REPO/$path" ;;
+    *) return 1 ;;
+  esac
+}
+
 # Acceptance is a separate pass: a failed sibling must not leave earlier
 # accepted chunks copied into the root.
 for i in "${!CH_WT[@]}"; do
@@ -231,8 +242,22 @@ for i in "${!CH_WT[@]}"; do
     continue
   fi
 
+  receipt="$wt/.charles/dispatches.jsonl"
+  if [ ! -f "$receipt" ] || [ ! -r "$receipt" ]; then
+    echo "  ${CH_NAME[$i]}: REJECTED — missing receipt $receipt" >&2
+    CH_KEEP[$i]=1; rc=3
+    continue
+  fi
+  if ! jq -e -s \
+    'any(.[]; type == "object" and (.run? | if type == "string" then length > 0 else false end))' \
+    "$receipt" >/dev/null; then
+    echo "  ${CH_NAME[$i]}: REJECTED — invalid receipt $receipt (expected a non-empty .run)" >&2
+    CH_KEEP[$i]=1; rc=3
+    continue
+  fi
+
   status_file="$TMP/$i.status"
-  if ! git -C "$wt" status --porcelain -z -uall > "$status_file" 2>/dev/null; then
+  if ! git -C "$wt" status --porcelain -z -uall --ignored > "$status_file" 2>/dev/null; then
     echo "  ${CH_NAME[$i]}: REJECTED — could not read worktree status" >&2
     CH_KEEP[$i]=1; rc=3
     continue
@@ -304,11 +329,9 @@ for i in "${!CH_WT[@]}"; do
       if internal_path "$path" || internal_path "$old_path"; then
         continue
       fi
-      target_dir="$(dirname -- "$path")"
-      rename_destinations+=("$path")
-      rename_sources+=("$old_path")
-      if mkdir -p -- "$REPO/$target_dir" \
-        && cp -a -- "$wt/$path" "$REPO/$path"; then
+      if safe_copy "$wt" "$path"; then
+        rename_destinations+=("$path")
+        rename_sources+=("$old_path")
         echo "  ${CH_NAME[$i]}: merged rename $old_path -> $path"
       else
         echo "  ${CH_NAME[$i]}: FAILED — could not merge rename $old_path -> $path" >&2
@@ -317,8 +340,7 @@ for i in "${!CH_WT[@]}"; do
     elif [[ "$xy" == *C* ]]; then
       IFS= read -r -d '' old_path || { echo "  ${CH_NAME[$i]}: FAILED — malformed copy" >&2; CH_KEEP[$i]=1; rc=3; continue; }
       internal_path "$path" && continue
-      target_dir="$(dirname -- "$path")"
-      if mkdir -p -- "$REPO/$target_dir" && cp -a -- "$wt/$path" "$REPO/$path"; then
+      if safe_copy "$wt" "$path"; then
         echo "  ${CH_NAME[$i]}: merged $path"
       else
         echo "  ${CH_NAME[$i]}: FAILED — could not merge $path" >&2
@@ -329,8 +351,7 @@ for i in "${!CH_WT[@]}"; do
     elif [[ "$xy" == *D* ]]; then
       deletions+=("$path")
     else
-      target_dir="$(dirname -- "$path")"
-      if mkdir -p -- "$REPO/$target_dir" && cp -a -- "$wt/$path" "$REPO/$path"; then
+      if safe_copy "$wt" "$path"; then
         echo "  ${CH_NAME[$i]}: merged $path"
       else
         echo "  ${CH_NAME[$i]}: FAILED — could not merge $path" >&2
