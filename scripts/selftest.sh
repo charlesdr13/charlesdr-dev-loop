@@ -124,6 +124,22 @@ else
   echo "  FAIL  ask text must name CHARLES_INLINE_OK, inline_lines, and inline_files"; fail=$((fail+1))
 fi
 
+# --- every script must start with a real shebang ------------------------------
+# codex-run.sh carried a blank line 1 for months: the kernel saw no shebang, so
+# exec'ing it directly (timeout codex-run, cron, any non-bash caller) fell back
+# to sh and died on `set -o pipefail`. Invoking it as `bash codex-run.sh` hid it.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+shebang_bad=""
+for f in "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/hooks/*.sh; do
+  [ -f "$f" ] || continue
+  case "$(head -c 2 "$f")" in '#!') ;; *) shebang_bad="$shebang_bad ${f#"$REPO_ROOT"/}" ;; esac
+done
+if [ -z "$shebang_bad" ]; then
+  echo "  PASS  every script starts with a shebang"; pass=$((pass+1))
+else
+  echo "  FAIL  script(s) with no shebang on line 1:$shebang_bad"; fail=$((fail+1))
+fi
+
 # --- subagent routing hook ----------------------------------------------------
 SUBHOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-subagents.sh"
 

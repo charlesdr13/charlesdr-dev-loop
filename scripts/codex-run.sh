@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 # codex-run.sh — dispatch work to a Codex lane.
 #
