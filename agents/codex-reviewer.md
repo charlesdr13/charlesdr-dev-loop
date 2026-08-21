@@ -24,13 +24,16 @@ Then dispatch with `"$RUN"`:
 
 ```bash
 "$RUN" --lane review \
-  --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 540   # review is fast: p90 3.2 min, foreground is fine \
+  --dir <REPO> --plan <PATH-TO-PLAN.md> [--base <REF>] --timeout 540   # review is fast: p90 3.2 min, foreground is fine \
   "<what to pay special attention to>"
 ```
 
 The script builds a temp directory containing exactly two files — `plan.md` and
 `changes.diff` — and runs sol at medium by default, luna/terra at max when
-selected with `--engine`; `--effort` overrides. It is read-only inside it.
+selected with `--engine`; `--effort` overrides. Without `--base`, the diff is
+the working tree against `HEAD`, plus cached and untracked changes. With
+`--base <REF>`, it is `<REF>..working-tree` plus untracked changes, so committed
+work can be graded; the ref must resolve. It is read-only inside it.
 
 **Do not work around this.** Do not pass the repo path, paste extra context, or
 hand it the implementer's transcript. The model that wrote the code grades its

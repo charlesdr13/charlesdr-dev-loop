@@ -20,6 +20,11 @@ the flow, and do not silently skip it either.
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
+Review accepts `--base <ref>` when grading already-committed work: it reviews
+`<ref>..working-tree`, including uncommitted changes on top and untracked files.
+The ref must resolve; without `--base`, review keeps its normal `HEAD` plus
+cached plus untracked diff. `--base` is invalid on other lanes.
+
 **Long dispatches are normal — measured, not guessed.** Older all-lane baseline
 (179 real runs; predates the implement remeasurement below): median successful
 dispatch 8.8 min, p90 22.8 min, only 4% over 25 min. The Bash tool caps one call

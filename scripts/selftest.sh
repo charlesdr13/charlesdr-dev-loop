@@ -1191,7 +1191,7 @@ fi
 # Two models reviewing the same code overlapped on 1 finding out of 13, and
 # review is the cheapest lane, so a second opinion is close to free.
 RD="$BOX/reviewengine"; mkdir -p "$RD/bin" "$RD/docs"
-printf '#!/usr/bin/env bash\necho "$@" > %s/args.txt\n' "$RD" > "$RD/bin/codex"
+printf '#!/usr/bin/env bash\necho "$@" > %s/args.txt\ncp changes.diff %s/review-captured.diff\n' "$RD" "$BOX" > "$RD/bin/codex"
 chmod +x "$RD/bin/codex"
 ( cd "$RD" && git init -q && git config user.name tester && git config user.email tester@example.invalid
   printf 'x\n' > a.ts && git add -A && git commit -qm init && printf 'changed\n' > a.ts ) >/dev/null 2>&1
@@ -1207,6 +1207,45 @@ if grep -q -- '-c model_reasoning_effort=medium' "$RD/args.txt" 2>/dev/null; the
   echo "  PASS  sol review defaults to medium effort"; pass=$((pass+1))
 else
   echo "  FAIL  sol review must default to medium effort"; fail=$((fail+1))
+fi
+if [ -s "$BOX/review-captured.diff" ] && grep -q '^+changed$' "$BOX/review-captured.diff"; then
+  echo "  PASS  review without --base uses the working-tree diff"; pass=$((pass+1))
+else
+  echo "  FAIL  review without --base must use the working-tree diff"; fail=$((fail+1))
+fi
+
+# --base reviews committed work from the chosen ref, plus changes made on top.
+RB="$BOX/reviewbase"; RBBIN="$BOX/reviewbase-bin"; mkdir -p "$RB/docs" "$RBBIN"
+printf '#!/usr/bin/env bash\necho "$@" > %s/base-args.txt\ncp changes.diff %s/base-captured.diff\n' "$BOX" "$BOX" > "$RBBIN/codex"
+chmod +x "$RBBIN/codex"
+( cd "$RB" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'base\n' > a.ts && git add -A && git commit -qm base ) >/dev/null 2>&1
+base_ref="$(git -C "$RB" rev-parse HEAD)"
+( cd "$RB" && printf 'committed\n' >> a.ts && git add -A && git commit -qm committed && printf 'working\n' >> a.ts ) >/dev/null 2>&1
+printf '# Plan\n' > "$RB/docs/p.md"
+
+PATH="$RBBIN:$PATH" CHARLES_STATE_DIR="$RB" bash "$RUN_SH" --lane review --dir "$RB" --plan "$RB/docs/p.md" --base "$base_ref" --timeout 5 "t" >/dev/null 2>&1
+if [ $? -eq 0 ] && [ -s "$BOX/base-captured.diff" ] \
+  && grep -q '^+committed$' "$BOX/base-captured.diff" \
+  && grep -q '^+working$' "$BOX/base-captured.diff" \
+  && [ -s "$BOX/base-args.txt" ]; then
+  echo "  PASS  valid --base diff dispatches committed and working changes"; pass=$((pass+1))
+else
+  echo "  FAIL  valid --base must dispatch a non-empty committed-work diff"; fail=$((fail+1))
+fi
+
+base_out="$(PATH="$RBBIN:$PATH" CHARLES_STATE_DIR="$RB" bash "$RUN_SH" --lane review --dir "$RB" --plan "$RB/docs/p.md" --base does-not-exist --timeout 5 "t" 2>&1)"; base_rc=$?
+if [ "$base_rc" -eq 2 ] && grep -q "invalid --base ref 'does-not-exist'" <<<"$base_out"; then
+  echo "  PASS  nonexistent --base ref exits 2"; pass=$((pass+1))
+else
+  echo "  FAIL  nonexistent --base ref should exit 2 (rc=$base_rc)"; fail=$((fail+1))
+fi
+
+nonreview_out="$(PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane implement --dir "$RD" --base HEAD --timeout 5 "t" 2>&1)"; nonreview_rc=$?
+if [ "$nonreview_rc" -eq 2 ] && grep -q 'only valid with --lane review' <<<"$nonreview_out"; then
+  echo "  PASS  --base is rejected outside the review lane"; pass=$((pass+1))
+else
+  echo "  FAIL  --base outside review should exit 2 (rc=$nonreview_rc)"; fail=$((fail+1))
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine luna --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1

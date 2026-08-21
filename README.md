@@ -251,7 +251,13 @@ codex-run --lane explore   --dir REPO --timeout 1800 "why does the refresh path 
 codex-run --lane implement --dir REPO --timeout 1800 "add the RangeError guard from the plan"
 # Review stays foreground and isolated.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
+# Review committed work, including any uncommitted changes on top.
+codex-run --lane review    --dir REPO --plan docs/specs/x.md --base REF "check every requirement"
 ```
+
+Review uses the working-tree diff against `HEAD`, cached changes, and untracked
+files by default. `--base REF` instead reviews `REF..working-tree` (with
+untracked files appended); `REF` must resolve, and `--base` is review-only.
 
 (`codex-run` is on PATH after `install-skills.sh` or the plugin's SessionStart
 hook. The orchestrator invokes it directly; no wrapper agent is needed for

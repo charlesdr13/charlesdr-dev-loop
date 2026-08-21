@@ -25,7 +25,7 @@
 # Usage:
 #   codex-run.sh --lane explore   [--dir D] [--engine E] [--effort max|high|medium] [--fast] "task"
 #   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--read-only] "task"
-#   codex-run.sh --lane review    --dir D --plan FILE [--files a,b] "task"
+#   codex-run.sh --lane review    --dir D --plan FILE [--base REF] [--files a,b] "task"
 #
 # --fast is shorthand for --effort high. fast_mode is enabled explicitly on the
 # luna engine and disabled on the review lane, so it applies to luna only.
@@ -47,6 +47,7 @@ TIMEOUT=1800       # measured: median successful run 8.8 min, p90 22.8 min. A 54
                    # successful explores. Long runs are normal; see the agent docs
                    # for the background + lane-status pattern that survives them.
 PLAN=""
+BASE=""
 FILES=""
 FALLBACK=1
 STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
@@ -62,6 +63,7 @@ while [ $# -gt 0 ]; do
     --fast)      EFFORT="high"; EFFORT_SET=1; shift ;;
     --dir)       DIR="$2"; shift 2 ;;
     --plan)      PLAN="$2"; shift 2 ;;
+    --base)      BASE="$2"; shift 2 ;;
     --files)     FILES="$2"; shift 2 ;;
     --read-only) SANDBOX="read-only"; shift ;;
     --resume)    RESUME=1; shift ;;
@@ -78,6 +80,7 @@ TASK="${1:-}"
 [ -n "$LANE" ] || { echo "codex-run.sh: --lane is required" >&2; usage; }
 [ -n "$TASK" ] || { echo "codex-run.sh: no task given" >&2; exit 2; }
 [ -d "$DIR" ]  || { echo "codex-run.sh: no such directory: $DIR" >&2; exit 2; }
+[ -z "$BASE" ] || [ "$LANE" = "review" ] || { echo "codex-run.sh: --base is only valid with --lane review" >&2; exit 2; }
 command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 
 # --- global engine switch ------------------------------------------------------
@@ -257,6 +260,10 @@ run_deepseek() {
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
   [ -f "$PLAN" ] || { echo "codex-run.sh: no such plan file: $PLAN" >&2; return 2; }
+  if [ -n "$BASE" ] && ! git -C "$DIR" rev-parse --verify "$BASE" >/dev/null 2>&1; then
+    echo "codex-run.sh: invalid --base ref '$BASE'" >&2
+    return 2
+  fi
 
   # No RETURN trap here: it fires after the function's locals are gone, which
   # under `set -u` turns a successful review into exit 1. Clean up explicitly.
@@ -268,9 +275,15 @@ run_review() {
   local plan_rel; plan_rel="$(realpath --relative-to="$DIR" "$PLAN" 2>/dev/null || echo "")"
 
   if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    { git -C "$DIR" diff HEAD -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
-      git -C "$DIR" diff --cached -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
-    } > "$box/changes.diff" 2>/dev/null || true
+    if [ -n "$BASE" ]; then
+      git -C "$DIR" diff "$BASE" -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"} > "$box/changes.diff" 2>/dev/null || true
+      NOTE="Input is a git diff from $BASE to the working tree, plus untracked files as additions."
+    else
+      { git -C "$DIR" diff HEAD -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
+        git -C "$DIR" diff --cached -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
+      } > "$box/changes.diff" 2>/dev/null || true
+      NOTE="Input is a git diff of the working tree against HEAD, plus untracked files as additions."
+    fi
     # untracked files are invisible to git diff — append them as adds
     git -C "$DIR" ls-files --others --exclude-standard -z 2>/dev/null |
       while IFS= read -r -d '' f; do
@@ -278,7 +291,6 @@ run_review() {
         printf '\n--- /dev/null\n+++ b/%s\n' "$f" >> "$box/changes.diff"
         sed 's/^/+/' "$DIR/$f" >> "$box/changes.diff" 2>/dev/null || true
       done
-    NOTE="Input is a git diff of the working tree against HEAD, plus untracked files as additions."
   elif [ -n "$FILES" ]; then
     : > "$box/changes.diff"
     IFS=',' read -ra parts <<< "$FILES"
