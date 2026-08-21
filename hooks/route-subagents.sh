@@ -9,6 +9,11 @@
 # The google-drive agent, claude-code-guide, statusline-setup and friends are
 # none of this hook's business.
 #
+# An approved inline block is honoured here too, but on a SHORTER clock than the
+# edit gate: spawning the wrong agent is the expensive mistake this plugin exists
+# to catch (a feature-dev explorer burns Claude quota where a codex explore lane
+# costs cents), so the grant covers a burst of related spawns and then re-arms.
+#
 # Contract: JSON on stdout, exit 0. Silence = allow.
 
 set -euo pipefail
@@ -35,6 +40,17 @@ while [ -n "$d" ] && [ "$d" != "/" ]; do
 done
 [ -n "$root" ] || exit 0
 
+# --- honour a fresh inline-edit approval, briefly -----------------------------
+cfg() { # cfg KEY DEFAULT  — read `key = value` from .charles.toml
+  local v; v="$(grep -oE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*[0-9]+" "$root/.charles.toml" 2>/dev/null | grep -oE '[0-9]+$' | head -1)"
+  printf '%s' "${v:-$2}"
+}
+ok_minutes="${CHARLES_SUBAGENT_OK_MINUTES:-$(cfg subagent_ok_minutes 10)}"
+ok="$root/.charles/inline-ok"
+if [ -f "$ok" ] && [ -z "$(find "$ok" -mmin "+$ok_minutes" 2>/dev/null)" ]; then
+  exit 0
+fi
+
 sub="$(jq -r '.tool_input.subagent_type // empty' <<<"$payload")"
 [ -n "$sub" ] || exit 0
 
@@ -57,6 +73,10 @@ case "$sub" in
   *)
     alt='codex-run --lane implement --dir <repo> --timeout 1800 "<task>" (Bash with run_in_background: true)' ;;
 esac
+
+# PostToolUse turns this into inline-ok if the spawn actually happens (= approved).
+mkdir -p "$root/.charles" 2>/dev/null || true
+printf '%s\n' "agent:$sub" > "$root/.charles/pending-ask" 2>/dev/null || true
 
 jq -nc --arg r "This repo routes code work to a codex lane, and '$sub' is not one. Spawn $alt instead. Approve only if this genuinely is not repo code work — reading docs, a non-code lookup, or a one-off question. Bypass the session with CHARLES_INLINE_OK=1." \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'

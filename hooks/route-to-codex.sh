@@ -9,6 +9,11 @@
 # intercepted. Accepted deliberately — matching Bash would fire on every
 # `bun test > out.log` and the hook would be off within a day.
 #
+# Approving an ask is remembered: mark-inline-ok.sh (PostToolUse) converts the
+# pending marker this hook drops into .charles/inline-ok, which suppresses further
+# asks for inline_ok_minutes. Without that, nfiles only ever grows and every edit
+# for the next hour re-asks — the gate stops being a gate and becomes a nag.
+#
 # Contract: JSON on stdout, exit 0. Silence (exit 0, no output) = allow.
 
 set -euo pipefail
@@ -57,6 +62,7 @@ cfg() { # cfg KEY DEFAULT  — read `key = value` from .charles.toml
 }
 max_lines="${CHARLES_INLINE_LINES:-$(cfg inline_lines 40)}"
 max_files="${CHARLES_INLINE_FILES:-$(cfg inline_files 3)}"
+ok_minutes="${CHARLES_INLINE_OK_MINUTES:-$(cfg inline_ok_minutes 60)}"
 
 # --- new files are scaffolding: always allow ----------------------------------
 [ -e "$path" ] || exit 0
@@ -74,6 +80,15 @@ lines="${lines:-0}"
 # codex-run.sh truncates this file on a successful dispatch. Stale counters
 # (>60min) are discarded so an abandoned session doesn't poison the next one.
 mkdir -p "$root/.charles" 2>/dev/null || true
+
+# --- did you already approve inline edits in this block? ----------------------
+# Fresh marker -> stay quiet. Checked before the counter is even read, so an
+# approved block does not keep tripping a threshold it has already answered for.
+ok="$root/.charles/inline-ok"
+if [ -f "$ok" ] && [ -z "$(find "$ok" -mmin "+$ok_minutes" 2>/dev/null)" ]; then
+  exit 0
+fi
+
 touched="$root/.charles/touched"
 if [ -f "$touched" ] && [ -n "$(find "$touched" -mmin +60 2>/dev/null)" ]; then : > "$touched"; fi
 grep -qxF "$path" "$touched" 2>/dev/null || echo "$path" >> "$touched" 2>/dev/null || true
@@ -86,6 +101,9 @@ elif [ "$nfiles" -ge "$max_files" ]; then
   reason="$nfiles distinct files edited since the last codex dispatch (inline_files=$max_files) — this is a feature, not a tweak."
 fi
 [ -n "$reason" ] || exit 0
+
+# PostToolUse turns this into inline-ok if the edit actually lands (= approved).
+printf '%s\n' "$path" > "$root/.charles/pending-ask" 2>/dev/null || true
 
 jq -nc --arg r "$reason Dispatch the implement lane via a background Bash call: codex-run --lane implement --dir <repo> --timeout 1800 \"<task>\" (run_in_background: true) instead of editing inline. Approve only if this genuinely is a small local fix. Controls: inline_lines and inline_files in .charles.toml; session bypass: CHARLES_INLINE_OK=1." \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'

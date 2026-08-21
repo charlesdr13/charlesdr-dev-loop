@@ -50,7 +50,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="$(jq -r '.version' "$REPO_ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
 CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VER"
 if [ ! -d "$CACHE" ]; then
-  say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop"
+  say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin uninstall charlesdr-dev-loop@charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop  (install alone is a no-op when a version is already installed)"
 else
   drift=0
   spec_drift=0

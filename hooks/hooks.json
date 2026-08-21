@@ -1,5 +1,5 @@
 {
-  "description": "charlesdr-dev-loop: route non-trivial edits AND code-working subagents to a codex lane; warn on unclosed runs with failed lanes. Active only in repos with a .charles.toml.",
+  "description": "charlesdr-dev-loop: route non-trivial edits AND code-working subagents to a codex lane; remember an approved inline block; warn on unclosed runs with failed lanes. Active only in repos with a .charles.toml.",
   "hooks": {
     "PreToolUse": [
       {
@@ -40,6 +40,18 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/link-dispatcher.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mark-inline-ok.sh",
             "timeout": 10
           }
         ]

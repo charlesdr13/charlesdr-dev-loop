@@ -337,6 +337,9 @@ from inside a report, which is why the check reads that instead.
 8. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
    green, and its output is the proof line. Not green → `charlesdr-dev-loop:debug`
    flow. Cap **3 cycles**, then record a `FAILED` item and stop. Do not grind.
+9. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
+   requirement, with the actual verification output as evidence.
+10. **Close.** Use `run-state.sh close` with the plan's `--spec` path.
 
 ## Flow 2 — debug
 
@@ -355,6 +358,9 @@ from inside a report, which is why the check reads that instead.
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
    Same 3-cycle cap, then a `FAILED` item.
+8. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
+   requirement, with the actual verification output as evidence.
+9. **Close.** Use `run-state.sh close` with the plan's `--spec` path.
 
 ## Flow 3 — polish
 
@@ -366,6 +372,9 @@ from inside a report, which is why the check reads that instead.
 4. Direct background `codex-run --lane implement` call.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
+7. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
+   requirement, with the actual verification output as evidence.
+8. **Close.** Use `run-state.sh close` with the plan's `--spec` path.
 
 ## Flow 4 — UI polish
 
@@ -384,6 +393,8 @@ is a 27-command UI system and owns the taste judgment. Do not rebuild it here.
    `docs/specs/`. Taste disagreements become `BLOCKED-HUMAN` items.
 5. Verify green, confirm no regression in contrast/focus/tab-order/CLS, and run
    `codex-reviewer` for scope creep — the characteristic failure of polish work.
+6. Complete the plan's `## Sign-off` section, then route through the same
+   `run-state.sh close` command as the other flows.
 
 Scope is one route or one component. Screenshots and running apps go to the
 user, never to a lane: luna gets a diff, never a picture.
@@ -401,6 +412,24 @@ A hard gate, not a checklist to wave at. All three, before any implementation:
 3. **Prior art checked.** Search the repo, then whatever knowledge base this
    team keeps (a wiki, an ADR directory, a KG tool if one is configured). If the
    thing already exists, building it again is the most expensive possible outcome.
+
+## The sign-off gate
+
+The plan is the checklist at close time. Add a `## Sign-off` section and copy
+each requirement exactly, one per line, with evidence from the verification:
+
+```markdown
+## Sign-off
+
+- [x] <requirement, as written in the plan> — <evidence>
+```
+
+Evidence is output, not assertion: paste the command output or other proof
+required by the plan. `run-state.sh close --spec <file>` refuses with exit 6 if
+the section is missing or contains an unticked `- [ ]` line. Fix the requirement
+or record it as a run item; it does not ride out under a closed run. `--force`
+deliberately overrides this gate.
+The gate matches checkbox lines exactly as `- [x] ` / `- [ ] ` (single spaces); a section with no ticked line is refused.
 
 ## Proof protocol
 

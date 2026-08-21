@@ -21,3 +21,10 @@ the environment.
 `deepseek` is the free-of-codex-quota lane (deepseek-v4-flash @ max, via
 `~/.codex/deepseek.config.toml`). `default` restores luna-primary with
 deepseek as fallback.
+
+`deepseek` is peak-aware. DeepSeek bills roughly double between 01:00-04:00 and
+06:00-10:00 UTC, so dispatches inside those windows run on luna instead — at max
+reasoning with fast_mode off, since the swap is a cost move. Outside them the
+lane stays on deepseek. Setting `luna` explicitly is unaffected and keeps
+fast_mode on; so does an explicit `--engine deepseek`, which is the failure
+fallback path.

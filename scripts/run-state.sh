@@ -153,6 +153,56 @@ close)
   # An unchecked item means the run is not finished, whatever else is clean.
   # This gate existed to stop premature "done" and did not check the one thing
   # it was built for. Found by an adversarial review, 2026-08-12.
+  spec_path="$DIR/$spec"
+  # The boundary check is NOT under --force: --force is a bookkeeping override
+  # ("close anyway"), never a licence to append this run's outcome to a file
+  # outside the repo. A typo'd relative path plus --force would otherwise write
+  # to someone else's file.
+  if [ -n "$spec" ]; then
+    if command -v realpath >/dev/null 2>&1; then
+      resolved_dir="$(realpath "$DIR" 2>/dev/null || printf '%s\n' "$DIR")"
+      resolved_spec="$(realpath "$spec_path" 2>/dev/null || realpath -m "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
+    elif [ -d "$(dirname "$spec_path")" ]; then
+      resolved_dir="$(cd "$DIR" && pwd -P)"
+      # `cd`+`pwd -P` resolves the directory chain but not a final symlink, and
+      # the outcome append below follows it. Without realpath there is nothing
+      # left to resolve it with, so refuse rather than write through it.
+      if [ -L "$spec_path" ]; then
+        echo "run-state.sh: REFUSING to close — $spec is a symlink and realpath is unavailable to resolve it." >&2
+        exit 6
+      fi
+      resolved_spec="$(cd "$(dirname "$spec_path")" && pwd -P)/$(basename "$spec_path")"
+    else
+      resolved_dir="$DIR"
+      resolved_spec="$spec_path"
+    fi
+    case "$resolved_spec" in
+      "$resolved_dir"/*) spec_path="$resolved_spec" ;;
+      *)
+        echo "run-state.sh: REFUSING to close — $spec resolves outside the repository." >&2
+        exit 6
+        ;;
+    esac
+  fi
+
+  if [ "$force" -eq 0 ] && [ -n "$spec" ]; then
+    if ! grep -q '^## Sign-off$' "$spec_path" 2>/dev/null; then
+      echo "run-state.sh: REFUSING to close — $spec is missing the ## Sign-off section." >&2
+      exit 6
+    fi
+    signoff="$(sed -n '/^## Sign-off$/,/^## /p' "$spec_path")"
+    if ! grep -q '^- \[x\] ' <<<"$signoff"; then
+      echo "run-state.sh: REFUSING to close — $spec's ## Sign-off section is empty; it has no ticked requirements." >&2
+      exit 6
+    fi
+    if grep -q '^- \[ \] ' <<<"$signoff"; then
+      echo "run-state.sh: REFUSING to close — $spec has unticked sign-off requirements:" >&2
+      grep '^- \[ \] ' <<<"$signoff" | sed 's/^/  /' >&2
+      echo "run-state.sh: resolve them, or close deliberately with --force." >&2
+      exit 6
+    fi
+  fi
+
   if [ "$force" -eq 0 ] && grep -q '^- \[ \] ' "$d/RUN.md" 2>/dev/null; then
     echo "run-state.sh: REFUSING to close — the run still has open items:" >&2
     grep '^- \[ \] ' "$d/RUN.md" | sed 's/^/  /' >&2
@@ -173,8 +223,8 @@ close)
   fi
   printf '\n## Outcome\n\n%s\n\nclosed: %s\n' "$outcome" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$d/RUN.md"
   # the durable half: the outcome goes next to the committed plan it resolves
-  if [ -n "$spec" ] && [ -f "$DIR/$spec" ]; then
-    printf '\n## Run outcome — %s\n\n%s\n' "$(date -u +%Y-%m-%d)" "$outcome" >> "$DIR/$spec"
+  if [ -n "$spec" ] && [ -f "$spec_path" ]; then
+    printf '\n## Run outcome — %s\n\n%s\n' "$(date -u +%Y-%m-%d)" "$outcome" >> "$spec_path"
     echo "appended outcome to $spec"
   fi
   echo "closed run: $(basename "$d")"

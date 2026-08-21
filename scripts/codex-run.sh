@@ -36,6 +36,7 @@ set -euo pipefail
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
 ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
+PEAK_SUB=0           # 1 = deepseek was swapped to luna because DeepSeek is at peak price
 EFFORT="max"         # luna reasoning effort: max | high | medium. high is markedly
                      # faster and is Codex's own default; max is the quality ceiling.
 DIR="$PWD"
@@ -87,7 +88,18 @@ if [ "$ENGINE_SET" -eq 0 ]; then
   pick="${CHARLES_ENGINE:-}"
   [ -n "$pick" ] || pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"
   case "$pick" in
-    luna|terra|deepseek) ENGINE="$pick"; ENGINE_SET=1 ;;   # review honours it too
+    luna|terra) ENGINE="$pick"; ENGINE_SET=1 ;;            # review honours it too
+    deepseek)
+      ENGINE=deepseek; ENGINE_SET=1
+      # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
+      # In those windows luna on Codex quota is the cheaper lane, so borrow it —
+      # without fast_mode, since we are here for cost, not latency. An explicit
+      # --engine deepseek is never swapped: that is the failure fallback path.
+      # ponytail: hour arithmetic, no date library. CHARLES_PEAK_HOUR pins it for tests.
+      case "${CHARLES_PEAK_HOUR:-$(date -u +%H)}" in
+        01|02|03|06|07|08|09) ENGINE=luna; PEAK_SUB=1
+          echo "codex-run.sh: DeepSeek peak window — running this $LANE on luna instead" >&2 ;;
+      esac ;;
   esac
 fi
 
@@ -184,16 +196,19 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
 clear_touched() {
   local root="$1"
   [ -f "$root/.charles/touched" ] && : > "$root/.charles/touched"
+  # the work moved to a lane, so the "you already approved inline" grant is spent
+  rm -f "$root/.charles/inline-ok" "$root/.charles/pending-ask" 2>/dev/null || true
   return 0
 }
 
 # --- engines: luna (primary) and terra (escalation), both gpt-5.6 @ max -------
 run_gpt() { # run_gpt PROFILE
   local profile="$1" args fast
-  # fast_mode on luna only. terra is the escalation engine — it is reached after
-  # two failures, which is exactly when you want its full deliberation, not a
-  # faster answer.
-  if [ "$profile" = "terra" ]; then fast="--disable"; else fast="--enable"; fi
+  # fast_mode on luna only, and not when luna is standing in for deepseek during
+  # a peak window — that swap is a cost move, so take the full deliberation the
+  # quota already paid for. terra is the escalation engine, reached after two
+  # failures, which is exactly when you want deliberation over a faster answer.
+  if [ "$profile" = "terra" ] || [ "$PEAK_SUB" -eq 1 ]; then fast="--disable"; else fast="--enable"; fi
   if [ "$RESUME" -eq 1 ]; then
     args=(-p "$profile" exec resume --last --skip-git-repo-check "$fast" fast_mode --json -o "$RUN.last")
   else

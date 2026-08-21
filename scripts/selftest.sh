@@ -29,7 +29,7 @@ check "opted-out repo, huge edit" allow \
 
 # --- opted-in repo -----------------------------------------------------------
 mkdir -p "$BOX/repo"; printf 'inline_lines = 40\ninline_files = 3\n' > "$BOX/repo/.charles.toml"
-for f in a.ts b.ts c.ts d.md; do echo "x" > "$BOX/repo/$f"; done
+for f in a.ts b.ts c.ts d2.ts d.md; do echo "x" > "$BOX/repo/$f"; done
 
 check "small edit" allow \
   "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$small" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
@@ -59,8 +59,49 @@ check "3rd file trips file threshold" ask \
 check "counter cleared after dispatch" allow \
   "$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
 
+# --- approving an ask is remembered ------------------------------------------
+# The nag bug: nfiles only grows, so before this every edit for the next hour
+# re-asked after the 3rd file. Approval must buy silence.
+MARK="$(cd "$(dirname "$0")/.." && pwd)/hooks/mark-inline-ok.sh"
+: > "$BOX/repo/.charles/touched"
+printf '%s\n' "$BOX/repo/a.ts" "$BOX/repo/b.ts" > "$BOX/repo/.charles/touched"
+rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
+
+edit_c="$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
+check "ask fires on the 3rd file" ask "$edit_c"
+
+# the edit lands -> PostToolUse converts pending-ask into the grant
+printf '%s' "$edit_c" | bash "$MARK" >/dev/null 2>&1
+if [ -f "$BOX/repo/.charles/inline-ok" ]; then
+  echo "  PASS  approved edit writes inline-ok"; pass=$((pass+1))
+else
+  echo "  FAIL  approved edit writes inline-ok — marker missing"; fail=$((fail+1))
+fi
+
+check "4th file stays quiet after approval" allow \
+  "$(jq -nc --arg p "$BOX/repo/d2.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
+check "big edit stays quiet after approval" allow \
+  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
+
+# an expired grant re-arms the gate
+touch -d '2 hours ago' "$BOX/repo/.charles/inline-ok"
+check "expired grant asks again" ask \
+  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
+
+# a DENIED ask must not be cashable by a later edit to another file
+rm -f "$BOX/repo/.charles/inline-ok"
+printf '%s\n' "$BOX/repo/a.ts" > "$BOX/repo/.charles/pending-ask"
+printf '%s' "$(jq -nc --arg p "$BOX/repo/b.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')" | bash "$MARK" >/dev/null 2>&1
+if [ ! -f "$BOX/repo/.charles/inline-ok" ]; then
+  echo "  PASS  mismatched pending-ask grants nothing"; pass=$((pass+1))
+else
+  echo "  FAIL  mismatched pending-ask grants nothing — grant was written"; fail=$((fail+1))
+fi
+rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
+
 # --- Claude Code worktrees are exempt and do not count -----------------------
 WT="$BOX/repo/.claude/worktrees/fixture"; mkdir -p "$WT"
+rm -f "$BOX/repo/.charles/inline-ok"
 echo "x" > "$WT/a.ts"
 : > "$BOX/repo/.charles/touched"
 worktree_out="$(jq -nc --arg p "$WT/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}' | CHARLES_INLINE_OK=0 bash "$HOOK" 2>/dev/null)"
@@ -125,6 +166,36 @@ message_check() { # message_check NAME SUBAGENT_TYPE CWD EXPECTED-DISPATCH
     echo "  FAIL  $name — expected direct background dispatch"; echo "        $out"; fail=$((fail+1))
   fi
 }
+
+# --- approving a SPAWN grants too (fresh session: no edit has happened yet) ----
+rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
+spawn_payload="$(jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"Explore",prompt:"x"}}')"
+scheck_tool "first spawn of a session asks" ask Agent Explore "$BOX/repo"
+printf '%s' "$spawn_payload" | bash "$MARK" >/dev/null 2>&1
+if [ -f "$BOX/repo/.charles/inline-ok" ]; then
+  echo "  PASS  approved spawn writes inline-ok"; pass=$((pass+1))
+else
+  echo "  FAIL  approved spawn writes inline-ok — marker missing"; fail=$((fail+1))
+fi
+scheck_tool "second spawn stays quiet" allow Agent general-purpose "$BOX/repo"
+# a denied spawn must not be cashed by a different agent type
+rm -f "$BOX/repo/.charles/inline-ok"
+printf 'agent:Explore\n' > "$BOX/repo/.charles/pending-ask"
+printf '%s' "$(jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"python-pro",prompt:"x"}}')" | bash "$MARK" >/dev/null 2>&1
+if [ ! -f "$BOX/repo/.charles/inline-ok" ]; then
+  echo "  PASS  mismatched spawn pending grants nothing"; pass=$((pass+1))
+else
+  echo "  FAIL  mismatched spawn pending grants nothing — grant was written"; fail=$((fail+1))
+fi
+rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
+
+# --- the inline grant reaches the subagent gate, on a shorter clock -----------
+: > "$BOX/repo/.charles/inline-ok"
+scheck_tool "fresh grant quiets the subagent gate" allow Agent Explore "$BOX/repo"
+# 10-minute default: older than the edit gate's 60 tolerates, still asks here.
+touch -d '30 minutes ago' "$BOX/repo/.charles/inline-ok"
+scheck_tool "grant older than 10min re-arms the subagent gate" ask Agent Explore "$BOX/repo"
+rm -f "$BOX/repo/.charles/inline-ok"
 
 message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
   "codex-run --lane explore --dir <repo> --timeout 1800"
@@ -191,7 +262,7 @@ WARN="$(cd "$(dirname "$0")/.." && pwd)/hooks/warn-open-runs.sh"
 RT="$BOX/runrepo"; mkdir -p "$RT/docs/specs"
 ( cd "$RT" && git init -q && git config user.name tester && git config user.email tester@example.invalid )
 printf 'green = "true"\n' > "$RT/.charles.toml"
-printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n' > "$RT/docs/specs/p.md"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n\n- [x] existing lifecycle fixture — selftest output\n' > "$RT/docs/specs/p.md"
 
 rcheck() { # rcheck NAME EXPECT-SUBSTRING COMMAND...
   local name="$1" want="$2"; shift 2
@@ -995,7 +1066,8 @@ fi
 # Codex quota runs out; the lanes should move to another engine without a
 # restart or a reinstall. The file is read at dispatch time, so they do.
 printf 'deepseek\n' > "$RD/engine"
-PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
+# CHARLES_PEAK_HOUR pins the clock: off-peak, so the deepseek pick stands.
+PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" CHARLES_PEAK_HOUR=12 bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
 if grep -q -- '-p deepseek' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  engine file switches the review lane to deepseek"; pass=$((pass+1))
 else
@@ -1015,7 +1087,209 @@ if grep -q -- '-m gpt-5.6-luna' "$RD/args.txt" 2>/dev/null; then
 else
   echo "  FAIL  CHARLES_ENGINE must beat the engine file"; fail=$((fail+1))
 fi
-rm -f "$RD/engine"
+printf 'deepseek\n' > "$ED/engine"
+# DeepSeek peak window: borrow luna on Codex quota, and without fast_mode —
+# the swap buys cost, so spend the quota on deliberation rather than latency.
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_PEAK_HOUR=07 bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '-p luna' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  deepseek engine swaps to luna in a peak window"; pass=$((pass+1))
+else
+  echo "  FAIL  peak window must swap deepseek to luna"; fail=$((fail+1))
+fi
+if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  the peak swap runs luna without fast_mode"; pass=$((pass+1))
+else
+  echo "  FAIL  peak-swapped luna must not use fast_mode"; fail=$((fail+1))
+fi
+
+# The deepseek lane runs codex-ds.sh, not codex, so it needs its own HOME —
+# without one these two cases would reach the real wrapper and bill a live call.
+mkdir -p "$ED/home/.claude/skills/codex-deepseek/scripts"
+printf '#!/usr/bin/env bash\ntouch %s/ds-ran\nprintf "ds\\n"\n' "$ED" \
+  > "$ED/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$ED/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+
+rm -f "$ED/ds-ran"
+HOME="$ED/home" PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_PEAK_HOUR=12 bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if [ -e "$ED/ds-ran" ]; then
+  echo "  PASS  off-peak keeps the deepseek engine"; pass=$((pass+1))
+else
+  echo "  FAIL  off-peak must stay on deepseek"; fail=$((fail+1))
+fi
+
+# the fallback path passes --engine deepseek explicitly; swapping it back to luna
+# would send a failed luna dispatch straight back to luna.
+rm -f "$ED/ds-ran"
+HOME="$ED/home" PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_PEAK_HOUR=07 bash "$RUN_SH" --lane implement --engine deepseek --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if [ -e "$ED/ds-ran" ]; then
+  echo "  PASS  explicit --engine deepseek is never peak-swapped"; pass=$((pass+1))
+else
+  echo "  FAIL  explicit --engine deepseek must survive a peak window"; fail=$((fail+1))
+fi
+rm -f "$RD/engine" "$ED/engine"
+
+# --- sign-off gate ------------------------------------------------------------
+SG="$BOX/signoff"; mkdir -p "$SG/docs/specs"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n' > "$SG/docs/specs/no-section.md"
+sg_run="$(bash "$RS" init "$SG" feature "sign-off gate" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+cp "$sg_run_md" "$SG/no-section.run.before"
+cp "$SG/docs/specs/no-section.md" "$SG/no-section.spec.before"
+no_section_out="$(bash "$RS" close "$SG" done --spec docs/specs/no-section.md 2>&1)"; no_section_rc=$?
+if [ "$no_section_rc" -eq 6 ] && grep -qF 'docs/specs/no-section.md' <<<"$no_section_out" \
+  && grep -qF '## Sign-off' <<<"$no_section_out"; then
+  echo "  PASS  close refuses spec with no Sign-off section"; pass=$((pass+1))
+else
+  echo "  FAIL  missing Sign-off section should refuse with exit 6 (rc=$no_section_rc)"; fail=$((fail+1))
+fi
+if cmp -s "$sg_run_md" "$SG/no-section.run.before" \
+  && cmp -s "$SG/docs/specs/no-section.md" "$SG/no-section.spec.before"; then
+  echo "  PASS  no-section refusal leaves RUN.md and spec byte-identical"; pass=$((pass+1))
+else
+  echo "  FAIL  no-section refusal must leave RUN.md and spec byte-identical"; fail=$((fail+1))
+fi
+bash "$RS" close "$SG" forced --spec docs/specs/no-section.md --force >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  echo "  PASS  --force overrides missing Sign-off section"; pass=$((pass+1))
+else
+  echo "  FAIL  --force should override missing Sign-off section"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n\n- [ ] unticked requirement — no proof yet\n' \
+  > "$SG/docs/specs/unticked.md"
+sg_run="$(bash "$RS" init "$SG" feature "unticked sign-off" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+cp "$sg_run_md" "$SG/unticked.run.before"
+cp "$SG/docs/specs/unticked.md" "$SG/unticked.spec.before"
+unticked_out="$(bash "$RS" close "$SG" done --spec docs/specs/unticked.md 2>&1)"; unticked_rc=$?
+if [ "$unticked_rc" -eq 6 ] && grep -qF 'docs/specs/unticked.md' <<<"$unticked_out" \
+  && grep -qF 'unticked' <<<"$unticked_out"; then
+  echo "  PASS  close refuses unticked sign-off requirement"; pass=$((pass+1))
+else
+  echo "  FAIL  unticked Sign-off should refuse with exit 6 (rc=$unticked_rc)"; fail=$((fail+1))
+fi
+if cmp -s "$sg_run_md" "$SG/unticked.run.before" \
+  && cmp -s "$SG/docs/specs/unticked.md" "$SG/unticked.spec.before"; then
+  echo "  PASS  unticked refusal leaves RUN.md and spec byte-identical"; pass=$((pass+1))
+else
+  echo "  FAIL  unticked refusal must leave RUN.md and spec byte-identical"; fail=$((fail+1))
+fi
+bash "$RS" close "$SG" forced --spec docs/specs/unticked.md --force >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  echo "  PASS  --force overrides unticked sign-off requirement"; pass=$((pass+1))
+else
+  echo "  FAIL  --force should override unticked Sign-off"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n\n- [x] checked requirement — selftest output\n' \
+  > "$SG/docs/specs/ticked.md"
+sg_run="$(bash "$RS" init "$SG" feature "ticked sign-off" 2>/dev/null)"
+bash "$RS" close "$SG" done --spec docs/specs/ticked.md >/dev/null 2>&1
+if [ $? -eq 0 ] && grep -q '^## Outcome$' "$SG/.charles/runs/$sg_run/RUN.md" \
+  && grep -q '^## Run outcome' "$SG/docs/specs/ticked.md"; then
+  echo "  PASS  close succeeds with every Sign-off box ticked"; pass=$((pass+1))
+else
+  echo "  FAIL  ticked Sign-off should allow close"; fail=$((fail+1))
+fi
+
+sg_run="$(bash "$RS" init "$SG" feature "no spec close" 2>/dev/null)"
+bash "$RS" close "$SG" done >/dev/null 2>&1
+if [ $? -eq 0 ] && grep -q '^## Outcome$' "$SG/.charles/runs/$sg_run/RUN.md"; then
+  echo "  PASS  close without --spec remains unaffected"; pass=$((pass+1))
+else
+  echo "  FAIL  close without --spec should remain unaffected"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n' \
+  > "$SG/docs/specs/empty.md"
+sg_run="$(bash "$RS" init "$SG" feature "empty sign-off" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+cp "$sg_run_md" "$SG/empty.run.before"
+cp "$SG/docs/specs/empty.md" "$SG/empty.spec.before"
+empty_out="$(bash "$RS" close "$SG" done --spec docs/specs/empty.md 2>&1)"; empty_rc=$?
+if [ "$empty_rc" -eq 6 ] && grep -qF 'section is empty' <<<"$empty_out"; then
+  echo "  PASS  close refuses Sign-off section with no ticked line"; pass=$((pass+1))
+else
+  echo "  FAIL  empty Sign-off should refuse with exit 6 (rc=$empty_rc)"; fail=$((fail+1))
+fi
+if cmp -s "$sg_run_md" "$SG/empty.run.before" \
+  && cmp -s "$SG/docs/specs/empty.md" "$SG/empty.spec.before"; then
+  echo "  PASS  empty Sign-off refusal leaves RUN.md and spec byte-identical"; pass=$((pass+1))
+else
+  echo "  FAIL  empty Sign-off refusal must leave RUN.md and spec byte-identical"; fail=$((fail+1))
+fi
+bash "$RS" close "$SG" forced --spec docs/specs/empty.md --force >/dev/null 2>&1
+if [ $? -eq 0 ] && grep -q '^## Outcome$' "$sg_run_md"; then
+  echo "  PASS  --force overrides empty Sign-off refusal"; pass=$((pass+1))
+else
+  echo "  FAIL  --force should override empty Sign-off refusal"; fail=$((fail+1))
+fi
+
+mkdir -p "$BOX/outside"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n\n- [x] outside target — selftest output\n' \
+  > "$BOX/outside/outside.md"
+sg_run="$(bash "$RS" init "$SG" feature "outside spec" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+cp "$sg_run_md" "$SG/outside.run.before"
+cp "$BOX/outside/outside.md" "$SG/outside.spec.before"
+outside_out="$(bash "$RS" close "$SG" done --spec ../outside/outside.md 2>&1)"; outside_rc=$?
+if [ "$outside_rc" -eq 6 ] && grep -qF 'outside the repository' <<<"$outside_out"; then
+  echo "  PASS  close refuses --spec outside the repository"; pass=$((pass+1))
+else
+  echo "  FAIL  outside --spec should refuse with exit 6 (rc=$outside_rc)"; fail=$((fail+1))
+fi
+if cmp -s "$sg_run_md" "$SG/outside.run.before" \
+  && cmp -s "$BOX/outside/outside.md" "$SG/outside.spec.before"; then
+  echo "  PASS  outside-spec refusal leaves RUN.md and spec byte-identical"; pass=$((pass+1))
+else
+  echo "  FAIL  outside-spec refusal must leave RUN.md and spec byte-identical"; fail=$((fail+1))
+fi
+# --force is a bookkeeping override, not a licence to write outside the repo.
+forced_out="$(bash "$RS" close "$SG" forced --spec ../outside/outside.md --force 2>&1)"; forced_rc=$?
+if [ "$forced_rc" -eq 6 ] && grep -qF 'outside the repository' <<<"$forced_out" \
+  && cmp -s "$sg_run_md" "$SG/outside.run.before" \
+  && cmp -s "$BOX/outside/outside.md" "$SG/outside.spec.before"; then
+  echo "  PASS  --force does not override the outside-spec boundary"; pass=$((pass+1))
+else
+  echo "  FAIL  --force must not write outside the repo (rc=$forced_rc)"; fail=$((fail+1))
+fi
+
+# the outside-spec run is still open now that --force cannot close it past the
+# boundary; retire it without a spec so the next case has exactly one open run.
+bash "$RS" close "$SG" "retired" >/dev/null 2>&1
+
+# no realpath on PATH: a final symlink out of the repo must be refused, not
+# written through. PATH is stripped to a shim dir holding everything but realpath.
+mkdir -p "$BOX/norp"
+# mirror the whole PATH into a shim dir, minus realpath itself
+while IFS= read -r tp; do
+  tn="${tp##*/}"
+  [ "$tn" = "realpath" ] && continue
+  [ -e "$BOX/norp/$tn" ] || ln -sf "$tp" "$BOX/norp/$tn" 2>/dev/null
+done < <(find ${PATH//:/ } -maxdepth 1 \( -type f -perm -u+x -o -type l \) 2>/dev/null)
+ln -sf "$BOX/outside/outside.md" "$SG/docs/specs/link.md"
+sg_run="$(bash "$RS" init "$SG" feature "symlink spec" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+cp "$BOX/outside/outside.md" "$SG/link.spec.before"
+link_out="$(PATH="$BOX/norp" bash "$RS" close "$SG" done --spec docs/specs/link.md 2>&1)"; link_rc=$?
+if [ "$link_rc" -eq 6 ] && cmp -s "$BOX/outside/outside.md" "$SG/link.spec.before"; then
+  echo "  PASS  symlinked --spec is refused when realpath is unavailable"; pass=$((pass+1))
+else
+  echo "  FAIL  symlinked --spec must not be written through (rc=$link_rc)"; fail=$((fail+1))
+fi
+bash "$RS" close "$SG" "retired" >/dev/null 2>&1
+
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n## Sign-off\n\n- [x] in-repo target — selftest output\n' \
+  > "$SG/docs/specs/inside.md"
+sg_run="$(bash "$RS" init "$SG" feature "inside spec" 2>/dev/null)"
+sg_run_md="$SG/.charles/runs/$sg_run/RUN.md"
+bash "$RS" close "$SG" done --spec docs/specs/inside.md >/dev/null 2>&1
+if [ $? -eq 0 ] && grep -q '^## Outcome$' "$sg_run_md" \
+  && grep -q '^## Run outcome' "$SG/docs/specs/inside.md"; then
+  echo "  PASS  ordinary in-repo --spec close still succeeds"; pass=$((pass+1))
+else
+  echo "  FAIL  ordinary in-repo --spec close should succeed"; fail=$((fail+1))
+fi
 
 echo
 echo "$pass passed, $fail failed"
