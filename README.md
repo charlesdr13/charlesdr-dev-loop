@@ -1,8 +1,8 @@
 # charlesdr-dev-loop
 
 Claude Code stops writing your code and starts running the shop. Exploration and
-implementation go out to Codex models at max reasoning; a reviewer that has never
-seen the implementer grades the result against the plan.
+implementation go out to Codex models at max reasoning; review uses sol at medium,
+luna/terra at max, and `--effort` overrides.
 
 ```bash
 cd your-repo
@@ -32,7 +32,7 @@ flowchart TD
     TRUTH -->|all pass| PLAN["plan → docs/specs/<br/>(+ chunks manifest for 2+ disjoint slices)"]
 
     PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
-    IMPL --> REV["review<br/><b>sol @ max</b> · isolated"]
+    IMPL --> REV["review<br/><b>sol @ medium · luna/terra @ max</b><br/>--effort overrides · isolated"]
     REV --> GREEN{"green.sh<br/>real exit code"}
 
     GREEN -->|"red, under 3 cycles"| IMPL
@@ -95,7 +95,7 @@ flowchart LR
 
     SPEC -->|copied| PLANMD
     SRC -->|git diff HEAD| DIFF
-    BOX --> REV["reviewer<br/>sol @ max · read-only"]
+    BOX --> REV["reviewer<br/>sol @ medium · luna/terra @ max<br/>--effort overrides · read-only"]
 
     TRANS -.->|"unreachable — different filesystem"| REV
     SRC  -.->|"unreachable"| REV
@@ -201,11 +201,12 @@ cannot verify itself cannot honestly say it is finished.
 |---|---|---|---|
 | explore | gpt-5.6-luna | max | read-only |
 | implement | gpt-5.6-luna | max | workspace-write |
-| review | gpt-5.6-sol | max | read-only, isolated temp dir |
+| review | gpt-5.6-sol by default; gpt-5.6-luna/terra with `--engine` | sol: medium; luna/terra: max; `--effort` overrides | read-only, isolated temp dir |
 
-luna at max is the primary engine for every dispatch. deepseek-v4-flash is the
-fallback, tried automatically when luna fails, or forced with `--engine deepseek`
-for a deliberately wide, cheap sweep.
+luna at max is the primary engine for explore and implement. Review uses sol at
+medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
+is the fallback, tried automatically when luna fails, or forced with `--engine
+deepseek` for a deliberately wide, cheap sweep.
 
 To move every lane — explore, implement and review — onto one engine without a
 restart, run `/charlesdr-dev-loop:engine deepseek` (`luna`, `terra`, `default`

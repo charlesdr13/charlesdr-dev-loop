@@ -18,7 +18,7 @@ the flow, and do not silently skip it either.
 |---|---|---|---|
 | Explore | `--lane explore` | gpt-5.6-luna @ max | read-only |
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
-| Review | `--lane review` | gpt-5.6-sol @ max | read-only, isolated temp dir |
+| Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
 **Long dispatches are normal — measured, not guessed.** Older all-lane baseline
 (179 real runs; predates the implement remeasurement below): median successful
@@ -39,10 +39,12 @@ Add `--fast` (or `--effort high`) when latency matters more than the last
 increment of rigour — scoped lookups, "where is X", a sanity check. Keep `max`
 for anything where a plausible-but-wrong answer is expensive.
 
-**luna at max is the primary engine for every dispatch.** deepseek-v4-flash is
-the fallback: the wrapper retries on it automatically when luna fails, and you
-can force it with `--engine deepseek` when you deliberately want a wide cheap
-sweep. Do not route to deepseek silently — luna first is the default.
+**luna at max is the primary engine for explore and implement.** Review uses
+sol at medium by default, luna/terra at max, and `--effort` overrides.
+deepseek-v4-flash is the fallback: the wrapper retries on it automatically when
+luna fails, and you can force it with `--engine deepseek` when you deliberately
+want a wide cheap sweep. Do not route to deepseek silently — luna first is the
+default.
 
 This costs real money on wide fan-outs. A 5-explorer luna sweep is not the
 cents-per-task exercise the deepseek lane was, so size fleets to the question

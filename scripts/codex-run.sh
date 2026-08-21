@@ -4,10 +4,10 @@
 # Roles (--lane):
 #   explore   read-only investigation
 #   implement writes into the working tree
-#   review    adversarial grading, ISOLATED. sol @ max by default; --engine
-#             luna|terra runs the same isolated review on another model. Review
-#             is read-only and the cheapest lane, so two in parallel is cheap —
-#             and measured, two models overlapped on 1 finding out of 13.
+#   review    adversarial grading, ISOLATED. sol @ medium by default; luna/terra
+#             @ max; --effort overrides. Review is read-only and the cheapest
+#             lane, so two in parallel is cheap — and measured, two models
+#             overlapped on 1 finding out of 13.
 #
 # Engines (--engine), for explore and implement:
 #   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
@@ -35,8 +35,9 @@ set -euo pipefail
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
 ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
+EFFORT_SET=0         # review picks effort from its resolved model unless set
 PEAK_SUB=0           # 1 = deepseek was swapped to luna because DeepSeek is at peak price
-EFFORT="max"         # luna reasoning effort: max | high | medium. high is markedly
+EFFORT="max"         # default reasoning effort: max | high | medium. high is markedly
                      # faster and is Codex's own default; max is the quality ceiling.
 DIR="$PWD"
 SANDBOX="workspace-write"
@@ -57,8 +58,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --lane)      LANE="$2"; shift 2 ;;
     --engine)    ENGINE="$2"; ENGINE_SET=1; shift 2 ;;
-    --effort)    EFFORT="$2"; shift 2 ;;
-    --fast)      EFFORT="high"; shift ;;
+    --effort)    EFFORT="$2"; EFFORT_SET=1; shift 2 ;;
+    --fast)      EFFORT="high"; EFFORT_SET=1; shift ;;
     --dir)       DIR="$2"; shift 2 ;;
     --plan)      PLAN="$2"; shift 2 ;;
     --files)     FILES="$2"; shift 2 ;;
@@ -252,7 +253,7 @@ run_deepseek() {
   return "$rc"
 }
 
-# --- lane: review (sol @ max, isolated temp dir) ------------------------------
+# --- lane: review (sol @ medium; luna/terra @ max; isolated temp dir) ---------
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
   [ -f "$PLAN" ] || { echo "codex-run.sh: no such plan file: $PLAN" >&2; return 2; }
@@ -313,6 +314,13 @@ run_review() {
     esac
   else
     rmodel="gpt-5.6-sol"; rprofile=()
+  fi
+
+  if [ "$EFFORT_SET" -eq 0 ]; then
+    case "$rmodel" in
+      gpt-5.6-sol)        EFFORT=medium ;;
+      gpt-5.6-luna|gpt-5.6-terra) EFFORT=max ;;
+    esac
   fi
 
   local prompt="You are an adversarial reviewer. You can see exactly two files: plan.md

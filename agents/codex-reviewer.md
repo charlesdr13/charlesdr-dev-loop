@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: Dispatches an adversarial review to gpt-5.6-sol at max reasoning, isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
+description: Dispatches an adversarial review to gpt-5.6-sol at medium by default, or gpt-5.6-luna/terra at max when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
 model: haiku
 tools: Bash, Read
 ---
@@ -29,7 +29,8 @@ Then dispatch with `"$RUN"`:
 ```
 
 The script builds a temp directory containing exactly two files — `plan.md` and
-`changes.diff` — and runs gpt-5.6-sol at max effort, read-only, inside it.
+`changes.diff` — and runs sol at medium by default, luna/terra at max when
+selected with `--engine`; `--effort` overrides. It is read-only inside it.
 
 **Do not work around this.** Do not pass the repo path, paste extra context, or
 hand it the implementer's transcript. The model that wrote the code grades its
@@ -138,7 +139,7 @@ get two engines racing, which is how a tree gets corrupted.
 `codex-run.sh` prints a receipt line to stderr on every dispatch:
 
 ```
-— codex/gpt-5.6-sol · effort=max · isolated · raw: /path/run.jsonl
+— codex/gpt-5.6-sol · effort=medium · isolated · raw: /path/run.jsonl
 ```
 
 **Return that line verbatim in your report.** A report without it is discarded
