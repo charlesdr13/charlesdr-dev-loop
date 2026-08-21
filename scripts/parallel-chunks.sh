@@ -37,6 +37,23 @@ REPO="$(cd -- "$REPO" && pwd)"
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 1; }
 
+root="$REPO"
+root="$(realpath -m "$root" 2>/dev/null || echo "$root")"
+while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do
+  parent="$(dirname "$root")"; [ "$parent" = "$root" ] && break; root="$parent"
+done
+cfg() { # cfg KEY DEFAULT — read `key = value` from .charles.toml
+  local v; v="$(sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*(#.*)?[[:space:]]*$/\1/p" "$root/.charles.toml" 2>/dev/null | head -1)"
+  if [ -z "$v" ] && grep -qE "^[[:space:]]*$1[[:space:]]*=" "$root/.charles.toml" 2>/dev/null; then
+    echo "parallel-chunks.sh: WARN: invalid $1; using default $2" >&2
+  fi
+  echo "${v:-$2}"
+}
+parallel_min_chunks="${CHARLES_PARALLEL_MIN_CHUNKS:-$(cfg parallel_min_chunks 2)}"
+case "$parallel_min_chunks" in
+  ''|*[!0-9]*|0|1) echo "parallel-chunks.sh: WARN: invalid parallel_min_chunks; using default 2" >&2; parallel_min_chunks=2 ;;
+esac
+
 if ! jq -e '
   if type != "array" then false
   else all(.[];
@@ -58,7 +75,7 @@ if ! jq -e '
 fi
 
 n="$(jq -r 'length' "$SPEC")"
-[ "$n" -ge 2 ] || { echo "fewer than two chunks — run it serially, the setup is not worth it" >&2; exit 1; }
+[ "$n" -ge "$parallel_min_chunks" ] || { echo "fewer than two chunks — run it serially, the setup is not worth it" >&2; exit 1; }
 
 duplicate_names="$(jq -r 'map(.name) | sort | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$SPEC")"
 if [ -n "$duplicate_names" ]; then
@@ -104,7 +121,8 @@ return_worktree() {
 
 cleanup() {
   local cleanup_rc="$1" pid i wt receipt run
-  trap - EXIT INT TERM
+  trap '' INT TERM
+  trap - EXIT
 
   # A signal can arrive while codex is still writing; wait before releasing its
   # worktree or the lease can be reused while the child is mutating it.
@@ -117,19 +135,27 @@ cleanup() {
     wait "$pid" 2>/dev/null || true
   done
 
+  # All children have been waited on above, so receipts have no concurrent
+  # writer here and aggregation does not need a lock.
   for i in "${!CH_WT[@]}"; do
     wt="${CH_WT[$i]}"
     receipt="$wt/.charles/dispatches.jsonl"
-    if [ -f "$receipt" ]; then
-      if ! mkdir -p -- "$REPO/.charles" || ! cat "$receipt" >> "$REPO/.charles/dispatches.jsonl"; then
-        echo "  ${CH_NAME[$i]}: FAILED — could not aggregate $receipt" >&2
+    if [ "${CH_RC[$i]+set}" = set ] || [ -n "${CH_PID[$i]:-}" ]; then
+      if [ -f "$receipt" ]; then
+        if ! mkdir -p -- "$REPO/.charles" || ! cat "$receipt" >> "$REPO/.charles/dispatches.jsonl"; then
+          echo "  ${CH_NAME[$i]}: FAILED — could not aggregate $receipt" >&2
+          CH_KEEP[$i]=1
+          cleanup_rc=3
+        else
+          while IFS= read -r run; do
+            [ -n "$run" ] || continue
+            echo "  ${CH_NAME[$i]}: run $run"
+          done < <(jq -r 'select(.run != null) | .run' "$receipt" 2>/dev/null | sort -u)
+        fi
+      else
+        echo "  ${CH_NAME[$i]}: FAILED — missing receipt $receipt" >&2
         CH_KEEP[$i]=1
         cleanup_rc=3
-      else
-        while IFS= read -r run; do
-          [ -n "$run" ] || continue
-          echo "  ${CH_NAME[$i]}: run $run"
-        done < <(jq -r 'select(.run != null) | .run' "$receipt" 2>/dev/null | sort -u)
       fi
     fi
 
@@ -268,6 +294,9 @@ fi
 
 for i in "${!CH_WT[@]}"; do
   wt="${CH_WT[$i]}"
+  rename_destinations=()
+  rename_sources=()
+  deletions=()
   while IFS= read -r -d '' record; do
     xy="${record:0:2}"; path="${record:3}"
     if [[ "$xy" == *R* ]]; then
@@ -276,9 +305,10 @@ for i in "${!CH_WT[@]}"; do
         continue
       fi
       target_dir="$(dirname -- "$path")"
+      rename_destinations+=("$path")
+      rename_sources+=("$old_path")
       if mkdir -p -- "$REPO/$target_dir" \
-        && cp -a -- "$wt/$path" "$REPO/$path" \
-        && rm -f -- "$REPO/$old_path"; then
+        && cp -a -- "$wt/$path" "$REPO/$path"; then
         echo "  ${CH_NAME[$i]}: merged rename $old_path -> $path"
       else
         echo "  ${CH_NAME[$i]}: FAILED — could not merge rename $old_path -> $path" >&2
@@ -297,12 +327,7 @@ for i in "${!CH_WT[@]}"; do
     elif internal_path "$path"; then
       continue
     elif [[ "$xy" == *D* ]]; then
-      if rm -f -- "$REPO/$path"; then
-        echo "  ${CH_NAME[$i]}: merged deletion $path"
-      else
-        echo "  ${CH_NAME[$i]}: FAILED — could not delete $path" >&2
-        CH_KEEP[$i]=1; rc=3
-      fi
+      deletions+=("$path")
     else
       target_dir="$(dirname -- "$path")"
       if mkdir -p -- "$REPO/$target_dir" && cp -a -- "$wt/$path" "$REPO/$path"; then
@@ -313,6 +338,25 @@ for i in "${!CH_WT[@]}"; do
       fi
     fi
   done < "${CH_STATUS[$i]}"
+
+  for path in "${deletions[@]}"; do
+    if rm -f -- "$REPO/$path"; then
+      echo "  ${CH_NAME[$i]}: merged deletion $path"
+    else
+      echo "  ${CH_NAME[$i]}: FAILED — could not delete $path" >&2
+      CH_KEEP[$i]=1; rc=3
+    fi
+  done
+
+  for old_path in "${rename_sources[@]}"; do
+    for path in "${rename_destinations[@]}"; do
+      [ "$old_path" = "$path" ] && continue 2
+    done
+    if ! rm -f -- "$REPO/$old_path"; then
+      echo "  ${CH_NAME[$i]}: FAILED — could not remove rename source $old_path" >&2
+      CH_KEEP[$i]=1; rc=3
+    fi
+  done
 done
 
 if [ "$rc" -eq 0 ] && [ "$NO_GREEN" -eq 0 ]; then

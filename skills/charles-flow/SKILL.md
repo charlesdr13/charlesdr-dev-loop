@@ -251,8 +251,10 @@ still carry a long requirement list.
 **Count the checkable requirements in the plan before dispatching.**
 
 - **1-5** — usually one slice; split when the plan has a natural disjoint seam.
-- **6-10** — two dispatches, split on a natural seam (a layer, a module, a
-  user-visible behaviour), `green.sh` between them.
+- **6-10** — two chunks, split on a natural seam (a layer, a module, a
+  user-visible behaviour); disjoint chunks run concurrently and `green.sh`
+  runs once on the combined result. If they overlap, run them serially with
+  `green.sh` between them.
 - **11+** — three or more, and reconsider whether this is one plan. A plan with
   fifteen requirements is usually two features that have not been separated yet.
 

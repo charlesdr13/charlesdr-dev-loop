@@ -198,6 +198,10 @@ flow at unhardened machinery is worse than the status quo.
     partial merge, but a `cp` failing midway through an accepted batch still
     leaves the root half-updated. A real fix means staging and rollback; the
     likelihood (disk/permission error mid-copy) does not justify it yet.
+  - **The root dirty-file check is one-time.** It runs before the children, so a
+    human editing a declared file during a long batch can still have it
+    overwritten at merge; a lock over the whole batch is the only real fix and
+    is not worth it yet.
   - **Combined-green failure leaves the merge in place.** A1 reports red; it does
     not revert. Reverting would discard work the operator may want to debug, and
     the tree is a git repo — `git diff` is the rollback.
@@ -253,7 +257,14 @@ Green at close: `bash scripts/selftest.sh && bash scripts/doctor.sh` -> `155 pas
 - [x] **B1b** — manifest validation before any lease (`:40-68`): array of objects,
   required fields, unique names, no absolute or `..` paths.
 - [x] **B2** — `SKILL.md` states parallel at 2+ disjoint chunks with serial as the
-  fallback; threshold configurable as `parallel_min_chunks`.
+  fallback; `parallel-chunks.sh:52` reads `parallel_min_chunks` from
+  `.charles.toml` (default 2, `CHARLES_PARALLEL_MIN_CHUNKS` overrides) and
+  enforces it at `:78`. Test: `parallel_min_chunks refuses below the configured
+  threshold`.
+  NOTE: this was first signed off against the documentation alone, while the
+  runner still hardcoded 2. A max-effort review caught it; two medium-effort
+  reviews had not. Ticking a requirement because the prose describes it is the
+  failure mode this gate exists to prevent.
 - [x] **B3** — `SKILL.md:264` assigns `SCRIPTS` with the
   `readlink -f "$(command -v codex-run)"` idiom, so the documented invocation runs
   as written. Verified: `grep -n 'SCRIPTS=' skills/charles-flow/SKILL.md` -> hit.

@@ -275,16 +275,34 @@ parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND
   git -C "$repo" worktree add -q "$worktree" HEAD
 }
 
+parallel_swap_fixture() { # parallel_swap_fixture REPO WORKTREE
+  local repo="$1" worktree="$2"
+  mkdir -p "$repo" "$(dirname "$worktree")"
+  (
+    cd "$repo" && git init -q && git config user.name tester \
+      && git config user.email tester@example.invalid \
+      && printf 'green = "true"\n' > .charles.toml \
+      && printf 'alpha base\n' > alpha && printf 'beta base\n' > beta \
+      && printf 'base\n' > gamma && git add . && git commit -qm init
+  )
+  git -C "$repo" worktree add -q "$worktree" HEAD
+}
+
 parallel_fixture "$PD/good-repo" "$PD/good-alpha" true
 parallel_fixture "$PD/oob-repo" "$PD/oob-alpha" true
 parallel_fixture "$PD/failed-repo" "$PD/failed-alpha" true
 parallel_fixture "$PD/red-repo" "$PD/red-alpha" false
+parallel_fixture "$PD/missing-repo" "$PD/missing-alpha" true
+parallel_swap_fixture "$PD/swap-repo" "$PD/swap-alpha"
 git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
 git -C "$PD/oob-repo" worktree add -q "$PD/oob-beta" HEAD
 git -C "$PD/failed-repo" worktree add -q "$PD/failed-beta" HEAD
 git -C "$PD/red-repo" worktree add -q "$PD/red-beta" HEAD
+git -C "$PD/missing-repo" worktree add -q "$PD/missing-beta" HEAD
+git -C "$PD/swap-repo" worktree add -q "$PD/swap-gamma" HEAD
 
 printf '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/spec.json"
+printf '[{"name":"swap","files":["alpha","beta"],"task":"x"},{"name":"gamma","files":["gamma"],"task":"x"}]\n' > "$PD/swap-spec.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$PD/bin/treehouse"; chmod +x "$PD/bin/treehouse"
 mkdir -p "$PD/lease-repo"; ( cd "$PD/lease-repo" && git init -q ) >/dev/null 2>&1
 parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/lease-repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
@@ -337,10 +355,14 @@ case "\${1:-}" in
       failed-repo:chunk-beta) printf '%s\n' "$PD/failed-beta" ;;
       red-repo:chunk-alpha) printf '%s\n' "$PD/red-alpha" ;;
       red-repo:chunk-beta) printf '%s\n' "$PD/red-beta" ;;
+      missing-repo:chunk-alpha) printf '%s\n' "$PD/missing-alpha" ;;
+      missing-repo:chunk-beta) printf '%s\n' "$PD/missing-beta" ;;
+      swap-repo:chunk-swap) printf '%s\n' "$PD/swap-alpha" ;;
+      swap-repo:chunk-gamma) printf '%s\n' "$PD/swap-gamma" ;;
       *) exit 1 ;;
     esac
     ;;
-  return) exit 0 ;;
+  return) printf '%s\n' "\${2:-}" >> "\${CHARLES_RETURN_RECORD:?}" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -357,12 +379,47 @@ case "$PWD" in
   */failed-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */red-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
   */red-beta) printf 'beta merged\n' > beta; exit 0 ;;
+  */missing-alpha)
+    printf 'alpha changed\n' > alpha
+    rm -f .charles/dispatches.jsonl
+    mkdir -p .charles/dispatches.jsonl
+    exit 0 ;;
+  */missing-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */swap-alpha)
+    mv alpha .swap-alpha
+    mv beta alpha
+    mv .swap-alpha beta
+    exit 0 ;;
+  */swap-gamma) printf 'gamma merged\n' > gamma; exit 0 ;;
   *) exit 1 ;;
 esac
 EOF
 chmod +x "$PD/bin/codex"
 
-good_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/good-repo" "$PD/spec.json" 2>&1)"; good_rc=$?
+# Git status cannot infer a two-way swap while both original paths remain
+# present, so feed the merger the exact rename records for this fixture.
+REAL_GIT="$(command -v git)"
+cat > "$PD/bin/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "-C" ] && [ "\${2:-}" = "$PD/swap-alpha" ] && [ "\${3:-}" = "status" ]; then
+  printf 'R  beta\\0alpha\\0R  alpha\\0beta\\0'
+else
+  exec "$REAL_GIT" "\$@"
+fi
+EOF
+chmod +x "$PD/bin/git"
+
+printf 'parallel_min_chunks = 3\n' >> "$PD/good-repo/.charles.toml"
+threshold_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/good-repo" "$PD/spec.json" 2>&1)"; threshold_rc=$?
+if [ "$threshold_rc" -eq 1 ] && grep -qF 'fewer than two chunks' <<<"$threshold_out" \
+  && ! grep -qF 'leasing 2 chunks' <<<"$threshold_out"; then
+  echo "  PASS  parallel_min_chunks refuses below the configured threshold"; pass=$((pass+1))
+else
+  echo "  FAIL  parallel_min_chunks must refuse below the configured threshold (rc=$threshold_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/good-returns"
+good_out="$(PATH="$PD/bin:$PATH" CHARLES_PARALLEL_MIN_CHUNKS=2 CHARLES_RETURN_RECORD="$PD/good-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/good-repo" "$PD/spec.json" 2>&1)"; good_rc=$?
 good_runs="$(jq -r '.run // empty' "$PD/good-repo/.charles/dispatches.jsonl" 2>/dev/null | sort -u)"
 good_run_output=1
 while IFS= read -r run_id; do
@@ -372,22 +429,52 @@ done <<<"$good_runs"
 if [ "$good_rc" -eq 0 ] && [ "$(cat "$PD/good-repo/alpha")" = "alpha merged" ] \
   && [ "$(cat "$PD/good-repo/beta")" = "beta merged" ] \
   && [ "$(printf '%s\n' "$good_runs" | sed '/^$/d' | wc -l)" -eq 2 ] \
-  && [ "$good_run_output" -eq 1 ]; then
+  && [ "$good_run_output" -eq 1 ] \
+  && grep -Fxq "$PD/good-alpha" "$PD/good-returns" \
+  && grep -Fxq "$PD/good-beta" "$PD/good-returns"; then
   echo "  PASS  successful two-chunk merge aggregates and prints receipts"; pass=$((pass+1))
 else
   echo "  FAIL  successful two-chunk merge must land files and receipts (rc=$good_rc)"; fail=$((fail+1))
 fi
 
-oob_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/oob-repo" "$PD/spec.json" 2>&1)"; oob_rc=$?
+cp "$PD/oob-repo/beta" "$PD/oob-beta.before"
+: > "$PD/oob-returns"
+oob_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/oob-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/oob-repo" "$PD/spec.json" 2>&1)"; oob_rc=$?
 if [ "$oob_rc" -eq 3 ] && [ "$(cat "$PD/oob-repo/alpha")" = "base" ] \
+  && cmp -s "$PD/oob-repo/beta" "$PD/oob-beta.before" \
   && [ ! -e "$PD/oob-repo/outside" ] && grep -qF 'wrote outside' <<<"$oob_out" \
-  && grep -qF "$PD/oob-alpha" <<<"$oob_out"; then
+  && grep -qF "$PD/oob-alpha" <<<"$oob_out" \
+  && ! grep -Fxq "$PD/oob-alpha" "$PD/oob-returns" \
+  && grep -Fxq "$PD/oob-beta" "$PD/oob-returns"; then
   echo "  PASS  out-of-bounds chunk is rejected and kept"; pass=$((pass+1))
 else
   echo "  FAIL  out-of-bounds chunk must not merge (rc=$oob_rc)"; fail=$((fail+1))
 fi
 
-failed_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/failed-repo" "$PD/spec.json" 2>&1)"; failed_rc=$?
+: > "$PD/missing-returns"
+missing_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/missing-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/missing-repo" "$PD/spec.json" 2>&1)"; missing_rc=$?
+if [ "$missing_rc" -eq 3 ] && grep -qF 'missing receipt' <<<"$missing_out" \
+  && grep -qF "$PD/missing-alpha" <<<"$missing_out" \
+  && ! grep -Fxq "$PD/missing-alpha" "$PD/missing-returns" \
+  && grep -Fxq "$PD/missing-beta" "$PD/missing-returns"; then
+  echo "  PASS  missing receipt fails and keeps its worktree"; pass=$((pass+1))
+else
+  echo "  FAIL  missing receipt must fail and keep its worktree (rc=$missing_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/swap-returns"
+swap_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/swap-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/swap-repo" "$PD/swap-spec.json" 2>&1)"; swap_rc=$?
+if [ "$swap_rc" -eq 0 ] && [ "$(cat "$PD/swap-repo/alpha")" = "beta base" ] \
+  && [ "$(cat "$PD/swap-repo/beta")" = "alpha base" ] \
+  && [ "$(cat "$PD/swap-repo/gamma")" = "gamma merged" ] \
+  && grep -qF 'merged rename' <<<"$swap_out"; then
+  echo "  PASS  rename swap preserves both destinations"; pass=$((pass+1))
+else
+  echo "  FAIL  rename swap must preserve both destinations (rc=$swap_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/failed-returns"
+failed_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/failed-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/failed-repo" "$PD/spec.json" 2>&1)"; failed_rc=$?
 if [ "$failed_rc" -eq 3 ] && [ "$(cat "$PD/failed-repo/alpha")" = "base" ] \
   && [ "$(cat "$PD/failed-repo/beta")" = "base" ] \
   && grep -qF 'child exited' <<<"$failed_out" && grep -qF "$PD/failed-alpha" <<<"$failed_out"; then
@@ -396,7 +483,8 @@ else
   echo "  FAIL  failed sibling must block every merge (rc=$failed_rc)"; fail=$((fail+1))
 fi
 
-red_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/red-repo" "$PD/spec.json" 2>&1)"; red_rc=$?
+: > "$PD/red-returns"
+red_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/red-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/red-repo" "$PD/spec.json" 2>&1)"; red_rc=$?
 if [ "$red_rc" -ne 0 ] && [ "$(cat "$PD/red-repo/alpha")" = "alpha merged" ] \
   && [ "$(cat "$PD/red-repo/beta")" = "beta merged" ] \
   && grep -qF 'running combined green check' <<<"$red_out"; then
