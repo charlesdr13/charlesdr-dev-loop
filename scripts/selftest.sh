@@ -124,6 +124,28 @@ else
   echo "  FAIL  ask text must name CHARLES_INLINE_OK, inline_lines, and inline_files"; fail=$((fail+1))
 fi
 
+# --- scripts reached through a PATH symlink must still find run-common.sh -----
+# v2.30.0 sourced "$SCRIPT_DIR/run-common.sh" with SCRIPT_DIR taken from an
+# UNRESOLVED $BASH_SOURCE, so every dispatch through the ~/.local/bin symlink
+# died with "No such file or directory". A max-effort review had just passed the
+# same diff. Only running it through the symlink caught it.
+SYMROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SYMBOX="$(mktemp -d)"
+ln -sfn "$SYMROOT/scripts/codex-run.sh"       "$SYMBOX/codex-run"
+ln -sfn "$SYMROOT/scripts/run-state.sh"       "$SYMBOX/run-state"
+ln -sfn "$SYMROOT/scripts/parallel-chunks.sh" "$SYMBOX/parallel-chunks"
+sym_bad=""
+for tool in codex-run run-state parallel-chunks; do
+  out="$(bash "$SYMBOX/$tool" 2>&1 </dev/null || true)"
+  case "$out" in *"run-common.sh: No such file"*) sym_bad="$sym_bad $tool" ;; esac
+done
+rm -rf "$SYMBOX"
+if [ -z "$sym_bad" ]; then
+  echo "  PASS  scripts source run-common.sh through a symlink"; pass=$((pass+1))
+else
+  echo "  FAIL  symlinked invocation cannot find run-common.sh:$sym_bad"; fail=$((fail+1))
+fi
+
 # --- every script must start with a real shebang ------------------------------
 # codex-run.sh carried a blank line 1 for months: the kernel saw no shebang, so
 # exec'ing it directly (timeout codex-run, cron, any non-bash caller) fell back
@@ -298,6 +320,7 @@ parallel_fixture "$PD/delete-repo" "$PD/delete-alpha" true
 parallel_fixture "$PD/rename-repo" "$PD/rename-alpha" true
 parallel_fixture "$PD/bad-receipt-repo" "$PD/bad-receipt-alpha" true
 parallel_fixture "$PD/space-repo" "$PD/space-alpha" false
+parallel_fixture "$PD/r10-repo" "$PD/r10-alpha" true
 parallel_swap_fixture "$PD/swap-repo" "$PD/swap-alpha"
 git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
 git -C "$PD/oob-repo" worktree add -q "$PD/oob-beta" HEAD
@@ -308,6 +331,7 @@ git -C "$PD/ignored-repo" worktree add -q "$PD/ignored-beta" HEAD
 git -C "$PD/delete-repo" worktree add -q "$PD/delete-beta" HEAD
 git -C "$PD/rename-repo" worktree add -q "$PD/rename-beta" HEAD
 git -C "$PD/bad-receipt-repo" worktree add -q "$PD/bad-receipt-beta" HEAD
+git -C "$PD/r10-repo" worktree add -q "$PD/r10-beta" HEAD
 printf 'base\n' > "$PD/space-repo/space file"
 git -C "$PD/space-repo" add -- 'space file' && git -C "$PD/space-repo" commit -qm 'space fixture'
 git -C "$PD/space-repo" worktree add -q "$PD/space-beta" HEAD
@@ -360,6 +384,7 @@ fi
 
 cat > "$PD/bin/treehouse" <<EOF
 #!/usr/bin/env bash
+if [ -n "\${CHARLES_TREEHOUSE_CALLS:-}" ]; then printf '%s\n' "\${1:-}" >> "\$CHARLES_TREEHOUSE_CALLS"; fi
 case "\${1:-}" in
   get)
     holder="\${4:-}"
@@ -380,6 +405,8 @@ case "\${1:-}" in
       delete-repo:chunk-beta) printf '%s\n' "$PD/delete-beta" ;;
       rename-repo:chunk-rename) printf '%s\n' "$PD/rename-alpha" ;;
       rename-repo:chunk-beta) printf '%s\n' "$PD/rename-beta" ;;
+      r10-repo:chunk-alpha) printf '%s\n' "$PD/r10-alpha" ;;
+      r10-repo:chunk-beta) printf '%s\n' "$PD/r10-beta" ;;
       bad-receipt-repo:chunk-bad) printf '%s\n' "$PD/bad-receipt-alpha" ;;
       bad-receipt-repo:chunk-beta) printf '%s\n' "$PD/bad-receipt-beta" ;;
       space-repo:chunk-space) printf '%s\n' "$PD/space-alpha" ;;
@@ -411,9 +438,12 @@ manifest_check "missing-field" '[{"name":"alpha","files":["alpha"]}]'
 manifest_check "duplicate-names" '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"alpha","files":["beta"],"task":"x"}]'
 manifest_check "absolute-path" '[{"name":"alpha","files":["/alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]'
 manifest_check "dot-dot-path" '[{"name":"alpha","files":["../alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]'
+manifest_check "bad-req-shape" '[{"name":"alpha","files":["alpha"],"task":"x","req":"R1"},{"name":"beta","files":["beta"],"task":"x"}]'
+manifest_check "malformed-req-id" '[{"name":"alpha","files":["alpha"],"task":"x","req":["R1.bad"]},{"name":"beta","files":["beta"],"task":"x"}]'
 
 cat > "$PD/bin/codex" <<'EOF'
 #!/usr/bin/env bash
+[ -z "${CHARLES_LANE_MARKER:-}" ] || : > "$CHARLES_LANE_MARKER"
 case "$PWD" in
   */good-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
   */good-beta) printf 'beta merged\n' > beta; exit 0 ;;
@@ -429,6 +459,8 @@ case "$PWD" in
   */delete-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */rename-alpha) mv alpha renamed; exit 0 ;;
   */rename-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */r10-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
+  */r10-beta) printf 'beta merged\n' > beta; exit 0 ;;
   */bad-receipt-alpha) printf 'alpha changed\n' > alpha; printf '{malformed\n' > .charles/dispatches.jsonl; exit 0 ;;
   */bad-receipt-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */missing-alpha)
@@ -462,6 +494,43 @@ else
 fi
 EOF
 chmod +x "$PD/bin/git"
+
+mkdir -p "$PD/r10-repo/docs/specs"
+printf '# Plan\n\n- [ ] **R1.2. alpha work**\n- [ ] **R2.3b. beta work**\n' \
+  > "$PD/r10-repo/docs/specs/plan.md"
+printf '[{"name":"alpha","files":["alpha"],"task":"x","req":["R1.2"]},{"name":"beta","files":["beta"],"task":"x","req":["R2.3b"]}]\n' \
+  > "$PD/r10-repo/docs/specs/plan.chunks.json"
+mkdir -p "$PD/r10-repo/.charles/runs/open-run" "$PD/r10-repo/.charles/runs/other-run"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$PD/r10-repo/.charles/runs/open-run/RUN.md"
+printf '# Run other-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$PD/r10-repo/.charles/runs/other-run/RUN.md"
+: > "$PD/r10-returns"
+r10_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/r10-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/plan.chunks.json" --run open-run --no-green 2>&1)"; r10_rc=$?
+if [ "$r10_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .lane == "implement" and .req == ["R1.2"])' "$PD/r10-alpha/.charles/dispatches.jsonl" >/dev/null 2>&1 \
+  && jq -e 'select(.event == "start" and .lane == "implement" and .req == ["R2.3b"])' "$PD/r10-beta/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  parallel children receive their req on their own receipts"; pass=$((pass+1))
+else
+  echo "  FAIL  parallel children must receive req on their own receipts (rc=$r10_rc)"; fail=$((fail+1))
+fi
+
+printf '[{"name":"alpha","files":["gamma"],"task":"x","req":["R1.2"]},{"name":"beta","files":["delta"],"task":"x","req":["R999"]}]\n' \
+  > "$PD/r10-repo/docs/specs/bad-req.chunks.json"
+cp "$PD/r10-repo/docs/specs/plan.md" "$PD/r10-repo/docs/specs/bad-req.md"
+: > "$PD/r10-treehouse-calls"
+rm -f "$PD/r10-lane-ran"
+r10_bad_out="$(PATH="$PD/bin:$PATH" CHARLES_TREEHOUSE_CALLS="$PD/r10-treehouse-calls" \
+  CHARLES_LANE_MARKER="$PD/r10-lane-ran" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/bad-req.chunks.json" --run open-run --no-green 2>&1)"; r10_bad_rc=$?
+if [ "$r10_bad_rc" -eq 1 ] \
+  && grep -qF 'requirement R999 is not in' <<<"$r10_bad_out" \
+  && [ ! -s "$PD/r10-treehouse-calls" ] && [ ! -e "$PD/r10-lane-ran" ]; then
+  echo "  PASS  unknown manifest requirement is refused before leasing"; pass=$((pass+1))
+else
+  echo "  FAIL  unknown manifest requirement must be refused before leasing (rc=$r10_bad_rc)"; fail=$((fail+1))
+fi
 
 printf 'parallel_min_chunks = 3\n' >> "$PD/good-repo/.charles.toml"
 threshold_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/good-repo" "$PD/spec.json" 2>&1)"; threshold_rc=$?
@@ -604,6 +673,7 @@ fi
 
 # --- run state lifecycle ------------------------------------------------------
 RS="$(cd "$(dirname "$0")/.." && pwd)/scripts/run-state.sh"
+RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
 WARN="$(cd "$(dirname "$0")/.." && pwd)/hooks/warn-open-runs.sh"
 RT="$BOX/runrepo"; mkdir -p "$RT/docs/specs"
 ( cd "$RT" && git init -q && git config user.name tester && git config user.email tester@example.invalid )
@@ -656,10 +726,261 @@ fi
 
 rcheck "outcome promoted to committed plan" "Run outcome" cat "$RT/docs/specs/p.md"
 
+# --- R11 run selection and spec agreement ------------------------------------
+R11="$BOX/r11-runstate"; mkdir -p "$R11/docs/specs"
+for plan in alpha beta third legacy first second; do
+  printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n## Sign-off\n\n- [x] %s\n' "$plan" \
+    > "$R11/docs/specs/$plan.md"
+done
+r11_a="$(bash "$RS" init "$R11" feature "run alpha" --spec docs/specs/alpha.md 2>/dev/null)"
+r11_b="$(bash "$RS" init "$R11" feature "run beta" --spec docs/specs/beta.md 2>/dev/null)"
+
+r11_phase_out="$(bash "$RS" phase "$R11" "ambiguous phase" 2>&1)"; r11_phase_rc=$?
+if [ "$r11_phase_rc" -eq 2 ] && grep -qF "$r11_a" <<<"$r11_phase_out" \
+  && grep -qF "$r11_b" <<<"$r11_phase_out" && grep -qF -- '--run <id>' <<<"$r11_phase_out"; then
+  echo "  PASS  phase refuses two open runs without a selector"; pass=$((pass+1))
+else
+  echo "  FAIL  phase must refuse two open runs without a selector (rc=$r11_phase_rc)"; fail=$((fail+1))
+fi
+r11_item_out="$(bash "$RS" item "$R11" PENDING-DECISION "ambiguous item" 2>&1)"; r11_item_rc=$?
+if [ "$r11_item_rc" -eq 2 ] && grep -qF "$r11_a" <<<"$r11_item_out" \
+  && grep -qF "$r11_b" <<<"$r11_item_out"; then
+  echo "  PASS  item refuses two open runs without a selector"; pass=$((pass+1))
+else
+  echo "  FAIL  item must refuse two open runs without a selector (rc=$r11_item_rc)"; fail=$((fail+1))
+fi
+
+r11_prefix="$r11_a"
+for ((r11_n=1; r11_n<${#r11_a}; r11_n++)); do
+  r11_candidate="${r11_a:0:r11_n}"
+  if [[ "$r11_b" != "$r11_candidate"* ]]; then r11_prefix="$r11_candidate"; break; fi
+done
+cp "$R11/.charles/runs/$r11_b/RUN.md" "$R11/r11-beta.before"
+r11_phase_out="$(bash "$RS" phase "$R11" "selected phase" --run "$r11_prefix" 2>&1)"; r11_phase_rc=$?
+if [ "$r11_phase_rc" -eq 0 ] && grep -qF 'selected phase' "$R11/.charles/runs/$r11_a/RUN.md" \
+  && cmp -s "$R11/.charles/runs/$r11_b/RUN.md" "$R11/r11-beta.before"; then
+  echo "  PASS  phase prefix writes only to the selected run"; pass=$((pass+1))
+else
+  echo "  FAIL  phase prefix must write only to the selected run (rc=$r11_phase_rc)"; fail=$((fail+1))
+fi
+
+r11_close_out="$(bash "$RS" close "$R11" "selected outcome" --run "$r11_a" --spec docs/specs/alpha.md --force 2>&1)"; r11_close_rc=$?
+if [ "$r11_close_rc" -eq 0 ] && grep -q '^## Outcome$' "$R11/.charles/runs/$r11_a/RUN.md" \
+  && ! grep -q '^## Outcome$' "$R11/.charles/runs/$r11_b/RUN.md"; then
+  echo "  PASS  close --run closes the selected run, not the newest"; pass=$((pass+1))
+else
+  echo "  FAIL  close --run must close only the selected run (rc=$r11_close_rc)"; fail=$((fail+1))
+fi
+r11_show_out="$(bash "$RS" show "$R11" 2>&1)"; r11_show_rc=$?
+if [ "$r11_show_rc" -eq 0 ] && grep -qF "showing run: $r11_b" <<<"$r11_show_out"; then
+  echo "  PASS  show names the run it defaults to"; pass=$((pass+1))
+else
+  echo "  FAIL  show must name its defaulted run (rc=$r11_show_rc)"; fail=$((fail+1))
+fi
+
+R11D="$BOX/r11-defer"; mkdir -p "$R11D"
+r11d_a="$(bash "$RS" init "$R11D" feature "defer alpha" 2>/dev/null)"
+r11d_b="$(bash "$RS" init "$R11D" feature "defer beta" 2>/dev/null)"
+cp "$R11D/.charles/runs/$r11d_b/RUN.md" "$R11D/defer-beta.before"
+r11_defer_out="$(bash "$RS" defer "$R11D" "selected deferred item" --run "$r11d_a" 2>&1)"; r11_defer_rc=$?
+if [ "$r11_defer_rc" -eq 0 ] && grep -qF 'selected deferred item' "$R11D/.charles/runs/$r11d_a/RUN.md" \
+  && cmp -s "$R11D/.charles/runs/$r11d_b/RUN.md" "$R11D/defer-beta.before"; then
+  echo "  PASS  defer --run targets the selected open run"; pass=$((pass+1))
+else
+  echo "  FAIL  defer --run must target only the selected open run (rc=$r11_defer_rc)"; fail=$((fail+1))
+fi
+
+# init --spec must reject the same unusable paths as the later spec verb.
+INITSPEC="$BOX/init-spec"; mkdir -p "$INITSPEC/docs/specs"
+printf '# Valid plan\n' > "$INITSPEC/docs/specs/valid.md"
+printf '# Outside plan\n' > "$BOX/init-outside.md"
+init_missing_out="$(bash "$RS" init "$INITSPEC" feature "missing init spec" --spec docs/specs/missing.md 2>&1)"; init_missing_rc=$?
+if [ "$init_missing_rc" -eq 2 ] && grep -qF 'does not exist or is unreadable' <<<"$init_missing_out" \
+  && [ ! -d "$INITSPEC/.charles/runs" ]; then
+  echo "  PASS  init --spec refuses a missing path before creating a run"; pass=$((pass+1))
+else
+  echo "  FAIL  init --spec must refuse a missing path before creating a run (rc=$init_missing_rc)"; fail=$((fail+1))
+fi
+init_outside_out="$(bash "$RS" init "$INITSPEC" feature "outside init spec" --spec ../init-outside.md 2>&1)"; init_outside_rc=$?
+if [ "$init_outside_rc" -eq 2 ] && grep -qF 'resolves outside the repository' <<<"$init_outside_out" \
+  && [ ! -d "$INITSPEC/.charles/runs" ]; then
+  echo "  PASS  init --spec refuses an outside path before creating a run"; pass=$((pass+1))
+else
+  echo "  FAIL  init --spec must refuse an outside path before creating a run (rc=$init_outside_rc)"; fail=$((fail+1))
+fi
+init_valid_run="$(bash "$RS" init "$INITSPEC" feature "valid init spec" --spec docs/specs/valid.md 2>/dev/null)"; init_valid_rc=$?
+if [ "$init_valid_rc" -eq 0 ] && grep -qF -- '- spec: docs/specs/valid.md' "$INITSPEC/.charles/runs/$init_valid_run/RUN.md"; then
+  echo "  PASS  init --spec records a validated in-repo path"; pass=$((pass+1))
+else
+  echo "  FAIL  init --spec must record a valid in-repo path (rc=$init_valid_rc)"; fail=$((fail+1))
+fi
+
+# A run created before init learned --spec can be repaired in place, then gated
+# against the attached plan like any other run.
+SPECBIND="$BOX/spec-bind"; mkdir -p "$SPECBIND/bin" "$SPECBIND/docs/specs" \
+  "$SPECBIND/.charles/runs/legacy-run"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SPECBIND/bin/codex"; chmod +x "$SPECBIND/bin/codex"
+printf '# Old plan\n\n- [ ] **R1. old requirement**\n' > "$SPECBIND/docs/specs/old.md"
+printf '# New plan\n\n- [ ] **R1. replacement requirement**\n' > "$SPECBIND/docs/specs/new.md"
+printf '# Run legacy-run\n\n- flow: feature\n- started: now\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$SPECBIND/.charles/runs/legacy-run/RUN.md"
+printf '# Outside plan\n\n- [ ] **R1. outside requirement**\n' > "$BOX/outside-plan.md"
+bind_before="$(cat "$SPECBIND/.charles/runs/legacy-run/RUN.md")"
+outside_bind_out="$(bash "$RS" spec "$SPECBIND" "$BOX/outside-plan.md" --run legacy-run 2>&1)"; outside_bind_rc=$?
+if [ "$outside_bind_rc" -eq 2 ] && grep -qF 'resolves outside the repository' <<<"$outside_bind_out" \
+  && [ "$(cat "$SPECBIND/.charles/runs/legacy-run/RUN.md")" = "$bind_before" ]; then
+  echo "  PASS  run-state spec refuses a path outside the repository"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state spec must apply the repository containment rule (rc=$outside_bind_rc)"; fail=$((fail+1))
+fi
+bind_out="$(bash "$RS" spec "$SPECBIND" docs/specs/old.md --run legacy-run 2>&1)"; bind_rc=$?
+if [ "$bind_rc" -eq 0 ] && grep -qF 'bound spec: docs/specs/old.md to run: legacy-run' <<<"$bind_out" \
+  && grep -q '^\- spec: docs/specs/old.md$' "$SPECBIND/.charles/runs/legacy-run/RUN.md"; then
+  echo "  PASS  run-state spec binds a plan to the selected legacy run"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state spec must bind the selected legacy run (rc=$bind_rc)"; fail=$((fail+1))
+fi
+mkdir -p "$SPECBIND/fail-bin"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$SPECBIND/fail-bin/mv"; chmod +x "$SPECBIND/fail-bin/mv"
+bind_before="$(cat "$SPECBIND/.charles/runs/legacy-run/RUN.md")"
+failed_bind_out="$(PATH="$SPECBIND/fail-bin:$PATH" bash "$RS" spec "$SPECBIND" docs/specs/new.md --run legacy-run 2>&1)"; failed_bind_rc=$?
+if [ "$failed_bind_rc" -ne 0 ] && ! grep -qF 'bound spec:' <<<"$failed_bind_out" \
+  && [ "$(cat "$SPECBIND/.charles/runs/legacy-run/RUN.md")" = "$bind_before" ]; then
+  echo "  PASS  failed spec bind exits non-zero without success output"; pass=$((pass+1))
+else
+  echo "  FAIL  failed spec bind must fail without printing success (rc=$failed_bind_rc)"; fail=$((fail+1))
+fi
+bind_dispatch_out="$(PATH="$SPECBIND/bin:$PATH" CHARLES_STATE_DIR="$SPECBIND/state" \
+  bash "$RUN_SH" --lane implement --dir "$SPECBIND" --run legacy-run --req R1 \
+  --no-fallback --timeout 2 "bound spec" 2>&1)"; bind_dispatch_rc=$?
+if [ "$bind_dispatch_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' "$SPECBIND/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  attached spec permits a requirement-scoped implement dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  attached spec must permit --req dispatch (rc=$bind_dispatch_rc)"; fail=$((fail+1))
+fi
+bash "$RS" spec "$SPECBIND" docs/specs/new.md --run legacy-run >/dev/null 2>&1
+if [ "$(grep -c '^\- spec: ' "$SPECBIND/.charles/runs/legacy-run/RUN.md")" -eq 1 ] \
+  && grep -q '^\- spec: docs/specs/new.md$' "$SPECBIND/.charles/runs/legacy-run/RUN.md" \
+  && ! grep -q '^\- spec: docs/specs/old.md$' "$SPECBIND/.charles/runs/legacy-run/RUN.md"; then
+  echo "  PASS  run-state spec replaces the existing spec field"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state spec must replace, not append, the spec field"; fail=$((fail+1))
+fi
+missing_bind_out="$(bash "$RS" spec "$SPECBIND" docs/specs/missing.md --run legacy-run 2>&1)"; missing_bind_rc=$?
+if [ "$missing_bind_rc" -eq 2 ] && grep -qF 'docs/specs/missing.md' <<<"$missing_bind_out"; then
+  echo "  PASS  run-state spec refuses a nonexistent path"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state spec must refuse a nonexistent path (rc=$missing_bind_rc)"; fail=$((fail+1))
+fi
+mkdir -p "$SPECBIND/.charles/runs/second-run"
+printf '# Run second-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$SPECBIND/.charles/runs/second-run/RUN.md"
+multi_bind_out="$(bash "$RS" spec "$SPECBIND" docs/specs/old.md 2>&1)"; multi_bind_rc=$?
+if [ "$multi_bind_rc" -eq 2 ] && grep -qF 'legacy-run' <<<"$multi_bind_out" \
+  && grep -qF 'second-run' <<<"$multi_bind_out" && grep -qF -- '--run <id>' <<<"$multi_bind_out"; then
+  echo "  PASS  run-state spec refuses two open runs without a selector"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state spec must refuse two open runs without a selector (rc=$multi_bind_rc)"; fail=$((fail+1))
+fi
+
+# A spec bind must share the writer lock with phase updates, or its mv can erase
+# a phase written from the same open run.
+RACESTATE="$BOX/spec-race"; mkdir -p "$RACESTATE/docs/specs"
+printf '# Race plan\n' > "$RACESTATE/docs/specs/race.md"
+race_run="$(bash "$RS" init "$RACESTATE" feature "spec race" --spec docs/specs/race.md 2>/dev/null)"
+mkdir -p "$RACESTATE/.charles"
+(
+  flock 9
+  : > "$RACESTATE/lock-ready"
+  while [ ! -e "$RACESTATE/release-lock" ]; do sleep 0.02; done
+) 9>"$RACESTATE/.charles/run-state.lock" &
+race_holder=$!
+race_ready=0
+for _ in $(seq 1 100); do
+  if [ -e "$RACESTATE/lock-ready" ]; then race_ready=1; break; fi
+  sleep 0.02
+done
+(
+  bash "$RS" spec "$RACESTATE" docs/specs/race.md --run "$race_run" > "$RACESTATE/spec.out" 2>&1
+  printf '%s\n' "$?" > "$RACESTATE/spec.rc"
+  : > "$RACESTATE/spec.done"
+) &
+race_spec_pid=$!
+(
+  bash "$RS" phase "$RACESTATE" "serialized phase" --run "$race_run" > "$RACESTATE/phase.out" 2>&1
+  printf '%s\n' "$?" > "$RACESTATE/phase.rc"
+  : > "$RACESTATE/phase.done"
+) &
+race_phase_pid=$!
+sleep 0.1
+race_waiting=1
+[ ! -e "$RACESTATE/spec.done" ] || race_waiting=0
+[ ! -e "$RACESTATE/phase.done" ] || race_waiting=0
+touch "$RACESTATE/release-lock"
+wait "$race_holder" 2>/dev/null
+wait "$race_spec_pid" 2>/dev/null
+wait "$race_phase_pid" 2>/dev/null
+if [ "$race_ready" -eq 1 ] && [ "$race_waiting" -eq 1 ] \
+  && [ "$(cat "$RACESTATE/spec.rc" 2>/dev/null)" = 0 ] \
+  && [ "$(cat "$RACESTATE/phase.rc" 2>/dev/null)" = 0 ] \
+  && grep -qF 'serialized phase' "$RACESTATE/.charles/runs/$race_run/RUN.md" \
+  && grep -qF -- '- spec: docs/specs/race.md' "$RACESTATE/.charles/runs/$race_run/RUN.md"; then
+  echo "  PASS  spec binding serializes with concurrent phase writes"; pass=$((pass+1))
+else
+  echo "  FAIL  spec binding must preserve a concurrent phase write"; fail=$((fail+1))
+fi
+
+R11M="$BOX/r11-mismatch"; mkdir -p "$R11M/docs/specs"
+for plan in first second third; do
+  printf '# Plan\n\n## Sign-off\n\n- [x] %s\n' "$plan" > "$R11M/docs/specs/$plan.md"
+done
+bash "$RS" init "$R11M" feature "first run" --spec docs/specs/first.md >/dev/null
+bash "$RS" init "$R11M" feature "second run" --spec docs/specs/second.md >/dev/null
+r11_newest_path="$(find "$R11M/.charles/runs" -mindepth 1 -maxdepth 1 -type d -print | sort -r | head -1)"
+r11_newest="${r11_newest_path##*/}"
+r11_recorded="$(sed -n 's/^- spec: //p' "$r11_newest_path/RUN.md" | head -1)"
+r11_mismatch_out="$(bash "$RS" close "$R11M" "wrong plan" --run "$r11_newest" --spec docs/specs/third.md --force 2>&1)"; r11_mismatch_rc=$?
+if [ "$r11_mismatch_rc" -eq 2 ] \
+  && grep -qF "recorded spec: $r11_recorded" <<<"$r11_mismatch_out" \
+  && grep -qF -- '--spec given:  docs/specs/third.md' <<<"$r11_mismatch_out" \
+  && ! grep -q '^## Outcome$' "$r11_newest_path/RUN.md"; then
+  echo "  PASS  close refuses a spec that disagrees with the selected run"; pass=$((pass+1))
+else
+  echo "  FAIL  close must name both sides of a spec mismatch (rc=$r11_mismatch_rc)"; fail=$((fail+1))
+fi
+
+R11L="$BOX/r11-legacy"; mkdir -p "$R11L/docs/specs"
+printf '# Plan\n\n## Sign-off\n\n- [x] legacy close\n' > "$R11L/docs/specs/legacy.md"
+r11_legacy="$(bash "$RS" init "$R11L" feature "legacy run" 2>/dev/null)"
+r11_legacy_out="$(bash "$RS" close "$R11L" "legacy outcome" --run "$r11_legacy" --spec docs/specs/legacy.md --force 2>&1)"; r11_legacy_rc=$?
+if [ "$r11_legacy_rc" -eq 0 ] && grep -q '^## Outcome$' "$R11L/.charles/runs/$r11_legacy/RUN.md"; then
+  echo "  PASS  close accepts --spec for a run with no recorded spec"; pass=$((pass+1))
+else
+  echo "  FAIL  close must accept --spec for an older run without recorded spec (rc=$r11_legacy_rc)"; fail=$((fail+1))
+fi
+
+DEFER="$BOX/defer"; mkdir -p "$DEFER/docs/specs"
+printf 'green = "true"\n' > "$DEFER/.charles.toml"
+printf '# Plan\n\n## Sign-off\n\n- [x] shipped one\n- [x] shipped two\n' > "$DEFER/docs/specs/p.md"
+defer_run="$(bash "$RS" init "$DEFER" feature "defer test" --spec docs/specs/p.md 2>/dev/null)"
+defer_item_out="$(bash "$RS" defer "$DEFER" "new discovery" 2>&1)"
+if grep -qF 'recorded item: DEFERRED — new discovery' <<<"$defer_item_out" \
+  && grep -qF 'DEFERRED' "$DEFER/.charles/runs/$defer_run/RUN.md"; then
+  echo "  PASS  defer records a DEFERRED run item in one command"; pass=$((pass+1))
+else
+  echo "  FAIL  defer must record a DEFERRED run item"; fail=$((fail+1))
+fi
+defer_close_out="$(bash "$RS" close "$DEFER" done --spec docs/specs/p.md --force 2>&1)"; defer_close_rc=$?
+if [ "$defer_close_rc" -eq 0 ] && grep -qF '2 requirements shipped, 1 items deferred' <<<"$defer_close_out"; then
+  echo "  PASS  close reports shipped requirements and deferred items"; pass=$((pass+1))
+else
+  echo "  FAIL  close must report shipped requirements and deferred items (rc=$defer_close_rc)"; fail=$((fail+1))
+fi
+
 # --- concurrent-writer lock ---------------------------------------------------
 # A fake `codex` on PATH lets us produce a process whose cmdline matches what the
 # lock greps for, without dispatching anything real.
-RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
 if grep -qE '^TIMEOUT=2700([[:space:]]|$)' "$RUN_SH"; then
   echo "  PASS  codex-run uses the 2700s default"; pass=$((pass+1))
 else
@@ -727,6 +1048,324 @@ if jq -e --arg d "$LOCKDIR" --arg r "$lock_run" \
   echo "  PASS  new end carries resolved dir and basename run"; pass=$((pass+1))
 else
   echo "  FAIL  new end identity fields are incomplete"; fail=$((fail+1))
+fi
+
+# --- requirement-scoped implement dispatches ----------------------------------
+REQDIR="$BOX/req-scope"; mkdir -p "$REQDIR/bin" "$REQDIR/docs/specs" "$REQDIR/.charles/runs/open-run"
+printf '#!/usr/bin/env bash\n[ -z "${CHARLES_LANE_MARKER:-}" ] || : > "$CHARLES_LANE_MARKER"\nexit 0\n' \
+  > "$REQDIR/bin/codex"; chmod +x "$REQDIR/bin/codex"
+printf '# Plan\n\n- [ ] **R1. first requirement**\n- [ ] **A3. second requirement**\n' \
+  > "$REQDIR/docs/specs/plan.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQDIR/.charles/runs/open-run/RUN.md"
+req_out="$(PATH="$REQDIR/bin:$PATH" CHARLES_STATE_DIR="$REQDIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQDIR" --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 2 ] && grep -qF 'docs/specs/plan.md' <<<"$req_out" \
+  && [ ! -s "$REQDIR/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  open-run implement without --req is refused with its spec"; pass=$((pass+1))
+else
+  echo "  FAIL  open-run implement without --req must be refused (rc=$req_rc)"; fail=$((fail+1))
+fi
+req_out="$(PATH="$REQDIR/bin:$PATH" CHARLES_STATE_DIR="$REQDIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQDIR" --req R1,A3 --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1","A3"])' "$REQDIR/.charles/dispatches.jsonl" >/dev/null 2>&1 \
+  && jq -e 'select(.event == "end" and .req == ["R1","A3"])' "$REQDIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  implement records validated req identifiers on both events"; pass=$((pass+1))
+else
+  echo "  FAIL  implement must record validated req identifiers (rc=$req_rc)"; fail=$((fail+1))
+fi
+: > "$REQDIR/.charles/dispatches.jsonl"
+rm -f "$REQDIR/lane-ran"
+req_out="$(PATH="$REQDIR/bin:$PATH" CHARLES_STATE_DIR="$REQDIR/state" \
+  CHARLES_LANE_MARKER="$REQDIR/lane-ran" bash "$RUN_SH" --lane implement --dir "$REQDIR" \
+  --req $'R1\nR9' --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 2 ] && grep -qF 'requirement R9 is not in' <<<"$req_out" \
+  && [ ! -s "$REQDIR/.charles/dispatches.jsonl" ] && [ ! -e "$REQDIR/lane-ran" ]; then
+  echo "  PASS  invalid whitespace-separated req is refused before dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  invalid whitespace-separated req must refuse without a lane (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+REQMATCH="$BOX/req-matcher"; mkdir -p "$REQMATCH/bin" "$REQMATCH/docs/specs" "$REQMATCH/.charles/runs/open-run"
+cp "$REQDIR/bin/codex" "$REQMATCH/bin/codex"
+printf '# Plan\n\n- [ ] **R1. own convention**\n- **A1** alternate convention\n- [X] **R1.1. dotted identifier**\n- **R2.3b** suffixed identifier\n- [x] **X2c. suffixed identifier**\n\n## Sign-off\n\n- [x] **R9. sign-off only**\n- [x] **R1.1-R1.3** ranged sign-off\n' \
+  > "$REQMATCH/docs/specs/matcher.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/matcher.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQMATCH/.charles/runs/open-run/RUN.md"
+matcher_out="$(PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req A1 --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; matcher_rc=$?
+if [ "$matcher_rc" -eq 0 ]; then
+  echo "  PASS  alternate requirement bullet convention validates"; pass=$((pass+1))
+else
+  echo "  FAIL  alternate requirement bullet convention must validate (rc=$matcher_rc): $matcher_out"; fail=$((fail+1))
+fi
+matcher_out="$(PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1.1,R2.3b,X2c --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; matcher_rc=$?
+if [ "$matcher_rc" -eq 0 ]; then
+  echo "  PASS  dotted and suffixed requirement identifiers validate"; pass=$((pass+1))
+else
+  echo "  FAIL  dotted and suffixed requirement identifiers must validate (rc=$matcher_rc): $matcher_out"; fail=$((fail+1))
+fi
+matcher_bad=1
+for matcher_req in R9 R1.2; do
+  matcher_out="$(PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+    bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req "$matcher_req" --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; matcher_rc=$?
+  if [ "$matcher_rc" -ne 2 ] || ! grep -qF "requirement $matcher_req is not in docs/specs/matcher.md" <<<"$matcher_out"; then
+    matcher_bad=0
+  fi
+done
+if [ "$matcher_bad" -eq 1 ]; then
+  echo "  PASS  Sign-off-only and ranged requirements are refused"; pass=$((pass+1))
+else
+  echo "  FAIL  Sign-off-only and ranged requirements must be refused"; fail=$((fail+1))
+fi
+matcher_out="$(PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req A9 --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; matcher_rc=$?
+if [ "$matcher_rc" -eq 2 ] && grep -qF 'requirement A9 is not in docs/specs/matcher.md' <<<"$matcher_out"; then
+  echo "  PASS  absent requirement names its id and plan"; pass=$((pass+1))
+else
+  echo "  FAIL  absent requirement must name its id and plan (rc=$matcher_rc)"; fail=$((fail+1))
+fi
+malformed_ok=1
+REQMAL="$BOX/req-malformed"; mkdir -p "$REQMAL"
+for bad_id in lowercase1 1A R; do
+  malformed_out="$(CHARLES_STATE_DIR="$REQMAL/state" \
+    bash "$RUN_SH" --lane implement --dir "$REQMAL" --plan "$REQMAL/missing.md" --req "$bad_id" --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; malformed_rc=$?
+  if [ "$malformed_rc" -ne 2 ] || ! grep -qF "invalid requirement identifier '$bad_id'" <<<"$malformed_out" \
+    || grep -qF 'no readable plan file' <<<"$malformed_out"; then
+    malformed_ok=0
+  fi
+done
+for empty_req in "" " "; do
+  empty_out="$(CHARLES_STATE_DIR="$REQMAL/state" \
+    bash "$RUN_SH" --lane implement --dir "$REQMAL" --plan "$REQMAL/missing.md" --req "$empty_req" --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; empty_rc=$?
+  if [ "$empty_rc" -ne 2 ] || ! grep -qF -- '--req needs at least one requirement identifier' <<<"$empty_out"; then
+    malformed_ok=0
+  fi
+done
+comma_out="$(PATH="$REQDIR/bin:$PATH" CHARLES_STATE_DIR="$REQDIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQDIR" --req 'R1,' --validate-only --no-fallback --timeout 2 "scope" 2>&1)"; comma_rc=$?
+if [ "$comma_rc" -eq 2 ] && grep -qF "invalid requirement identifier ''" <<<"$comma_out"; then
+  echo "  PASS  trailing requirement separator is refused"; pass=$((pass+1))
+else
+  echo "  FAIL  trailing requirement separator must refuse an empty identifier (rc=$comma_rc)"; fail=$((fail+1))
+fi
+if [ "$malformed_ok" -eq 1 ]; then
+  echo "  PASS  malformed and empty requirement identifiers refuse before plan read"; pass=$((pass+1))
+else
+  echo "  FAIL  malformed and empty requirement identifiers must refuse before plan read"; fail=$((fail+1))
+fi
+
+REQWT="$BOX/req-worktree"; mkdir -p "$REQWT/bin" "$REQWT/main/docs/specs"
+(
+  cd "$REQWT/main" && git init -q && git config user.name tester \
+    && git config user.email tester@example.invalid \
+    && printf '# Plan\n\n- [ ] **R1. worktree requirement**\n' > docs/specs/plan.md \
+    && git add . && git commit -qm init
+)
+git -C "$REQWT/main" worktree add -q "$REQWT/worktree" HEAD
+mkdir -p "$REQWT/main/.charles/runs/open-run"
+cp "$REQDIR/bin/codex" "$REQWT/bin/codex"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQWT/main/.charles/runs/open-run/RUN.md"
+rm -f "$REQWT/lane-ran"
+req_wt_out="$(PATH="$REQWT/bin:$PATH" CHARLES_STATE_DIR="$REQWT/state" \
+  CHARLES_LANE_MARKER="$REQWT/lane-ran" bash "$RUN_SH" --lane implement --dir "$REQWT/worktree" \
+  --run open-run --no-fallback --timeout 2 "scope" 2>&1)"; req_wt_rc=$?
+wt_state_out="$(bash "$RS" phase "$REQWT/worktree" "worktree state phase" --run open-run 2>&1)"; wt_state_rc=$?
+if [ "$req_wt_rc" -eq 2 ] && grep -qF 'docs/specs/plan.md' <<<"$req_wt_out" \
+  && [ ! -s "$REQWT/worktree/.charles/dispatches.jsonl" ] && [ ! -e "$REQWT/lane-ran" ] \
+  && [ "$wt_state_rc" -eq 0 ] && grep -qF 'worktree state phase' "$REQWT/main/.charles/runs/open-run/RUN.md" \
+  && ! grep -qF 'worktree state phase' "$REQWT/worktree/.charles/runs/open-run/RUN.md" 2>/dev/null; then
+  echo "  PASS  worktree run-state and codex-run select the main repo run"; pass=$((pass+1))
+else
+  echo "  FAIL  worktree selectors must honor the main repo open run (codex=$req_wt_rc state=$wt_state_rc)"; fail=$((fail+1))
+fi
+
+REQAMB="$BOX/req-ambiguous"; mkdir -p "$REQAMB/bin" "$REQAMB/docs/specs" \
+  "$REQAMB/.charles/runs/run-alpha-20260821" "$REQAMB/.charles/runs/run-beta-20260821"
+cp "$REQDIR/bin/codex" "$REQAMB/bin/codex"
+printf '# Plan alpha\n\n- [ ] **R1. alpha requirement**\n' > "$REQAMB/docs/specs/plan-alpha.md"
+printf '# Plan beta\n\n- [ ] **A3. beta requirement**\n' > "$REQAMB/docs/specs/plan-beta.md"
+printf '# Run run-alpha-20260821\n\n- flow: feature\n- spec: docs/specs/plan-alpha.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQAMB/.charles/runs/run-alpha-20260821/RUN.md"
+printf '# Run run-beta-20260821\n\n- flow: feature\n- spec: docs/specs/plan-beta.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 2 ] && grep -qF 'run-alpha-20260821' <<<"$req_out" \
+  && grep -qF 'run-beta-20260821' <<<"$req_out" \
+  && grep -qF -- '--run <id>' <<<"$req_out" && grep -qF 'CHARLES_RUN' <<<"$req_out"; then
+  echo "  PASS  two open runs without a selector name both runs and the selector"; pass=$((pass+1))
+else
+  echo "  FAIL  two open runs without a selector must name both runs and the selector (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+: > "$REQAMB/.charles/dispatches.jsonl"
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run-alpha-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+wrong_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run-alpha-20260821 --req A3 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; wrong_rc=$?
+if [ "$req_rc" -eq 0 ] && [ "$wrong_rc" -eq 2 ] \
+  && grep -qF 'requirement A3 is not in docs/specs/plan-alpha.md' <<<"$wrong_out" \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --run full id selects its run and validates its spec"; pass=$((pass+1))
+else
+  echo "  FAIL  --run full id must validate --req against its spec (rc=$req_rc wrong=$wrong_rc)"; fail=$((fail+1))
+fi
+
+: > "$REQAMB/.charles/dispatches.jsonl"
+req_out="$(CHARLES_RUN=run-beta-20260821 PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --req A3 --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["A3"])' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  CHARLES_RUN selects the right run and validates its spec"; pass=$((pass+1))
+else
+  echo "  FAIL  CHARLES_RUN must select and validate its run (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+: > "$REQAMB/.charles/dispatches.jsonl"
+req_out="$(CHARLES_RUN=run-beta-20260821 PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run-alpha-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --run takes precedence over CHARLES_RUN"; pass=$((pass+1))
+else
+  echo "  FAIL  --run must take precedence over CHARLES_RUN (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+: > "$REQAMB/.charles/dispatches.jsonl"
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run-al --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  unambiguous run prefix selects its run"; pass=$((pass+1))
+else
+  echo "  FAIL  unambiguous run prefix must select its run (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+: > "$REQAMB/.charles/dispatches.jsonl"
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run alpha-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  mid-id substring selects a unique run in codex-run"; pass=$((pass+1))
+else
+  echo "  FAIL  codex-run must accept a unique mid-id substring (rc=$req_rc)"; fail=$((fail+1))
+fi
+state_sub_out="$(CHARLES_RUN= bash "$RS" phase "$REQAMB" "mid-id phase" --run alpha-20260821 2>&1)"; state_sub_rc=$?
+if [ "$state_sub_rc" -eq 0 ] && grep -qF 'mid-id phase' "$REQAMB/.charles/runs/run-alpha-20260821/RUN.md" \
+  && ! grep -qF 'mid-id phase' "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"; then
+  echo "  PASS  mid-id substring selects a unique run in run-state"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state must accept a unique mid-id substring (rc=$state_sub_rc)"; fail=$((fail+1))
+fi
+
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run 20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+state_sub_out="$(CHARLES_RUN= bash "$RS" phase "$REQAMB" "ambiguous substring" --run 20260821 2>&1)"; state_sub_rc=$?
+if [ "$req_rc" -eq 2 ] && [ "$state_sub_rc" -eq 2 ] \
+  && grep -qF 'run-alpha-20260821' <<<"$req_out" && grep -qF 'run-beta-20260821' <<<"$req_out" \
+  && grep -qF 'run-alpha-20260821' <<<"$state_sub_out" && grep -qF 'run-beta-20260821' <<<"$state_sub_out"; then
+  echo "  PASS  ambiguous substring names both candidates in both selectors"; pass=$((pass+1))
+else
+  echo "  FAIL  ambiguous substring must name both candidates (codex=$req_rc run-state=$state_sub_rc)"; fail=$((fail+1))
+fi
+
+REQEXACT="$BOX/req-exact"; mkdir -p "$REQEXACT/bin" "$REQEXACT/docs/specs" \
+  "$REQEXACT/.charles/runs/run-target" "$REQEXACT/.charles/runs/prefix-run-target-suffix"
+cp "$REQDIR/bin/codex" "$REQEXACT/bin/codex"
+printf '# Target plan\n\n- [ ] **R1. target requirement**\n' > "$REQEXACT/docs/specs/target.md"
+printf '# Other plan\n\n- [ ] **A3. other requirement**\n' > "$REQEXACT/docs/specs/other.md"
+printf '# Run run-target\n\n- flow: feature\n- spec: docs/specs/target.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQEXACT/.charles/runs/run-target/RUN.md"
+printf '# Run prefix-run-target-suffix\n\n- flow: feature\n- spec: docs/specs/other.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQEXACT/.charles/runs/prefix-run-target-suffix/RUN.md"
+exact_state_out="$(CHARLES_RUN= bash "$RS" phase "$REQEXACT" "exact target" --run run-target 2>&1)"; exact_state_rc=$?
+exact_codex_out="$(CHARLES_RUN= PATH="$REQEXACT/bin:$PATH" CHARLES_STATE_DIR="$REQEXACT/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQEXACT" --run run-target --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; exact_codex_rc=$?
+if [ "$exact_state_rc" -eq 0 ] && [ "$exact_codex_rc" -eq 0 ] \
+  && grep -qF 'exact target' "$REQEXACT/.charles/runs/run-target/RUN.md" \
+  && ! grep -qF 'exact target' "$REQEXACT/.charles/runs/prefix-run-target-suffix/RUN.md"; then
+  echo "  PASS  exact full id wins over a longer matching substring in both selectors"; pass=$((pass+1))
+else
+  echo "  FAIL  exact full id must win over a longer matching substring (run-state=$exact_state_rc codex=$exact_codex_rc)"; fail=$((fail+1))
+fi
+
+req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run- --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 2 ] && grep -qF "run selector 'run-' is ambiguous" <<<"$req_out" \
+  && grep -qF 'run-alpha-20260821' <<<"$req_out" && grep -qF 'run-beta-20260821' <<<"$req_out"; then
+  echo "  PASS  ambiguous run prefix names its candidates"; pass=$((pass+1))
+else
+  echo "  FAIL  ambiguous run prefix must name its candidates (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$REQAMB/.charles/runs/closed-run-20260821"
+printf '# Run closed-run-20260821\n\n- flow: feature\n- spec: docs/specs/plan-alpha.md\n\n## Outcome\n\nclosed\n' \
+  > "$REQAMB/.charles/runs/closed-run-20260821/RUN.md"
+closed_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run closed-run-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; closed_rc=$?
+unknown_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run missing-run-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; unknown_rc=$?
+if [ "$closed_rc" -eq 2 ] && [ "$unknown_rc" -eq 2 ] \
+  && grep -qF "run selector 'closed-run-20260821'" <<<"$closed_out" \
+  && grep -qF "run selector 'missing-run-20260821'" <<<"$unknown_out"; then
+  echo "  PASS  closed and unknown run selectors are refused"; pass=$((pass+1))
+else
+  echo "  FAIL  closed and unknown run selectors must be refused (closed=$closed_rc unknown=$unknown_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$REQAMB/.charles/runs/open-closed-run-20260821"
+printf '# Run open-closed-run-20260821\n\n- flow: feature\n- spec: docs/specs/plan-alpha.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQAMB/.charles/runs/open-closed-run-20260821/RUN.md"
+cp "$REQAMB/.charles/runs/open-closed-run-20260821/RUN.md" "$REQAMB/open-closed.before"
+closed_collision_state_out="$(bash "$RS" phase "$REQAMB" "closed collision" --run closed-run-20260821 2>&1)"; closed_collision_state_rc=$?
+closed_collision_codex_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --run closed-run-20260821 --req R1 \
+  --no-fallback --timeout 2 "scope" 2>&1)"; closed_collision_codex_rc=$?
+if [ "$closed_collision_state_rc" -eq 2 ] && [ "$closed_collision_codex_rc" -eq 2 ] \
+  && grep -qF "names a closed run" <<<"$closed_collision_state_out" \
+  && grep -qF "names a closed run" <<<"$closed_collision_codex_out" \
+  && cmp -s "$REQAMB/.charles/runs/open-closed-run-20260821/RUN.md" "$REQAMB/open-closed.before"; then
+  echo "  PASS  exact closed id is refused before an open substring match in both selectors"; pass=$((pass+1))
+else
+  echo "  FAIL  exact closed id must not select an open substring (state=$closed_collision_state_rc codex=$closed_collision_codex_rc)"; fail=$((fail+1))
+fi
+
+REQNOSPEC="$BOX/req-no-spec"; mkdir -p "$REQNOSPEC/bin" "$REQNOSPEC/.charles/runs/open-run"
+cp "$REQDIR/bin/codex" "$REQNOSPEC/bin/codex"
+printf '# Run open-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$REQNOSPEC/.charles/runs/open-run/RUN.md"
+req_out="$(PATH="$REQNOSPEC/bin:$PATH" CHARLES_STATE_DIR="$REQNOSPEC/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQNOSPEC" --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; req_rc=$?
+if [ "$req_rc" -eq 2 ] && grep -qF 'has no associated spec' <<<"$req_out"; then
+  echo "  PASS  requirement dispatch refuses an open run with no associated spec"; pass=$((pass+1))
+else
+  echo "  FAIL  missing open-run spec must refuse without guessing (rc=$req_rc)"; fail=$((fail+1))
+fi
+
+REQUNREAD="$BOX/req-unreadable"; mkdir -p "$REQUNREAD/bin" "$REQUNREAD/.charles/runs"
+cp "$REQDIR/bin/codex" "$REQUNREAD/bin/codex"
+chmod 000 "$REQUNREAD/.charles/runs"
+req_unread_out="$(PATH="$REQUNREAD/bin:$PATH" CHARLES_STATE_DIR="$REQUNREAD/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQUNREAD" --no-fallback --timeout 2 "scope" 2>&1)"; req_unread_rc=$?
+chmod 755 "$REQUNREAD/.charles/runs"
+if [ "$req_unread_rc" -eq 2 ] && grep -qF 'cannot read run directory' <<<"$req_unread_out"; then
+  echo "  PASS  unreadable run state refuses implement dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  unreadable run state must refuse dispatch (rc=$req_unread_rc)"; fail=$((fail+1))
 fi
 
 # --- dispatcher symlink hook --------------------------------------------------
@@ -1005,8 +1644,9 @@ fi
 
 NOFLOW="$BOX/no-flow"; mkdir -p "$NOFLOW/scripts"
 cp "$RS" "$NOFLOW/scripts/run-state.sh"
+cp "$(dirname "$RS")/run-common.sh" "$NOFLOW/scripts/run-common.sh"
 cp "$FS" "$NOFLOW/scripts/flow-status.sh"
-chmod +x "$NOFLOW/scripts/run-state.sh" "$NOFLOW/scripts/flow-status.sh"
+chmod +x "$NOFLOW/scripts/run-state.sh" "$NOFLOW/scripts/run-common.sh" "$NOFLOW/scripts/flow-status.sh"
 bash "$NOFLOW/scripts/run-state.sh" init "$NOFLOW" feature "missing graph" >/dev/null 2>&1
 noflow_phase="$(bash "$NOFLOW/scripts/run-state.sh" phase "$NOFLOW" mystery 2>"$NOFLOW/phase.err")"
 noflow_show="$(bash "$NOFLOW/scripts/run-state.sh" show "$NOFLOW" 2>"$NOFLOW/show.err")"
@@ -1098,8 +1738,10 @@ DD="$BOX/doctor-drift"; mkdir -p "$DD/bin" "$DD/repo/scripts" "$DD/repo/docs/spe
 printf 'green = "true"\n' > "$DD/repo/.charles.toml"
 printf '{"version":"fixture"}\n' > "$DD/repo/.claude-plugin/plugin.json"
 cp "$DOCTOR" "$DD/repo/scripts/doctor.sh"
+cp "$FS" "$DD/repo/scripts/flow-status.sh"
+cp "$REPO_ROOT/scripts/flow.json" "$DD/repo/scripts/flow.json"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/repo/scripts/codex-run.sh"
-chmod +x "$DD/repo/scripts/doctor.sh" "$DD/repo/scripts/codex-run.sh"
+chmod +x "$DD/repo/scripts/doctor.sh" "$DD/repo/scripts/flow-status.sh" "$DD/repo/scripts/codex-run.sh"
 printf 'current\n' > "$DD/repo/docs/specs/plan.md"
 DRIFT_CACHE="$DD/home/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/fixture"
 mkdir -p "$DRIFT_CACHE/docs/specs" "$DRIFT_CACHE/scripts"
@@ -1129,6 +1771,30 @@ if [ "$doctor_other_rc" -ne 0 ] && grep -q '^  FAIL.*non-spec' <<<"$doctor_other
   echo "  PASS  doctor keeps non-spec drift as FAIL"; pass=$((pass+1))
 else
   echo "  FAIL  non-spec drift must fail doctor (rc=$doctor_other_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$DD/repo/.charles/runs/open-run"
+printf '# Run open-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$DD/repo/.charles/runs/open-run/RUN.md"
+printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"open-impl","dir":"%s","task":"t"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DD/repo" > "$DD/repo/.charles/dispatches.jsonl"
+doctor_open_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" CHARLES_RELEASING=0 bash scripts/doctor.sh 2>&1)"; doctor_open_rc=$?
+if [ "$doctor_open_rc" -ne 0 ] \
+  && grep -q 'WARN.*non-spec' <<<"$doctor_open_out" \
+  && grep -q '^  FAIL.*never reviewed' <<<"$doctor_open_out"; then
+  echo "  PASS  open-run doctor warns on drift but fails on unreviewed implement"; pass=$((pass+1))
+else
+  echo "  FAIL  open-run doctor severity must split drift WARN and review FAIL (rc=$doctor_open_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$DD/bin/codex-run"
+ln -s "$DD/repo/scripts/codex-run.sh" "$DD/bin/codex-run"
+doctor_target_open_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" CHARLES_RELEASING=0 bash scripts/doctor.sh 2>&1)"; doctor_target_open_rc=$?
+if [ "$doctor_target_open_rc" -ne 0 ] \
+  && grep -q '^  FAIL.*codex-run points at' <<<"$doctor_target_open_out"; then
+  echo "  PASS  open-run doctor keeps dispatcher-target drift as FAIL"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatcher-target drift must remain FAIL while a run is open (rc=$doctor_target_open_rc)"; fail=$((fail+1))
 fi
 
 # --- simplicity ladder --------------------------------------------------------
@@ -1448,6 +2114,130 @@ if [ "$nonreview_rc" -eq 2 ] && grep -q 'only valid with --lane review' <<<"$non
   echo "  PASS  --base is rejected outside the review lane"; pass=$((pass+1))
 else
   echo "  FAIL  --base outside review should exit 2 (rc=$nonreview_rc)"; fail=$((fail+1))
+fi
+
+# --- review diff boundaries and fail-closed assembly --------------------------
+RDIFF="$BOX/reviewdiff"; RDIFFBIN="$BOX/reviewdiff-bin"; mkdir -p "$RDIFF/docs" "$RDIFF/.charles" "$RDIFFBIN"
+RDIFF_STATE="$BOX/reviewdiff-state"
+printf '#!/usr/bin/env bash\n: > %s/review-dispatched\ncp changes.diff %s/reviewdiff-captured.diff\n' \
+  "$BOX" "$BOX" > "$RDIFFBIN/codex"
+chmod +x "$RDIFFBIN/codex"
+( cd "$RDIFF" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'base\n' > tracked.txt
+  printf 'base charles\n' > .charles/state
+  printf 'base config\n' > .charles.toml
+  git add tracked.txt .charles.toml && git add -f .charles/state && git commit -qm base
+  printf 'changed\n' > tracked.txt
+  printf 'changed charles\n' > .charles/state
+  printf 'changed config\n' > .charles.toml ) >/dev/null 2>&1
+printf '# outside plan sentinel\n' > "$BOX/outside-review-plan.md"
+
+rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+outside_review_out="$(PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RDIFF_STATE" bash "$RUN_SH" \
+  --lane review --dir "$RDIFF" --plan "$BOX/outside-review-plan.md" --timeout 5 "t" 2>&1)"; outside_review_rc=$?
+if [ "$outside_review_rc" -eq 0 ] && [ -s "$BOX/reviewdiff-captured.diff" ] \
+  && grep -q '^+changed$' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'outside plan sentinel' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'changed charles' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'changed config' "$BOX/reviewdiff-captured.diff"; then
+  echo "  PASS  outside plan keeps tracked review changes and excludes internal scratch"; pass=$((pass+1))
+else
+  echo "  FAIL  outside plan must keep tracked changes and exclude .charles files (rc=$outside_review_rc)"; fail=$((fail+1))
+fi
+
+# A failing TRACKED diff must refuse, never fall through to untracked-only.
+# The incident: --plan outside --dir made the tracked halves fatal while the
+# untracked enumeration (a case filter, not the exclude pathspec) still appended
+# its additions, so changes.diff was PARTIAL. The reviewer graded plausible input
+# and reported every tracked change as absent. Partial is worse than empty:
+# empty announces itself, partial does not.
+printf 'untracked\n' > "$RDIFF/untracked-sentinel.txt"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = diff ] && { echo "fatal: simulated" >&2; exit 128; }; done\nexec %s "$@"\n' \
+  "$(command -v git)" > "$RDIFFBIN/git"
+chmod +x "$RDIFFBIN/git"
+rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+trkfail_out="$(PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RDIFF_STATE" bash "$RUN_SH" \
+  --lane review --dir "$RDIFF" --plan "$BOX/outside-review-plan.md" --timeout 5 "t" 2>&1)"; trkfail_rc=$?
+rm -f "$RDIFFBIN/git" "$RDIFF/untracked-sentinel.txt"
+if [ "$trkfail_rc" -ne 0 ] && grep -qF 'git error while assembling review diff' <<<"$trkfail_out" \
+  && [ ! -f "$BOX/review-dispatched" ]; then
+  echo "  PASS  a failing tracked diff refuses instead of grading untracked-only"; pass=$((pass+1))
+else
+  echo "  FAIL  a failing tracked diff must refuse before dispatch (rc=$trkfail_rc)"; fail=$((fail+1))
+fi
+
+# Staged changes must appear ONCE. `git diff HEAD` already covers staged and
+# unstaged; a second `--cached` pass appended every staged hunk again, so the
+# reviewer saw duplicates of exactly the changes most likely to be mid-commit.
+printf 'staged-sentinel\n' > "$RDIFF/staged.txt"
+( cd "$RDIFF" && git add staged.txt ) >/dev/null 2>&1
+rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+staged_out="$(PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RDIFF_STATE" bash "$RUN_SH" \
+  --lane review --dir "$RDIFF" --plan "$BOX/outside-review-plan.md" --timeout 5 "t" 2>&1)"; staged_rc=$?
+staged_hits="$(grep -c '^+staged-sentinel$' "$BOX/reviewdiff-captured.diff" 2>/dev/null || echo 0)"
+( cd "$RDIFF" && git rm -q --cached staged.txt ) >/dev/null 2>&1; rm -f "$RDIFF/staged.txt"
+if [ "$staged_rc" -eq 0 ] && [ "$staged_hits" -eq 1 ]; then
+  echo "  PASS  a staged change appears once in the review diff"; pass=$((pass+1))
+else
+  echo "  FAIL  staged change must appear exactly once (hits=$staged_hits rc=$staged_rc)"; fail=$((fail+1))
+fi
+
+printf '# inside plan sentinel\n' > "$RDIFF/docs/inside.md"
+rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+inside_review_out="$(PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RDIFF_STATE" bash "$RUN_SH" \
+  --lane review --dir "$RDIFF" --plan "$RDIFF/docs/inside.md" --timeout 5 "t" 2>&1)"; inside_review_rc=$?
+if [ "$inside_review_rc" -eq 0 ] && [ -s "$BOX/reviewdiff-captured.diff" ] \
+  && grep -q '^+changed$' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'inside plan sentinel' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'changed charles' "$BOX/reviewdiff-captured.diff" \
+  && ! grep -qF 'changed config' "$BOX/reviewdiff-captured.diff"; then
+  echo "  PASS  inside plan stays excluded with .charles files"; pass=$((pass+1))
+else
+  echo "  FAIL  inside plan must be excluded with .charles files (rc=$inside_review_rc)"; fail=$((fail+1))
+fi
+
+RDIFF_REAL_GIT="$(command -v git)"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'case "${CHARLES_FAIL_GIT:-}" in' \
+  '  head) [ "${1:-}" = "-C" ] && [ "${3:-}" = "diff" ] && [ "${4:-}" = "HEAD" ] ;;' \
+  '  untracked) [ "${1:-}" = "-C" ] && [ "${3:-}" = "ls-files" ] ;;' \
+  '  *) false ;;' \
+  'esac' \
+  'if [ "$?" -eq 0 ]; then' \
+  '  echo "fatal: synthetic git assembly failure" >&2' \
+  '  exit 91' \
+  'fi' \
+  "exec \"$RDIFF_REAL_GIT\" \"\$@\"" > "$RDIFFBIN/git"
+chmod +x "$RDIFFBIN/git"
+for fail_mode in head untracked; do
+  rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+  git_error_out="$(CHARLES_FAIL_GIT="$fail_mode" PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RDIFF_STATE" \
+    bash "$RUN_SH" --lane review --dir "$RDIFF" --plan "$RDIFF/docs/inside.md" --timeout 5 "t" 2>&1)"; git_error_rc=$?
+  if [ "$git_error_rc" -ne 0 ] && grep -qF 'git error while assembling review diff' <<<"$git_error_out" \
+    && ! grep -qF 'nothing to review (empty diff)' <<<"$git_error_out" \
+    && [ ! -e "$BOX/review-dispatched" ]; then
+    echo "  PASS  git $fail_mode failure refuses review input"; pass=$((pass+1))
+  else
+    echo "  FAIL  git $fail_mode failure must refuse distinctly (rc=$git_error_rc)"; fail=$((fail+1))
+  fi
+done
+
+RCLEAN="$BOX/reviewclean"; mkdir -p "$RCLEAN/docs"
+RCLEAN_STATE="$BOX/reviewclean-state"
+( cd "$RCLEAN" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf 'clean\n' > tracked.txt
+  printf '# clean plan\n' > docs/p.md
+  git add -A && git commit -qm clean ) >/dev/null 2>&1
+rm -f "$BOX/review-dispatched" "$BOX/reviewdiff-captured.diff"
+clean_review_out="$(PATH="$RDIFFBIN:$PATH" CHARLES_STATE_DIR="$RCLEAN_STATE" bash "$RUN_SH" \
+  --lane review --dir "$RCLEAN" --plan "$RCLEAN/docs/p.md" --timeout 5 "t" 2>&1)"; clean_review_rc=$?
+if [ "$clean_review_rc" -eq 3 ] && grep -qF 'nothing to review (empty diff)' <<<"$clean_review_out" \
+  && ! grep -qF 'git error while assembling review diff' <<<"$clean_review_out" \
+  && [ ! -e "$BOX/review-dispatched" ]; then
+  echo "  PASS  clean review tree keeps the empty-diff refusal"; pass=$((pass+1))
+else
+  echo "  FAIL  clean review tree must refuse as an empty diff (rc=$clean_review_rc)"; fail=$((fail+1))
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine luna --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1

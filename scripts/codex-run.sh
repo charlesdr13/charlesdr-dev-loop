@@ -24,13 +24,20 @@
 #
 # Usage:
 #   codex-run.sh --lane explore   [--dir D] [--engine E] [--effort max|high|medium] [--fast] "task"
-#   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--read-only] "task"
+#   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--run ID] [--req R1,A3] [--plan FILE] [--read-only] "task"
 #   codex-run.sh --lane review    --dir D --plan FILE [--base REF] [--files a,b] "task"
 #
 # --fast is shorthand for --effort high. fast_mode is enabled explicitly on the
 # luna engine and disabled on the review lane, so it applies to luna only.
 
 set -euo pipefail
+
+# readlink -f first: this script is reached through a PATH symlink, and an
+# unresolved dirname points at the symlink's directory, where run-common.sh
+# does not exist. Confirmed live: sourcing died with exit 1 on every wrapper
+# dispatch until this line resolved the link.
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd -P)"
+. "$SCRIPT_DIR/run-common.sh"
 
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
@@ -50,6 +57,12 @@ TIMEOUT=2700       # README's canonical timing filters durations to successful
 PLAN=""
 BASE=""
 FILES=""
+REQ=""
+REQ_SET=0
+RUN_SELECTOR="${CHARLES_RUN:-}"
+RUN_SELECTOR_SET=0
+if [ -n "$RUN_SELECTOR" ]; then RUN_SELECTOR_SET=1; fi
+VALIDATE_ONLY=0
 FALLBACK=1
 STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
 DS_SCRIPT="$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
@@ -66,6 +79,9 @@ while [ $# -gt 0 ]; do
     --plan)      PLAN="$2"; shift 2 ;;
     --base)      BASE="$2"; shift 2 ;;
     --files)     FILES="$2"; shift 2 ;;
+    --run)       [ $# -ge 2 ] || { echo "codex-run.sh: --run requires a run id" >&2; exit 2; }; [ -n "$2" ] || { echo "codex-run.sh: --run requires a run id" >&2; exit 2; }; RUN_SELECTOR="$2"; RUN_SELECTOR_SET=1; shift 2 ;;
+    --req)       [ $# -ge 2 ] || { echo "codex-run.sh: --req requires identifiers" >&2; exit 2; }; REQ="$2"; REQ_SET=1; shift 2 ;;
+    --validate-only) VALIDATE_ONLY=1; shift ;;
     --read-only) SANDBOX="read-only"; shift ;;
     --resume)    RESUME=1; shift ;;
     --timeout)   TIMEOUT="$2"; shift 2 ;;
@@ -82,7 +98,6 @@ TASK="${1:-}"
 [ -n "$TASK" ] || { echo "codex-run.sh: no task given" >&2; exit 2; }
 [ -d "$DIR" ]  || { echo "codex-run.sh: no such directory: $DIR" >&2; exit 2; }
 [ -z "$BASE" ] || [ "$LANE" = "review" ] || { echo "codex-run.sh: --base is only valid with --lane review" >&2; exit 2; }
-command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 
 # --- global engine switch ------------------------------------------------------
 # ponytail: a file, not just an env var — each harness Bash call is a fresh shell,
@@ -108,9 +123,184 @@ if [ "$ENGINE_SET" -eq 0 ]; then
 fi
 
 DIR="$(cd "$DIR" && pwd)"
+RUN_DIR="$(charles_run_root "$DIR")"
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
 RUN_ID="${RUN##*/}"
+
+open_run_dirs() {
+  local include_closed=0
+  [ "${1:-}" = "--all" ] && include_closed=1
+  local runs="$RUN_DIR/.charles/runs" d
+  if [ ! -e "$runs" ] && [ ! -L "$runs" ]; then return 0; fi
+  if [ ! -d "$runs" ] || [ ! -r "$runs" ] || [ ! -x "$runs" ]; then
+    echo "codex-run.sh: REFUSING — cannot read run directory: $runs" >&2
+    return 2
+  fi
+
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  local -a dirs=("$runs"/*/)
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  for d in "${dirs[@]}"; do
+    [ -f "$d/RUN.md" ] || continue
+    [ -r "$d/RUN.md" ] || {
+      echo "codex-run.sh: REFUSING — cannot read run state: ${d%/}/RUN.md" >&2
+      return 2
+    }
+    [ "$include_closed" -eq 1 ] || { grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue; }
+    printf '%s\n' "${d%/}"
+  done
+}
+
+resolve_plan_path() {
+  local path="$1"
+  case "$path" in /*) ;; *) path="$RUN_DIR/$path" ;; esac
+  [ -f "$path" ] && [ -r "$path" ] || return 1
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$path" 2>/dev/null || printf '%s\n' "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+validate_requirement_list() {
+  local id normalized
+  [ -n "$REQ" ] || { echo "codex-run.sh: REFUSING — --req needs at least one requirement identifier" >&2; return 2; }
+  [[ "$REQ" == *,* ]] && [[ "$REQ" =~ (^|,)[[:space:]]*(,|$) ]] && {
+    echo "codex-run.sh: REFUSING — invalid requirement identifier ''" >&2
+    return 2
+  }
+  normalized="$(printf '%s' "$REQ" | tr ',[:space:]' ' ')"
+  read -r -a req_ids <<<"$normalized"
+  [ "${#req_ids[@]}" -gt 0 ] && [ -n "${req_ids[0]:-}" ] || {
+    echo "codex-run.sh: REFUSING — --req needs at least one requirement identifier" >&2
+    return 2
+  }
+  for id in "${req_ids[@]}"; do
+    [[ "$id" =~ $CHARLES_REQUIREMENT_REGEX ]] || {
+      echo "codex-run.sh: REFUSING — invalid requirement identifier '$id'" >&2
+      return 2
+    }
+  done
+  REQ="$(IFS=,; printf '%s' "${req_ids[*]}")"
+}
+
+validate_dispatch_scope() {
+  # An implement receipt without a plan mapping cannot be audited later, so fail before taking a lane.
+  [ "$LANE" = "implement" ] || return 0
+  if [ "$REQ_SET" -eq 1 ]; then
+    validate_requirement_list || return $?
+  fi
+
+  local open_listing
+  open_listing="$(open_run_dirs)" || return $?
+  local -a open_runs=()
+  [ -z "$open_listing" ] || mapfile -t open_runs <<<"$open_listing"
+  local run_dir="" plan_path=""
+  # Abandoned runs stay open for /resolve; choose one instead of blocking the repo.
+  if [ "$RUN_SELECTOR_SET" -eq 1 ]; then
+    local all_listing
+    all_listing="$(open_run_dirs --all)" || return $?
+    local -a all_runs=()
+    [ -z "$all_listing" ] || mapfile -t all_runs <<<"$all_listing"
+    local -a substring_matches=()
+    local exact_match="" candidate candidate_name
+    for candidate in "${all_runs[@]}"; do
+      candidate_name="${candidate##*/}"
+      if [ "$candidate_name" = "$RUN_SELECTOR" ]; then
+        if grep -q '^## Outcome' "$candidate/RUN.md" 2>/dev/null; then
+          echo "codex-run.sh: REFUSING — run selector '$RUN_SELECTOR' names a closed run" >&2
+          return 2
+        fi
+        exact_match="$candidate"
+        break
+      fi
+    done
+    for candidate in "${open_runs[@]}"; do
+      candidate_name="${candidate##*/}"
+      if [ -z "$exact_match" ] && [[ "$candidate_name" == *"$RUN_SELECTOR"* ]]; then
+        substring_matches+=("$candidate")
+      fi
+    done
+    if [ -n "$exact_match" ]; then
+      run_dir="$exact_match"
+    elif [ "${#substring_matches[@]}" -eq 0 ]; then
+      echo "codex-run.sh: REFUSING — run selector '$RUN_SELECTOR' does not name an open run (unknown or closed)" >&2
+      return 2
+    elif [ "${#substring_matches[@]}" -gt 1 ]; then
+      echo "codex-run.sh: REFUSING — run selector '$RUN_SELECTOR' is ambiguous; matches:" >&2
+      printf '  %s\n' "${substring_matches[@]##*/}" >&2
+      return 2
+    else
+      run_dir="${substring_matches[0]}"
+    fi
+  elif [ "${#open_runs[@]}" -gt 1 ]; then
+    echo "codex-run.sh: REFUSING — multiple open runs; requirement scope is ambiguous:" >&2
+    printf '  %s\n' "${open_runs[@]##*/}" >&2
+    echo "codex-run.sh: pass --run <id> or CHARLES_RUN=<id> to select one" >&2
+    return 2
+  elif [ "${#open_runs[@]}" -eq 1 ]; then
+    run_dir="${open_runs[0]}"
+  else
+    [ "$REQ_SET" -eq 1 ] || return 0
+    [ -n "$PLAN" ] || return 0
+    plan_path="$(resolve_plan_path "$PLAN")" || {
+      echo "codex-run.sh: REFUSING — no readable plan file: $PLAN" >&2
+      return 2
+    }
+  fi
+
+  local run_name spec spec_path resolved_dir resolved_spec id plan_label pattern_id
+  if [ -n "$run_dir" ]; then
+    run_name="${run_dir##*/}"
+    spec="$(sed -n 's/^- spec: //p' "$run_dir/RUN.md" | head -1)"
+    if [ -z "$spec" ]; then
+      echo "codex-run.sh: REFUSING — open run $run_name has no associated spec; refusing to guess a plan" >&2
+      return 2
+    fi
+    spec_path="$spec"
+    case "$spec_path" in /*) ;; *) spec_path="$RUN_DIR/$spec_path" ;; esac
+    if [ ! -f "$spec_path" ]; then
+      echo "codex-run.sh: REFUSING — open run $run_name names missing spec $spec" >&2
+      return 2
+    fi
+    if command -v realpath >/dev/null 2>&1; then
+      resolved_dir="$(realpath "$RUN_DIR" 2>/dev/null || printf '%s\n' "$RUN_DIR")"
+      resolved_spec="$(realpath "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
+    elif [ -d "$(dirname "$spec_path")" ]; then
+      resolved_dir="$(cd "$RUN_DIR" && pwd -P)"
+      [ -L "$spec_path" ] && { echo "codex-run.sh: REFUSING — cannot safely resolve symlinked spec $spec without realpath" >&2; return 2; }
+      resolved_spec="$(cd "$(dirname "$spec_path")" && pwd -P)/$(basename "$spec_path")"
+    else
+      echo "codex-run.sh: REFUSING — cannot resolve spec $spec" >&2
+      return 2
+    fi
+    case "$resolved_spec" in
+      "$resolved_dir"/*) ;;
+      *) echo "codex-run.sh: REFUSING — open run $run_name names a spec outside the repository: $spec" >&2; return 2 ;;
+    esac
+    plan_path="$resolved_spec"
+    plan_label="$spec"
+    if [ "$REQ_SET" -eq 0 ]; then
+      echo "codex-run.sh: REFUSING — implement dispatch must name requirements for open run $run_name ($spec)" >&2
+      echo "codex-run.sh: pass --req R1,A3 (identifiers from that spec)" >&2
+      return 2
+    fi
+  else
+    plan_label="$PLAN"
+  fi
+  # Sign-off is proof, not scope: ranged bullets there must not satisfy --req.
+  for id in "${req_ids[@]}"; do
+    pattern_id="${id//./[.]}"
+    if ! sed '/^## Sign-off[[:space:]]*$/q' "$plan_path" |
+      grep -E "^- (\[[ xX]\] )?\*\*${pattern_id}(\*\*|[[:space:]]|[.]([^0-9]|$))" >/dev/null; then
+      echo "codex-run.sh: REFUSING — requirement $id is not in $plan_label" >&2
+      return 2
+    fi
+  done
+}
 
 # --- always announce termination ---------------------------------------------
 # .last is written only on success, so a dispatch that dies leaves nothing and
@@ -169,8 +359,9 @@ log_start() {
   [ "$LANE" = "review" ] && event_engine="review"
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
      --arg engine "$event_engine" --arg run "$RUN_ID" --arg dir "$DIR" \
-     --arg task "$(printf '%.200s' "$TASK")" \
-     '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}' \
+     --arg task "$(printf '%.200s' "$TASK")" --arg req "$REQ" \
+     '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end)} else . end' \
      >> "$f" 2>/dev/null
 }
 
@@ -190,8 +381,9 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
      --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN_ID" \
      --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
-     --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" \
+     --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" --arg req "$REQ" \
      '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,dir:$dir,task:$task}
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end)} else . end
       | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
      >> "$f" 2>/dev/null || true
 }
@@ -272,26 +464,52 @@ run_review() {
   cp "$PLAN" "$box/plan.md"
 
   # the plan lives in the repo, so exclude it (and our own scratch) from the
-  # diff — otherwise the reviewer reports its own input as scope creep.
-  local plan_rel; plan_rel="$(realpath --relative-to="$DIR" "$PLAN" 2>/dev/null || echo "")"
+  # diff — otherwise the reviewer reports its own input as scope creep. An
+  # outside plan has no pathspec in this repository.
+  local plan_rel="" resolved_plan untracked_file
+  local -a excludes=(':(exclude).charles' ':(exclude).charles.toml')
+  if resolved_plan="$(realpath --relative-to="$DIR" "$PLAN" 2>/dev/null)"; then
+    case "$resolved_plan" in
+      ..|../*) ;;
+      *) plan_rel="$resolved_plan"; excludes+=(":(exclude)$plan_rel") ;;
+    esac
+  fi
 
   if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
     if [ -n "$BASE" ]; then
-      git -C "$DIR" diff "$BASE" -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"} > "$box/changes.diff" 2>/dev/null || true
+      if ! git -C "$DIR" diff "$BASE" -- . "${excludes[@]}" > "$box/changes.diff"; then
+        echo "codex-run.sh: refusing review — git error while assembling review diff (git diff $BASE)" >&2
+        rm -rf "$box"
+        return 4
+      fi
       NOTE="Input is a git diff from $BASE to the working tree, plus untracked files as additions."
     else
-      { git -C "$DIR" diff HEAD -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
-        git -C "$DIR" diff --cached -- . ':(exclude).charles' ':(exclude).charles.toml' ${plan_rel:+":(exclude)$plan_rel"}
-      } > "$box/changes.diff" 2>/dev/null || true
+      # HEAD covers staged and unstaged both. A second --cached pass appended
+      # every staged hunk a second time, so the reviewer saw duplicates of
+      # exactly the changes most likely to be mid-commit.
+      if ! git -C "$DIR" diff HEAD -- . "${excludes[@]}" > "$box/changes.diff"; then
+        echo "codex-run.sh: refusing review — git error while assembling review diff (git diff HEAD)" >&2
+        rm -rf "$box"
+        return 4
+      fi
       NOTE="Input is a git diff of the working tree against HEAD, plus untracked files as additions."
     fi
     # untracked files are invisible to git diff — append them as adds
-    git -C "$DIR" ls-files --others --exclude-standard -z 2>/dev/null |
-      while IFS= read -r -d '' f; do
-        case "$f" in .charles/*|.charles.toml|"$plan_rel") continue ;; esac
-        printf '\n--- /dev/null\n+++ b/%s\n' "$f" >> "$box/changes.diff"
-        sed 's/^/+/' "$DIR/$f" >> "$box/changes.diff" 2>/dev/null || true
-      done
+    untracked_file="$box/untracked"
+    if ! git -C "$DIR" ls-files --others --exclude-standard -z -- . "${excludes[@]}" > "$untracked_file"; then
+      echo "codex-run.sh: refusing review — git error while assembling review diff (git ls-files)" >&2
+      rm -rf "$box"
+      return 4
+    fi
+    while IFS= read -r -d '' f; do
+      case "$f" in .charles/*|.charles.toml|"$plan_rel") continue ;; esac
+      if ! printf '\n--- /dev/null\n+++ b/%s\n' "$f" >> "$box/changes.diff" \
+        || ! sed 's/^/+/' "$DIR/$f" >> "$box/changes.diff"; then
+        echo "codex-run.sh: refusing review — could not assemble untracked file '$f'" >&2
+        rm -rf "$box"
+        return 4
+      fi
+    done < "$untracked_file"
   elif [ -n "$FILES" ]; then
     : > "$box/changes.diff"
     IFS=',' read -ra parts <<< "$FILES"
@@ -384,6 +602,11 @@ esac
 if [ "$LANE" != "review" ]; then
   case "$ENGINE" in luna|terra|deepseek) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek)" >&2; exit 2 ;; esac
 fi
+[ "$REQ_SET" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --req is only valid with --lane implement" >&2; exit 2; }
+[ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
+validate_dispatch_scope || exit $?
+[ "$VALIDATE_ONLY" -eq 0 ] || exit 0
+command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 
 # --- refuse a second writer on the same tree ---------------------------------
 # Two workspace-write dispatches on one directory interleave their edits and the

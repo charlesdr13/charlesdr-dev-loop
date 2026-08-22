@@ -34,6 +34,7 @@ selected with `--engine`; `--effort` overrides. Without `--base`, the diff is
 the working tree against `HEAD`, plus cached and untracked changes. With
 `--base <REF>`, it is `<REF>..working-tree` plus untracked changes, so committed
 work can be graded; the ref must resolve. It is read-only inside it.
+A review after `HEAD` has moved requires `--base <ref>`, or the reviewer sees an empty diff and grades nothing.
 
 **Do not work around this.** Do not pass the repo path, paste extra context, or
 hand it the implementer's transcript. The model that wrote the code grades its

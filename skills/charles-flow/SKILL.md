@@ -24,6 +24,12 @@ Review accepts `--base <ref>` when grading already-committed work: it reviews
 `<ref>..working-tree`, including uncommitted changes on top and untracked files.
 The ref must resolve; without `--base`, review keeps its normal `HEAD` plus
 cached plus untracked diff. `--base` is invalid on other lanes.
+A review after `HEAD` has moved requires `--base <ref>`; otherwise the reviewer
+sees an empty diff and grades nothing.
+
+Review effort is positional: dispatch intermediate reviews with `--effort
+medium`, and omit it for the final pre-close review so the model-aware default
+stays sol @ medium and luna/terra @ max. This is a documented rule, not a flag.
 
 **Long dispatches are normal — measured, not guessed.** Older all-lane baseline
 (179 real runs; predates the implement remeasurement below): median successful
@@ -265,16 +271,18 @@ in parallel, before any extra setup. Read `parallel_min_chunks` from
 `.charles.toml`; it defaults to `2` and may be raised when a repo's measurements
 justify a higher threshold.
 
-Use parallel when the valid manifest reaches that configured threshold, its file
-declarations are disjoint, and `treehouse` is available. Use serial when there
-is one chunk, the count is below a raised threshold, declarations overlap, the
-manifest is invalid, or `treehouse` is absent. Serial runs still use `green.sh`
-between chunks.
+For a settled plan at `docs/specs/<plan>.md`, read
+`docs/specs/<plan>.chunks.json`. Use parallel when that valid manifest holds
+`parallel_min_chunks` or more entries, its file declarations are disjoint, and
+`treehouse` is available. Use serial when there is one chunk, the count is
+below a raised threshold, declarations overlap, the manifest is invalid, or
+`treehouse` is absent. Serial runs still use `green.sh` between chunks.
 
 ```bash
 SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
-"$SCRIPTS/parallel-chunks.sh" "$(pwd)" chunks.json
-# chunks.json: [{"name":"api","files":["src/a.ts"],"task":"..."}, ...]
+CHUNKS="docs/specs/<plan>.chunks.json"
+"$SCRIPTS/parallel-chunks.sh" "$(pwd)" "$CHUNKS"
+# chunks.json: [{"name":"api","files":["src/a.ts"],"req":["R1"],"task":"..."}, ...]
 ```
 
 Each chunk gets its own `treehouse` worktree and **declares the files it may
@@ -282,6 +290,18 @@ touch**. The declaration is what makes this safe, not the worktree: overlapping
 declarations are refused before anything is dispatched, and a chunk that writes
 outside its own declaration is rejected and never merged. So a lane that
 quietly widens its scope gets caught, which the serial path does not do.
+When a run is open, every chunk declares its `req` identifiers; the runner
+validates them against the plan and passes them to the child implement
+dispatches.
+
+A batch whose chunks modify the flow's own machinery — `parallel-chunks.sh`,
+`codex-run.sh`, or anything the dispatcher executes — MUST run serially. Two
+hazards make this mandatory: children execute the dispatcher from the runner's
+script directory while the post-merge green check runs the merged root scripts;
+and Bash reads a script lazily by byte offset, so rewriting the dispatcher while
+it executes kills it mid-run at a stale offset. This happened in Chunk A: its
+dispatcher died with `syntax error near unexpected token )` after the work had
+completed.
 
 Merging is per-file and only from accepted chunks. **Run `green.sh` once on the
 combined result** — chunks that pass alone can still fail together.
@@ -299,9 +319,10 @@ Every flow run keeps durable state, because a run that ends in prose ends with
 its open items lost:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh init  "$(pwd)" <flow> "<goal>"
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh init  "$(pwd)" <flow> "<goal>" --spec docs/specs/<plan>.md
 ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh phase "$(pwd)" "<phase>" "<pasted proof output>"
 ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh item  "$(pwd)" <TYPE> "<text>"
+${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh defer "$(pwd)" "<discovery>"
 ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh close "$(pwd)" "<outcome>" --spec docs/specs/<plan>.md
 ```
 
@@ -314,6 +335,13 @@ per the proof protocol), `item` the moment something cannot be finished now:
 | `PENDING-DECISION` | ready to act, needs their yes |
 | `DEFERRED` | deliberately out of scope |
 | `FAILED` | a lane died, work incomplete |
+
+Open the run with `init --spec docs/specs/<plan>.md`. A discovery made
+mid-flow is `DEFERRED`, not a new dispatch; `run-state.sh defer "$(pwd)"
+"<text>"` is the one-command path. `codex-run --lane implement` takes
+`--req A3,A5` and, while a run is open, refuses a dispatch without it, checks
+the identifiers against that run's spec, and cannot dispatch a run opened
+without a spec.
 
 Close only when every item is resolved AND the flow reached its final phase. A
 run that died at phase 3 with no open items is abandoned, not finished — leave
@@ -367,10 +395,14 @@ from inside a report, which is why the check reads that instead.
    manifest beside the settled plan if it still yields 2+ disjoint slices. Never
    dispatch a manifest written before the grill settled.
 5. **Ground to truth.** The hard gate below. Do not proceed until all four pass.
-6. **Implement.** For 2+ disjoint slices, use the companion manifest and the
-   parallel default when its configured threshold and guards permit it;
-   otherwise issue the direct `codex-run --lane implement` command as a
-   background Bash call with `--timeout 2700` and its own `.charles/` log.
+6. **Implement.** Read `docs/specs/<plan>.chunks.json`, resolve
+   `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"` as in
+   `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
+   docs/specs/<plan>.chunks.json` when the valid manifest holds
+   `parallel_min_chunks` or more entries. Otherwise dispatch serially with
+   `codex-run --lane implement --req <requirement IDs>`; one chunk, overlapping
+   declarations, an invalid manifest, missing `treehouse`, and any batch that
+   edits the flow machinery are documented serial fallbacks.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
 8. **Debug loop.** `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"` — exit 0 is
@@ -393,10 +425,14 @@ from inside a report, which is why the check reads that instead.
    manifest only after the plan is settled. This is what makes step 6 possible
    at all — the review lane needs a plan, and without one a debug fix ships
    unreviewed.
-5. For 2+ disjoint slices, use the companion manifest and the parallel default
-   when its configured threshold and guards permit it; otherwise use direct
-   `codex-run --lane implement` for the fix as a background Bash call with
-   `--timeout 2700`.
+5. **Implement.** Read `docs/specs/<plan>.chunks.json`, resolve
+   `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"` as in
+   `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
+   docs/specs/<plan>.chunks.json` when the valid manifest holds
+   `parallel_min_chunks` or more entries. Otherwise dispatch the fix serially
+   with `codex-run --lane implement --req <requirement IDs>`; use serial for
+   one chunk, overlapping declarations, an invalid manifest, missing
+   `treehouse`, or a batch that edits the flow machinery.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
@@ -414,9 +450,14 @@ from inside a report, which is why the check reads that instead.
 3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. After the
    grill settles, write or rewrite the companion `.chunks.json` manifest beside
    it if it yields 2+ disjoint file slices.
-4. For 2+ disjoint slices, use the companion manifest and the parallel default
-   when its configured threshold and guards permit it; otherwise use a direct
-   background `codex-run --lane implement` call.
+4. **Implement.** Read `docs/specs/<plan>.chunks.json`, resolve
+   `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"` as in
+   `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
+   docs/specs/<plan>.chunks.json` when the valid manifest holds
+   `parallel_min_chunks` or more entries. Otherwise dispatch serially with a
+   background `codex-run --lane implement --req <requirement IDs>` call; use
+   serial for one chunk, overlapping declarations, an invalid manifest,
+   missing `treehouse`, or a batch that edits the flow machinery.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
 7. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per

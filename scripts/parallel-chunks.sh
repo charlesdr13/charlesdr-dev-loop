@@ -12,7 +12,7 @@
 # declaration is rejected and never merged. Disjoint declarations plus enforced
 # declarations means the merge cannot clobber.
 #
-#   parallel-chunks.sh <repo> <spec.json> [--timeout N] [--no-green]
+#   parallel-chunks.sh <repo> <spec.json> [--timeout N] [--no-green] [--run ID]
 #
 #   spec.json: [ {"name":"api","files":["src/a.ts","src/b.ts"],"task":"..."}, ... ]
 #
@@ -21,14 +21,23 @@
 # exit 3  a lease, chunk, merge, or combined-green check failed
 set -uo pipefail
 
+# readlink -f first: this script is reached through a PATH symlink, and an
+# unresolved dirname points at the symlink's directory, where run-common.sh
+# does not exist. Confirmed live: sourcing died with exit 1 on every wrapper
+# dispatch until this line resolved the link.
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd -P)"
+. "$SCRIPT_DIR/run-common.sh"
+
 REPO="${1:?usage: parallel-chunks.sh <repo> <spec.json>}"; shift
 SPEC="${1:?spec.json required}"; shift || true
 TIMEOUT=2700
 NO_GREEN=0
+RUN_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --timeout) [ $# -ge 2 ] || { echo "--timeout requires seconds" >&2; exit 2; }; TIMEOUT="$2"; shift 2 ;;
     --no-green) NO_GREEN=1; shift ;;
+    --run) [ $# -ge 2 ] || { echo "--run requires a run id" >&2; exit 2; }; [ -n "$2" ] || { echo "--run requires a run id" >&2; exit 2; }; RUN_ARGS+=(--run "$2"); shift 2 ;;
     *) shift ;;
   esac
 done
@@ -36,6 +45,11 @@ done
 [ -d "$REPO" ] || { echo "no such repo: $REPO" >&2; exit 1; }
 [ -f "$SPEC" ] || { echo "no such spec: $SPEC" >&2; exit 1; }
 REPO="$(cd -- "$REPO" && pwd)"
+SPEC="$(cd -- "$(dirname -- "$SPEC")" && pwd)/$(basename -- "$SPEC")"
+PLAN=""
+case "$SPEC" in
+  *.chunks.json) PLAN="${SPEC%.chunks.json}.md" ;;
+esac
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "not a git repo: $REPO" >&2; exit 1; }
 
@@ -56,7 +70,7 @@ case "$parallel_min_chunks" in
   ''|*[!0-9]*|0|1) echo "parallel-chunks.sh: WARN: invalid parallel_min_chunks; using default 2" >&2; parallel_min_chunks=2 ;;
 esac
 
-if ! jq -e '
+if ! jq -e --arg requirement_regex "$CHARLES_REQUIREMENT_REGEX" '
   if type != "array" then false
   else all(.[];
     type == "object" and has("name") and has("files") and has("task")
@@ -69,6 +83,9 @@ if ! jq -e '
         and (test("^[A-Za-z]:") | not)
       else false end)
     else false end)
+    and (if has("req") then
+      (.req | type == "array" and all(.[]; type == "string" and test($requirement_regex)))
+    else true end)
   )
   end
 ' "$SPEC" >/dev/null 2>&1; then
@@ -112,8 +129,28 @@ fi
 
 command -v treehouse >/dev/null || { echo "treehouse required for parallel chunks — run them serially instead" >&2; exit 1; }
 
-SCRIPTS="$(cd -- "$(dirname "$0")" && pwd)"
+SCRIPTS="$SCRIPT_DIR"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/parallel-chunks.XXXXXX")" || { echo "could not create temporary directory" >&2; exit 1; }
+
+# Validate through the dispatcher before leasing; it owns the open-run semantics.
+for i in $(seq 0 $((n - 1))); do
+  name="$(jq -r ".[$i].name" "$SPEC")"
+  reqs="$(jq -r ".[$i].req // [] | join(\",\")" "$SPEC")"
+  scope_args=(--lane implement --dir "$REPO" --timeout "$TIMEOUT" --validate-only)
+  scope_args+=("${RUN_ARGS[@]}")
+  [ -z "$PLAN" ] || scope_args+=(--plan "$PLAN")
+  [ -n "$reqs" ] && scope_args+=(--req "$reqs")
+  scope_out="$(CHARLES_STATE_DIR="$TMP/state-$i" "$SCRIPTS/codex-run.sh" "${scope_args[@]}" \
+    "validate requirement scope for chunk $name" 2>&1)"
+  scope_rc=$?
+  if [ "$scope_rc" -ne 0 ]; then
+    echo "invalid manifest: chunk $name requirement scope was refused" >&2
+    printf '%s\n' "$scope_out" >&2
+    rm -rf -- "$TMP"
+    exit 1
+  fi
+done
+
 declare -a CH_WT=() CH_NAME=() CH_PID=() CH_RC=() CH_KEEP=() CH_STATUS=()
 
 return_worktree() {
@@ -192,7 +229,12 @@ echo "dispatching $n chunks in parallel"
 for i in "${!CH_WT[@]}"; do
   task="$(jq -r ".[$i].task" "$SPEC")"
   files="$(jq -r ".[$i].files | join(\", \")" "$SPEC")"
-  ( "$SCRIPTS/codex-run.sh" --lane implement --dir "${CH_WT[$i]}" --timeout "$TIMEOUT" \
+  child_args=(--lane implement --dir "${CH_WT[$i]}" --timeout "$TIMEOUT")
+  child_args+=("${RUN_ARGS[@]}")
+  [ -z "$PLAN" ] || child_args+=(--plan "$PLAN")
+  reqs="$(jq -r ".[$i].req // [] | join(\",\")" "$SPEC")"
+  [ -n "$reqs" ] && child_args+=(--req "$reqs")
+  ( "$SCRIPTS/codex-run.sh" "${child_args[@]}" \
       "$task
 
 You may modify ONLY these files: $files

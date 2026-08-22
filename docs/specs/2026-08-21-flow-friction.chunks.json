@@ -1,0 +1,39 @@
+[
+  {
+    "name": "runtime",
+    "files": [
+      "scripts/codex-run.sh",
+      "scripts/run-state.sh",
+      "scripts/doctor.sh",
+      "scripts/flow-status.sh",
+      "scripts/selftest.sh",
+      "scripts/parallel-chunks.sh"
+    ],
+    "task": "CHUNK A (runtime) of docs/specs/2026-08-21-flow-friction.md: implement R1, R2, R3, R4, R6, R9, R10. Read that spec first; it is the contract and an isolated reviewer will grade your diff against it. Do NOT touch documentation (SKILL.md, commands/, README.md) \u2014 a separate chunk owns those, and touching them means this chunk is discarded. Key facts, verified: run-state.sh already writes .charles/runs/<id>/RUN.md and knows how to find the newest open run (see its newest_open helper); close already calls flow-status.sh and refuses on exit 5. doctor.sh already has the version-drift check and the never-reviewed-implement count \u2014 you are changing their severity conditionally on whether a run is open, not adding new checks. codex-run.sh parses flags in one while loop near line 55 and logs dispatch events in log_start/log_end around line 160; --req identifiers belong on that event. R5 needs NO code: the grill established that a --final flag would redefine the existing model-aware default and that no caller knows its own position, so intermediate reviews are simply dispatched with --effort medium and the final one uses the default. Do not add a review flag. Verification: bash scripts/selftest.sh && bash scripts/doctor.sh must pass; add selftest cases for each requirement following the existing style (echo \"  PASS  <name>\"; pass=$((pass+1))). Never delete or move any file you did not create. Never run git clean, git reset --hard, or git checkout -- . anywhere.",
+    "req": [
+      "R1",
+      "R2",
+      "R3",
+      "R4",
+      "R6",
+      "R9",
+      "R10"
+    ]
+  },
+  {
+    "name": "contract",
+    "files": [
+      "skills/charles-flow/SKILL.md",
+      "commands/feature.md",
+      "commands/polish.md",
+      "commands/debug.md",
+      "README.md"
+    ],
+    "task": "CHUNK B (contract) of docs/specs/2026-08-21-flow-friction.md: implement R5, R7 and R8, documentation only. Read that spec first; it is the contract and an isolated reviewer will grade your diff against it. Do NOT touch any script \u2014 a separate chunk owns scripts/, and touching one means this chunk is discarded. R7: Flow 1 step 6 and the equivalent implement steps in the polish and debug flows must read docs/specs/<plan>.chunks.json and invoke parallel-chunks.sh when it holds parallel_min_chunks or more entries, with serial dispatch documented as the fallback for one chunk, overlapping declarations, an invalid manifest, or missing treehouse. Resolve the script path the way commands/ui.md does (SCRIPTS=\"$(dirname \"$(readlink -f \"$(command -v codex-run)\")\")\") \u2014 never a bare $SCRIPTS that nothing assigns. R8: state plainly in SKILL.md that a discovery made mid-flow is DEFERRED rather than dispatched, that codex-run --lane implement takes --req and refuses without it while a run is open, and reference --req in the implement step of commands/feature.md, commands/polish.md and commands/debug.md. Keep it tight; this is a contract change, not an essay. Never delete or move any file you did not create. Never run git clean, git reset --hard, or git checkout -- . anywhere.",
+    "req": [
+      "R5",
+      "R7",
+      "R8"
+    ]
+  }
+]

@@ -26,6 +26,7 @@ have python3 && say OK "python3 (selftest)" || say WARN "python3 missing — sel
 
 echo
 echo "This repo:"
+open_n=0
 if [ -f "$PWD/.charles.toml" ]; then
   say OK "opted in (.charles.toml present)"
   g="$(grep -oE '^green[[:space:]]*=[[:space:]]*".*"' "$PWD/.charles.toml" | sed 's/.*= *"//; s/"$//')"
@@ -75,6 +76,9 @@ else
     if [ "$drift" -gt 0 ] && [ "${CHARLES_RELEASING:-0}" = "1" ]; then
       # release.sh greens BEFORE bumping, so pre-release drift is the point
       say WARN "$drift non-spec file(s) differ from installed v$VER — expected: releasing"
+    elif [ "$drift" -gt 0 ] && [ "$open_n" -gt 0 ]; then
+      # Mid-flow edits are expected; the stale installed copy matters after the run closes.
+      say WARN "$drift non-spec file(s) differ from installed v$VER — expected while a run is open"
     elif [ "$drift" -gt 0 ]; then
       say FAIL "$drift non-spec file(s) differ from installed v$VER — bump the version and reinstall, or you are running old code"
     fi
@@ -120,10 +124,17 @@ if [ -f "$PWD/.charles.toml" ]; then
     if out="$("$fs" "$PWD" 2>&1)"; then
       say OK "no ungraded work, no open runs"
     else
-      # WARN not FAIL: a repo mid-flow legitimately has ungraded implements.
-      # The blocking check lives in `run-state.sh close`, where you declare done.
       while IFS= read -r line; do
-        case "$line" in *ISSUE*) say WARN "${line#*ISSUE  }" ;; esac
+        case "$line" in
+          *ISSUE*)
+            if [ "$open_n" -gt 0 ] && [[ "$line" == *"implement dispatch(es) never reviewed"* ]]; then
+              # A live run still has a plan and diff for the reviewer; block green until it is graded.
+              say FAIL "${line#*ISSUE  }"
+            else
+              say WARN "${line#*ISSUE  }"
+            fi
+            ;;
+        esac
       done <<< "$out"
     fi
   fi

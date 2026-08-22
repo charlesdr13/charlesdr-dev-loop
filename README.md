@@ -208,6 +208,10 @@ medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flas
 is the fallback, tried automatically when luna fails, or forced with `--engine
 deepseek` for a deliberately wide, cheap sweep.
 
+Review effort is positional: intermediate reviews use `--effort medium`; the
+final pre-close review omits `--effort` and uses the model-aware default (sol at
+medium, luna/terra at max). This is a documented rule, not a flag.
+
 To move every lane — explore, implement and review — onto one engine without a
 restart, run `/charlesdr-dev-loop:engine deepseek` (`luna`, `terra`, `default`
 are the other values). It writes `$CHARLES_STATE_DIR/engine`, read at the start
@@ -254,7 +258,7 @@ benchmark.
 ```bash
 # Each explore/serial-implement command is a separate Bash call with run_in_background: true.
 codex-run --lane explore   --dir REPO --timeout 2700 "why does the refresh path 401?"
-codex-run --lane implement --dir REPO --timeout 2700 "add the RangeError guard from the plan"
+codex-run --lane implement --dir REPO --req R1,A3 --timeout 2700 "add the RangeError guard from the plan"
 # Review stays foreground and isolated.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
 # Review committed work, including any uncommitted changes on top.
@@ -264,6 +268,8 @@ codex-run --lane review    --dir REPO --plan docs/specs/x.md --base REF "check e
 Review uses the working-tree diff against `HEAD`, cached changes, and untracked
 files by default. `--base REF` instead reviews `REF..working-tree` (with
 untracked files appended); `REF` must resolve, and `--base` is review-only.
+A review after `HEAD` has moved requires `--base <ref>`, or the reviewer sees an
+empty diff and grades nothing.
 
 (`codex-run` is on PATH after `install-skills.sh` or the plugin's SessionStart
 hook. The orchestrator invokes it directly; no wrapper agent is needed for
@@ -339,6 +345,12 @@ unblock them:
 /charlesdr-dev-loop:resolve          # newest unclosed run
 /charlesdr-dev-loop:resolve --list   # pick another
 ```
+
+Open a run with `run-state.sh init <dir> <flow> "<goal>" --spec
+docs/specs/<plan>.md`. A discovery made mid-flow is `DEFERRED`, not a new
+dispatch; use `run-state.sh defer <dir> "<text>"`. While a run is open,
+`codex-run --lane implement` requires `--req R1,A3`, validates those identifiers
+against the run's spec, and cannot dispatch a run opened without `--spec`.
 
 `resolve` surfaces `BLOCKED-HUMAN` first (usually two minutes of your time, and
 everything downstream waits on them), confirms before re-dispatching a `FAILED`
@@ -451,9 +463,10 @@ scripts/flow-status.sh .      # 0 clean · 1 outstanding
 ```
 
 `run-state.sh close` refuses (exit 5) while anything is outstanding, since
-closing is where you declare the work done. `--force` overrides. `doctor`
-reports the same as warnings, because a repo mid-flow legitimately has ungraded
-work — the blocking check belongs at the finish line, not on every health check.
+closing is where you declare the work done. `--force` overrides. While a run is
+open, `doctor` keeps installed-content drift at WARN but FAILs on an unreviewed
+implement; report that expected mid-flow failure rather than reinstalling or
+trying to bypass the review.
 The small transition table in `scripts/flow.json` drives the expected-next hints;
 `scripts/runs-sweep.sh [root...]` is the standing read-only hygiene sweep across
 opted-in repos, so run it when `doctor` warns about open runs.
@@ -511,12 +524,29 @@ Chunks are counted in **plan requirements**, not files or lines: 1-5 is usually
 one slice, 6-10 is two, and 11+ means three or more and probably means this is
 two plans wearing one name. When the settled plan yields 2+ disjoint file
 slices, write or rewrite `docs/specs/YYYY-MM-DD-<topic>.chunks.json` beside it
-after the grill settles, never during the initial plan phase.
+after the grill settles, never during the initial plan phase. Read
+`docs/specs/<plan>.chunks.json` and resolve the script directory as
+`SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"`.
 
-Parallel is the default at 2+ disjoint chunks, using the `parallel_min_chunks`
-value from `.charles.toml` (default `2`). Use serial only for one chunk, below a
-raised threshold, overlapping declarations, an invalid manifest, or an absent
-`treehouse`; serial chunks still run `green.sh` between them.
+Parallel is the default when the valid manifest holds `parallel_min_chunks` or
+more entries, using the value from `.charles.toml` (default `2`), its file
+declarations are disjoint, and `treehouse` is available:
+
+```bash
+"$SCRIPTS/parallel-chunks.sh" "$(pwd)" docs/specs/<plan>.chunks.json
+# [{"name":"api","files":["src/a.ts"],"req":["R1"],"task":"..."}, ...]
+```
+
+Use serial for one chunk, below a raised threshold, overlapping declarations,
+an invalid manifest, or missing `treehouse`; serial chunks still run `green.sh`
+between them. A batch whose chunks modify `parallel-chunks.sh`, `codex-run.sh`,
+or anything the dispatcher executes MUST also run serially: children execute
+the dispatcher from the runner's script directory while the post-merge green
+check runs the merged root scripts, and Bash reads a script lazily by byte
+offset, so rewriting the dispatcher while it executes kills it at a stale
+offset. That happened in Chunk A: the dispatcher died with `syntax error near
+unexpected token )` after its work completed. Every chunk in an open run carries
+`req`; the runner validates it against the plan and passes it to the child.
 
 ## The ground-truth gate
 

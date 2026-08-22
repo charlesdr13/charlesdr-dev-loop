@@ -7,21 +7,33 @@
 # ran, on which engine, and whether it failed — is appended by codex-run.sh to
 # .charles/dispatches.jsonl without any cooperation from the model.
 #
-#   run-state.sh init  <dir> <flow> "<goal>"          -> prints the run id
+#   run-state.sh init  <dir> <flow> "<goal>" [--spec FILE] -> prints the run id
+#   run-state.sh spec  <dir> <path> [--run <id>]
 #   run-state.sh phase <dir> "<phase>" ["<proof>"]
 #   run-state.sh item  <dir> <TYPE> "<text>"          TYPE: BLOCKED-HUMAN |
 #                                                     PENDING-DECISION | DEFERRED | FAILED
+#   run-state.sh defer <dir> "<text>" [--run <id>]   -> item DEFERRED shorthand
 #   run-state.sh rollback <dir> "<command>"
 #   run-state.sh close <dir> "<outcome>" [--spec docs/specs/x.md]
 #   run-state.sh show  <dir> [--list]
 set -euo pipefail
 
+# readlink -f first: this script is reached through a PATH symlink, and an
+# unresolved dirname points at the symlink's directory, where run-common.sh
+# does not exist. Confirmed live: sourcing died with exit 1 on every wrapper
+# dispatch until this line resolved the link.
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd -P)"
+. "$SCRIPT_DIR/run-common.sh"
+
 cmd="${1:-}"; shift || true
 DIR="${1:-$PWD}"; shift || true
 [ -d "$DIR" ] || { echo "run-state.sh: no such directory: $DIR" >&2; exit 2; }
-DIR="$(cd "$DIR" && pwd)"
+DIR="$(charles_run_root "$DIR")"
 RUNS="$DIR/.charles/runs"
-FLOW_FILE="$(dirname "$0")/flow.json"
+FLOW_FILE="$SCRIPT_DIR/flow.json"
+RUN_SELECTOR="${CHARLES_RUN:-}"
+RUN_SELECTOR_SET=0
+[ -n "$RUN_SELECTOR" ] && RUN_SELECTOR_SET=1
 
 flow_ready() {
   local flow="$1"
@@ -60,12 +72,164 @@ last_phase() {
     sed -n 's/^- \[[^]]*\] //p' | tail -1
 }
 
-newest_open() { # newest run with no ## Outcome section
-  local d
-  for d in $(ls -1d "$RUNS"/*/ 2>/dev/null | sort -r); do
-    grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null || { echo "${d%/}"; return 0; }
+open_run_dirs() {
+  local include_closed=0
+  [ "${1:-}" = "--all" ] && include_closed=1
+  local runs="$RUNS" d
+  if [ ! -e "$runs" ] && [ ! -L "$runs" ]; then return 0; fi
+  if [ ! -d "$runs" ] || [ ! -r "$runs" ] || [ ! -x "$runs" ]; then
+    echo "run-state.sh: REFUSING — cannot read run directory: $runs" >&2
+    return 2
+  fi
+
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  local -a dirs=("$runs"/*/)
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  for d in "${dirs[@]}"; do
+    [ -f "$d/RUN.md" ] || continue
+    [ -r "$d/RUN.md" ] || {
+      echo "run-state.sh: REFUSING — cannot read run state: ${d%/}/RUN.md" >&2
+      return 2
+    }
+    [ "$include_closed" -eq 1 ] || { grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue; }
+    printf '%s\n' "${d%/}"
   done
-  return 1
+}
+
+newest_open() { # selected open run, or newest when called for show
+  local allow_multiple=0
+  [ "${1:-}" = "--show" ] && allow_multiple=1
+  local listing d candidate candidate_name
+  listing="$(open_run_dirs)" || return $?
+  local -a open_runs=()
+  if [ -n "$listing" ]; then
+    mapfile -t open_runs < <(printf '%s\n' "$listing" | sort -r)
+  fi
+
+  if [ "$RUN_SELECTOR_SET" -eq 1 ]; then
+    local all_listing
+    all_listing="$(open_run_dirs --all)" || return $?
+    local -a all_runs=()
+    if [ -n "$all_listing" ]; then
+      mapfile -t all_runs < <(printf '%s\n' "$all_listing" | sort -r)
+    fi
+    local -a substring_matches=()
+    local exact_match=""
+    for candidate in "${all_runs[@]}"; do
+      candidate_name="${candidate##*/}"
+      if [ "$candidate_name" = "$RUN_SELECTOR" ]; then
+        if grep -q '^## Outcome' "$candidate/RUN.md" 2>/dev/null; then
+          echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' names a closed run" >&2
+          return 2
+        fi
+        exact_match="$candidate"
+        break
+      fi
+    done
+    for candidate in "${open_runs[@]}"; do
+      candidate_name="${candidate##*/}"
+      if [ -z "$exact_match" ] && [[ "$candidate_name" == *"$RUN_SELECTOR"* ]]; then
+        substring_matches+=("$candidate")
+      fi
+    done
+    if [ -n "$exact_match" ]; then
+      printf '%s\n' "$exact_match"
+    elif [ "${#substring_matches[@]}" -eq 0 ]; then
+      echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' does not name an open run (unknown or closed)" >&2
+      return 2
+    elif [ "${#substring_matches[@]}" -gt 1 ]; then
+      echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' is ambiguous; matches:" >&2
+      printf '  %s\n' "${substring_matches[@]##*/}" >&2
+      return 2
+    else
+      printf '%s\n' "${substring_matches[0]}"
+    fi
+    return 0
+  fi
+
+  if [ "${#open_runs[@]}" -gt 1 ] && [ "$allow_multiple" -eq 0 ]; then
+    echo "run-state.sh: REFUSING — multiple open runs; select one:" >&2
+    printf '  %s\n' "${open_runs[@]##*/}" >&2
+    echo "run-state.sh: pass --run <id> or CHARLES_RUN=<id> to select one" >&2
+    return 2
+  fi
+  [ "${#open_runs[@]}" -gt 0 ] || return 1
+  printf '%s\n' "${open_runs[0]}"
+}
+
+PARSED_ARGS=()
+parse_run_option() {
+  PARSED_ARGS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run)
+        [ $# -ge 2 ] || { echo "run-state.sh: --run requires a run id" >&2; return 2; }
+        [ -n "$2" ] || { echo "run-state.sh: --run requires a run id" >&2; return 2; }
+        RUN_SELECTOR="$2"; RUN_SELECTOR_SET=1; shift 2
+        ;;
+      *) PARSED_ARGS+=("$1"); shift ;;
+    esac
+  done
+}
+
+spec_key() {
+  local path="$1"
+  case "$path" in /*) ;; *) path="$DIR/$path" ;; esac
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -m "$path" 2>/dev/null || printf '%s\n' "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+resolve_spec_path() {
+  local spec="$1" spec_path resolved_dir resolved_spec
+  case "$spec" in
+    /*) spec_path="$spec" ;;
+    *)  spec_path="$DIR/$spec" ;;
+  esac
+  [ -f "$spec_path" ] && [ -r "$spec_path" ] || {
+    echo "run-state.sh: REFUSING — spec path does not exist or is unreadable: $spec" >&2
+    return 2
+  }
+  if command -v realpath >/dev/null 2>&1; then
+    resolved_dir="$(realpath "$DIR" 2>/dev/null || printf '%s\n' "$DIR")"
+    resolved_spec="$(realpath "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
+  elif [ -d "$(dirname "$spec_path")" ]; then
+    resolved_dir="$(cd "$DIR" && pwd -P)"
+    [ -L "$spec_path" ] && {
+      echo "run-state.sh: REFUSING — cannot safely resolve symlinked spec $spec without realpath" >&2
+      return 2
+    }
+    resolved_spec="$(cd "$(dirname "$spec_path")" && pwd -P)/$(basename "$spec_path")"
+  else
+    echo "run-state.sh: REFUSING — cannot resolve spec $spec" >&2
+    return 2
+  fi
+  case "$resolved_spec" in
+    "$resolved_dir"/*) printf '%s\n' "$resolved_spec" ;;
+    *)
+      echo "run-state.sh: REFUSING — spec resolves outside the repository: $spec" >&2
+      return 2
+      ;;
+  esac
+}
+
+lock_run_state() {
+  mkdir -p "$DIR/.charles" || {
+    echo "run-state.sh: FAILED to prepare the run-state lock" >&2
+    return 1
+  }
+  exec 9>"$DIR/.charles/run-state.lock" || {
+    echo "run-state.sh: FAILED to open the run-state lock" >&2
+    return 1
+  }
+  flock 9 || {
+    echo "run-state.sh: FAILED to acquire the run-state lock" >&2
+    return 1
+  }
 }
 
 have_tasks() { command -v tasks-axi >/dev/null 2>&1; }
@@ -74,21 +238,71 @@ case "$cmd" in
 
 init)
   flow="${1:?flow required}"; goal="${2:?goal required}"
+  shift 2 || true
+  spec=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --spec) [ $# -ge 2 ] || { echo "run-state.sh: --spec requires a path" >&2; exit 2; }; spec="$2"; shift 2 ;;
+      *) echo "run-state.sh: unknown init option '$1'" >&2; exit 2 ;;
+    esac
+  done
+  [ -z "$spec" ] || resolve_spec_path "$spec" >/dev/null || exit $?
+  lock_run_state || exit $?
   id="$(date +%Y%m%d-%H%M%S)-$flow-$$"
   d="$RUNS/$id"; mkdir -p "$d"
   {
     # `--` first: these format strings start with '-', which printf would
     # otherwise parse as a flag and refuse.
     printf -- '# Run %s\n\n' "$id"
-    printf -- '- flow: %s\n- goal: %s\n- started: %s\n- repo: %s\n\n' \
-      "$flow" "$goal" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DIR"
+    printf -- '- flow: %s\n- goal: %s\n' "$flow" "$goal"
+    [ -n "$spec" ] && printf -- '- spec: %s\n' "$spec"
+    printf -- '- started: %s\n- repo: %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DIR"
     printf -- '## Phases\n\n## Open items\n\n## Rollback\n\n'
   } > "$d/RUN.md"
   echo "$id"
   ;;
 
+spec)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  spec="${1:?spec path required}"
+  spec_path="$(resolve_spec_path "$spec")" || exit $?
+  lock_run_state || exit $?
+  d="$(newest_open)" || {
+    rc=$?
+    [ "$rc" -eq 1 ] && echo "run-state.sh: no open run — call init first" >&2
+    exit "$rc"
+  }
+  tmp="$(mktemp)" || {
+    echo "run-state.sh: FAILED to bind spec: $spec" >&2
+    exit 1
+  }
+  awk -v spec="$spec" '
+    /^- spec: / {
+      if (!bound) { print "- spec: " spec; bound=1 }
+      next
+    }
+    /^- started: / && !bound { print "- spec: " spec; bound=1 }
+    { print }
+    END { if (!bound) print "- spec: " spec }
+  ' "$d/RUN.md" > "$tmp" || {
+    rm -f "$tmp"
+    echo "run-state.sh: FAILED to bind spec: $spec" >&2
+    exit 1
+  }
+  mv "$tmp" "$d/RUN.md" || {
+    rm -f "$tmp"
+    echo "run-state.sh: FAILED to bind spec: $spec" >&2
+    exit 1
+  }
+  echo "bound spec: $spec to run: $(basename "$d")"
+  ;;
+
 phase)
-  d="$(newest_open)" || { echo "run-state.sh: no open run — call init first" >&2; exit 1; }
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  lock_run_state || exit $?
+  d="$(newest_open)" || { rc=$?; [ "$rc" -eq 1 ] && echo "run-state.sh: no open run — call init first" >&2; exit "$rc"; }
   phase="${1:?phase required}"; proof="${2:-}"
   flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
   if flow_ready "$flow"; then
@@ -103,8 +317,20 @@ phase)
   echo "recorded phase: $phase"
   ;;
 
+defer)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  text="${1:?text required}"
+  defer_args=("$0" item "$DIR" DEFERRED "$text")
+  [ "$RUN_SELECTOR_SET" -eq 0 ] || defer_args+=(--run "$RUN_SELECTOR")
+  exec "${defer_args[@]}"
+  ;;
+
 item)
-  d="$(newest_open)" || { echo "run-state.sh: no open run — call init first" >&2; exit 1; }
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  lock_run_state || exit $?
+  d="$(newest_open)" || { rc=$?; [ "$rc" -eq 1 ] && echo "run-state.sh: no open run — call init first" >&2; exit "$rc"; }
   type="${1:?type required}"; text="${2:?text required}"
   case "$type" in BLOCKED-HUMAN|PENDING-DECISION|DEFERRED|FAILED) ;;
     *) echo "run-state.sh: bad type '$type'" >&2; exit 2 ;; esac
@@ -128,22 +354,39 @@ item)
   ;;
 
 rollback)
-  d="$(newest_open)" || { echo "run-state.sh: no open run" >&2; exit 1; }
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  lock_run_state || exit $?
+  d="$(newest_open)" || { rc=$?; [ "$rc" -eq 1 ] && echo "run-state.sh: no open run" >&2; exit "$rc"; }
   printf '\n```bash\n%s\n```\n' "${1:?command required}" >> "$d/RUN.md"
   echo "recorded rollback"
   ;;
 
 close)
-  d="$(newest_open)" || { echo "run-state.sh: no open run" >&2; exit 1; }
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  lock_run_state || exit $?
+  d="$(newest_open)" || { rc=$?; [ "$rc" -eq 1 ] && echo "run-state.sh: no open run" >&2; exit "$rc"; }
   outcome="${1:?outcome required}"; shift || true
   spec=""; force=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --spec)  spec="${2:-}"; shift 2 ;;
+      --spec)
+        [ $# -ge 2 ] || { echo "run-state.sh: --spec requires a path" >&2; exit 2; }
+        spec="$2"; shift 2 ;;
       --force) force=1; shift ;;
       *) shift ;;
     esac
   done
+
+  recorded_spec="$(sed -n 's/^- spec: //p' "$d/RUN.md" | head -1)"
+  if [ -n "$recorded_spec" ] && [ -n "$spec" ] \
+    && [ "$(spec_key "$recorded_spec")" != "$(spec_key "$spec")" ]; then
+    echo "run-state.sh: REFUSING to close — selected run $(basename "$d") has a different spec." >&2
+    echo "  recorded spec: $recorded_spec" >&2
+    echo "  --spec given:  $spec" >&2
+    exit 2
+  fi
 
   # Closing is the moment you declare the work done, so it is where flow
   # completeness gets checked. An audit of 75 real dispatches found 19% review
@@ -153,7 +396,8 @@ close)
   # An unchecked item means the run is not finished, whatever else is clean.
   # This gate existed to stop premature "done" and did not check the one thing
   # it was built for. Found by an adversarial review, 2026-08-12.
-  spec_path="$DIR/$spec"
+  spec_path="$spec"
+  case "$spec_path" in /*) ;; *) spec_path="$DIR/$spec_path" ;; esac
   # The boundary check is NOT under --force: --force is a bookkeeping override
   # ("close anyway"), never a licence to append this run's outcome to a file
   # outside the repo. A typo'd relative path plus --force would otherwise write
@@ -221,16 +465,43 @@ close)
     fi
     rm -f /tmp/flow-status.$$
   fi
+  shipped=0
+  count_spec_path=""
+  if [ -n "$spec" ]; then
+    count_spec_path="$spec_path"
+  else
+    count_spec="$(sed -n 's/^- spec: //p' "$d/RUN.md" | head -1)"
+    if [ -n "$count_spec" ]; then
+      count_spec_path="$count_spec"
+      case "$count_spec_path" in /*) ;; *) count_spec_path="$DIR/$count_spec_path" ;; esac
+      if command -v realpath >/dev/null 2>&1; then
+        count_resolved="$(realpath "$count_spec_path" 2>/dev/null || printf '%s\n' "$count_spec_path")"
+      elif [ -d "$(dirname "$count_spec_path")" ] && [ ! -L "$count_spec_path" ]; then
+        count_resolved="$(cd "$(dirname "$count_spec_path")" && pwd -P)/$(basename "$count_spec_path")"
+      else
+        count_resolved=""
+      fi
+      case "$count_resolved" in "$DIR"/*) count_spec_path="$count_resolved" ;; *) count_spec_path="" ;; esac
+    fi
+  fi
+  if [ -n "$count_spec_path" ] && [ -f "$count_spec_path" ]; then
+    signoff="$(sed -n '/^## Sign-off$/,/^## /p' "$count_spec_path")"
+    shipped="$(grep -c '^- \[x\] ' <<<"$signoff" || true)"
+  fi
+  deferred="$(grep -c '^- \[[^]]*\] \*\*DEFERRED\*\*' "$d/RUN.md" 2>/dev/null || true)"
   printf '\n## Outcome\n\n%s\n\nclosed: %s\n' "$outcome" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$d/RUN.md"
   # the durable half: the outcome goes next to the committed plan it resolves
   if [ -n "$spec" ] && [ -f "$spec_path" ]; then
     printf '\n## Run outcome — %s\n\n%s\n' "$(date -u +%Y-%m-%d)" "$outcome" >> "$spec_path"
     echo "appended outcome to $spec"
   fi
+  echo "$shipped requirements shipped, $deferred items deferred"
   echo "closed run: $(basename "$d")"
   ;;
 
 show)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
   if [ "${1:-}" = "--list" ]; then
     for x in $(ls -1d "$RUNS"/*/ 2>/dev/null | sort -r); do
       grep -q '^## Outcome' "$x/RUN.md" 2>/dev/null && st="closed" || st="OPEN  "
@@ -238,7 +509,12 @@ show)
     done
     exit 0
   fi
-  d="$(newest_open)" || { echo "no open run in $DIR"; exit 0; }
+  d="$(newest_open --show)" || {
+    rc=$?
+    [ "$rc" -eq 1 ] && { echo "no open run in $DIR"; exit 0; }
+    exit "$rc"
+  }
+  echo "showing run: $(basename "$d")"
   cat "$d/RUN.md"
   flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
   if flow_ready "$flow"; then
