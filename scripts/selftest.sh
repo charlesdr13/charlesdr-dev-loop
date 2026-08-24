@@ -284,14 +284,15 @@ fi
 PARALLEL="$(cd "$(dirname "$0")/.." && pwd)/scripts/parallel-chunks.sh"
 PD="$BOX/parallel"; mkdir -p "$PD/bin"
 
-parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND
-  local repo="$1" worktree="$2" green_command="$3"
+parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND [TRACKED-OUTSIDE]
+  local repo="$1" worktree="$2" green_command="$3" tracked_outside="${4:-}"
   mkdir -p "$repo" "$(dirname "$worktree")"
   (
     cd "$repo" && git init -q && git config user.name tester \
       && git config user.email tester@example.invalid \
       && printf 'green = "%s"\n' "$green_command" > .charles.toml \
       && printf 'base\n' > alpha && printf 'base\n' > beta \
+      && { [ "$tracked_outside" != tracked ] || printf 'base\n' > outside; } \
       && git add . && git commit -qm init
   )
   git -C "$repo" worktree add -q "$worktree" HEAD
@@ -316,6 +317,8 @@ parallel_fixture "$PD/failed-repo" "$PD/failed-alpha" true
 parallel_fixture "$PD/red-repo" "$PD/red-alpha" false
 parallel_fixture "$PD/missing-repo" "$PD/missing-alpha" true
 parallel_fixture "$PD/ignored-repo" "$PD/ignored-alpha" true
+parallel_fixture "$PD/ignored-link-repo" "$PD/ignored-link-alpha" true
+parallel_fixture "$PD/tracked-oob-repo" "$PD/tracked-oob-alpha" true tracked
 parallel_fixture "$PD/delete-repo" "$PD/delete-alpha" true
 parallel_fixture "$PD/rename-repo" "$PD/rename-alpha" true
 parallel_fixture "$PD/bad-receipt-repo" "$PD/bad-receipt-alpha" true
@@ -328,6 +331,8 @@ git -C "$PD/failed-repo" worktree add -q "$PD/failed-beta" HEAD
 git -C "$PD/red-repo" worktree add -q "$PD/red-beta" HEAD
 git -C "$PD/missing-repo" worktree add -q "$PD/missing-beta" HEAD
 git -C "$PD/ignored-repo" worktree add -q "$PD/ignored-beta" HEAD
+git -C "$PD/ignored-link-repo" worktree add -q "$PD/ignored-link-beta" HEAD
+git -C "$PD/tracked-oob-repo" worktree add -q "$PD/tracked-oob-beta" HEAD
 git -C "$PD/delete-repo" worktree add -q "$PD/delete-beta" HEAD
 git -C "$PD/rename-repo" worktree add -q "$PD/rename-beta" HEAD
 git -C "$PD/bad-receipt-repo" worktree add -q "$PD/bad-receipt-beta" HEAD
@@ -336,7 +341,9 @@ printf 'base\n' > "$PD/space-repo/space file"
 git -C "$PD/space-repo" add -- 'space file' && git -C "$PD/space-repo" commit -qm 'space fixture'
 git -C "$PD/space-repo" worktree add -q "$PD/space-beta" HEAD
 git -C "$PD/swap-repo" worktree add -q "$PD/swap-gamma" HEAD
-printf 'ignored-outside\n' >> "$PD/ignored-repo/.git/info/exclude"
+printf 'ignored-dir/\nignored-*\n' >> "$PD/ignored-repo/.git/info/exclude"
+printf 'ignored-link\n' >> "$PD/ignored-link-repo/.git/info/exclude"
+printf 'outside\n' > "$PD/ignored-link-target"
 
 printf '[{"name":"alpha","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/spec.json"
 printf '[{"name":"swap","files":["alpha","beta"],"task":"x"},{"name":"gamma","files":["gamma"],"task":"x"}]\n' > "$PD/swap-spec.json"
@@ -401,6 +408,10 @@ case "\${1:-}" in
       missing-repo:chunk-beta) printf '%s\n' "$PD/missing-beta" ;;
       ignored-repo:chunk-alpha) printf '%s\n' "$PD/ignored-alpha" ;;
       ignored-repo:chunk-beta) printf '%s\n' "$PD/ignored-beta" ;;
+      ignored-link-repo:chunk-alpha) printf '%s\n' "$PD/ignored-link-alpha" ;;
+      ignored-link-repo:chunk-beta) printf '%s\n' "$PD/ignored-link-beta" ;;
+      tracked-oob-repo:chunk-alpha) printf '%s\n' "$PD/tracked-oob-alpha" ;;
+      tracked-oob-repo:chunk-beta) printf '%s\n' "$PD/tracked-oob-beta" ;;
       delete-repo:chunk-delete) printf '%s\n' "$PD/delete-alpha" ;;
       delete-repo:chunk-beta) printf '%s\n' "$PD/delete-beta" ;;
       rename-repo:chunk-rename) printf '%s\n' "$PD/rename-alpha" ;;
@@ -449,12 +460,16 @@ case "$PWD" in
   */good-beta) printf 'beta merged\n' > beta; exit 0 ;;
   */oob-alpha) printf 'alpha changed\n' > alpha; printf 'not allowed\n' > outside; exit 0 ;;
   */oob-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */tracked-oob-alpha) printf 'alpha changed\n' > alpha; printf 'not allowed\n' > outside; exit 0 ;;
+  */tracked-oob-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */failed-alpha) printf 'alpha changed\n' > alpha; exit 7 ;;
   */failed-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */red-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
   */red-beta) printf 'beta merged\n' > beta; exit 0 ;;
-  */ignored-alpha) printf 'alpha changed\n' > alpha; printf 'not allowed\n' > ignored-outside; exit 0 ;;
+  */ignored-alpha) printf 'alpha changed\n' > alpha; mkdir -p ignored-dir; printf 'not allowed\n' > ignored-dir/outside; printf 'not allowed\n' > $'ignored-\033[31mline\nbreak'; exit 0 ;;
   */ignored-beta) printf 'beta changed\n' > beta; exit 0 ;;
+  */ignored-link-alpha) printf 'alpha changed\n' > alpha; ln -s "${IGNORED_LINK_TARGET:?}" ignored-link; exit 0 ;;
+  */ignored-link-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */delete-alpha) rm -f alpha; exit 0 ;;
   */delete-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */rename-alpha) mv alpha renamed; exit 0 ;;
@@ -569,19 +584,49 @@ if [ "$oob_rc" -eq 3 ] && [ "$(cat "$PD/oob-repo/alpha")" = "base" ] \
   && grep -qF "$PD/oob-alpha" <<<"$oob_out" \
   && ! grep -Fxq "$PD/oob-alpha" "$PD/oob-returns" \
   && grep -Fxq "$PD/oob-beta" "$PD/oob-returns"; then
-  echo "  PASS  out-of-bounds chunk is rejected and kept"; pass=$((pass+1))
+  echo "  PASS  non-ignored untracked undeclared file is rejected and kept"; pass=$((pass+1))
 else
-  echo "  FAIL  out-of-bounds chunk must not merge (rc=$oob_rc)"; fail=$((fail+1))
+  echo "  FAIL  untracked undeclared file must not merge (rc=$oob_rc)"; fail=$((fail+1))
+fi
+
+cp "$PD/tracked-oob-repo/beta" "$PD/tracked-oob-beta.before"
+: > "$PD/tracked-oob-returns"
+tracked_oob_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/tracked-oob-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/tracked-oob-repo" "$PD/spec.json" 2>&1)"; tracked_oob_rc=$?
+if [ "$tracked_oob_rc" -eq 3 ] && [ "$(cat "$PD/tracked-oob-repo/alpha")" = "base" ] \
+  && cmp -s "$PD/tracked-oob-repo/beta" "$PD/tracked-oob-beta.before" \
+  && [ "$(cat "$PD/tracked-oob-repo/outside")" = "base" ] \
+  && grep -qF 'wrote outside' <<<"$tracked_oob_out" \
+  && grep -qF "$PD/tracked-oob-alpha" <<<"$tracked_oob_out" \
+  && ! grep -Fxq "$PD/tracked-oob-alpha" "$PD/tracked-oob-returns" \
+  && grep -Fxq "$PD/tracked-oob-beta" "$PD/tracked-oob-returns"; then
+  echo "  PASS  non-ignored tracked undeclared file is rejected and kept"; pass=$((pass+1))
+else
+  echo "  FAIL  tracked undeclared file must not merge (rc=$tracked_oob_rc)"; fail=$((fail+1))
 fi
 
 : > "$PD/ignored-returns"
 ignored_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/ignored-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/ignored-repo" "$PD/spec.json" 2>&1)"; ignored_rc=$?
-if [ "$ignored_rc" -eq 3 ] && [ "$(cat "$PD/ignored-repo/alpha")" = "base" ] \
-  && [ ! -e "$PD/ignored-repo/ignored-outside" ] \
-  && grep -qF 'ignored-outside' <<<"$ignored_out"; then
-  echo "  PASS  gitignored out-of-bounds file is rejected"; pass=$((pass+1))
+if [ "$ignored_rc" -eq 0 ] && [ "$(cat "$PD/ignored-repo/alpha")" = "alpha changed" ] \
+  && [ "$(cat "$PD/ignored-repo/beta")" = "beta changed" ] \
+  && [ ! -e "$PD/ignored-repo/ignored-dir" ] \
+  && grep -qF 'ignored 2 path(s):' <<<"$ignored_out" \
+  && grep -qF 'ignored-[31mlinebreak' <<<"$ignored_out" \
+  && ! grep -q $'\033' <<<"$ignored_out"; then
+  echo "  PASS  ignored write is reported without rejection and sanitized"; pass=$((pass+1))
 else
-  echo "  FAIL  gitignored out-of-bounds file must be rejected (rc=$ignored_rc)"; fail=$((fail+1))
+  echo "  FAIL  ignored write must be reported without rejection and sanitized (rc=$ignored_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/ignored-link-returns"
+ignored_link_out="$(PATH="$PD/bin:$PATH" IGNORED_LINK_TARGET="$PD/ignored-link-target" CHARLES_RETURN_RECORD="$PD/ignored-link-returns" CHARLES_STATE_DIR="$PD/state" bash "$PARALLEL" "$PD/ignored-link-repo" "$PD/spec.json" 2>&1)"; ignored_link_rc=$?
+if [ "$ignored_link_rc" -eq 3 ] && [ "$(cat "$PD/ignored-link-repo/alpha")" = "base" ] \
+  && [ "$(cat "$PD/ignored-link-repo/beta")" = "base" ] \
+  && [ ! -e "$PD/ignored-link-repo/ignored-link" ] \
+  && grep -qF 'wrote outside its declared files' <<<"$ignored_link_out" \
+  && grep -qF 'ignored-link' <<<"$ignored_link_out"; then
+  echo "  PASS  ignored symlink escaping the worktree is rejected"; pass=$((pass+1))
+else
+  echo "  FAIL  ignored symlink escape must reject the chunk (rc=$ignored_link_rc)"; fail=$((fail+1))
 fi
 
 : > "$PD/missing-returns"
@@ -675,6 +720,158 @@ fi
 RS="$(cd "$(dirname "$0")/.." && pwd)/scripts/run-state.sh"
 RUN_SH="$(cd "$(dirname "$0")/.." && pwd)/scripts/codex-run.sh"
 WARN="$(cd "$(dirname "$0")/.." && pwd)/hooks/warn-open-runs.sh"
+
+# --- main-tree guard ----------------------------------------------------------
+GUARD_ROOT="$BOX/main-tree-guard"
+mkdir -p "$GUARD_ROOT/bin" "$GUARD_ROOT/primary" "$GUARD_ROOT/not-git"
+(
+  cd "$GUARD_ROOT/primary" && git init -q && git config user.name tester \
+    && git config user.email tester@example.invalid \
+    && printf 'base\n' > tracked && git add tracked && git commit -qm init
+)
+git -C "$GUARD_ROOT/primary" worktree add -q "$GUARD_ROOT/linked" HEAD
+mkdir -p "$GUARD_ROOT/primary/inside"
+ln -s "$GUARD_ROOT/primary/inside" "$GUARD_ROOT/primary-link"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$GUARD_ROOT/bin/codex"
+chmod +x "$GUARD_ROOT/bin/codex"
+printf '# Guard plan\n' > "$GUARD_ROOT/plan.md"
+
+GUARD_ENV="$GUARD_ROOT/env"
+mkdir -p "$GUARD_ENV"
+(
+  cd "$GUARD_ENV" && git init -q && git config user.name tester \
+    && git config user.email tester@example.invalid \
+    && printf 'base\n' > tracked && git add tracked && git commit -qm init
+)
+
+guard_run() {
+  local state="$1"
+  shift
+  PATH="$GUARD_ROOT/bin:$PATH" CHARLES_STATE_DIR="$GUARD_ROOT/state-$state" \
+    bash "$RUN_SH" "$@"
+}
+
+guard_primary_out="$(guard_run primary --lane implement --dir "$GUARD_ROOT/primary" --no-fallback "guard primary" 2>&1)"; guard_primary_rc=$?
+if [ "$guard_primary_rc" -eq 4 ] \
+  && grep -qF "primary working tree: $GUARD_ROOT/primary" <<<"$guard_primary_out" \
+  && grep -qF 'treehouse get' <<<"$guard_primary_out" \
+  && grep -qF -- '--dir <that worktree>' <<<"$guard_primary_out" \
+  && [ ! -e "$GUARD_ROOT/primary/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  implement primary checkout is refused before start"; pass=$((pass+1))
+else
+  echo "  FAIL  implement primary checkout must be refused before start (rc=$guard_primary_rc)"; fail=$((fail+1))
+fi
+
+guard_symlink_out="$(guard_run primary-link --lane implement --dir "$GUARD_ROOT/primary-link" --no-fallback "guard symlink" 2>&1)"; guard_symlink_rc=$?
+if [ "$guard_symlink_rc" -eq 4 ] \
+  && grep -qF "primary working tree: $GUARD_ROOT/primary-link" <<<"$guard_symlink_out" \
+  && [ ! -e "$GUARD_ROOT/primary-link/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  symlinked --dir into a primary checkout is refused"; pass=$((pass+1))
+else
+  echo "  FAIL  symlinked --dir into a primary checkout must be refused (rc=$guard_symlink_rc)"; fail=$((fail+1))
+fi
+
+# An inherited GIT_DIR/GIT_WORK_TREE makes rev-parse describe a DIFFERENT repo,
+# so an unsanitized guard reads the primary tree as a linked worktree and allows it.
+guard_env_out="$(GIT_DIR="$GUARD_ROOT/linked/.git" GIT_WORK_TREE="$GUARD_ROOT/linked" \
+  guard_run primary-gitenv --lane implement --dir "$GUARD_ROOT/primary" --no-fallback "guard gitenv" 2>&1)"; guard_env_rc=$?
+if [ "$guard_env_rc" -eq 4 ] \
+  && grep -qF "primary working tree: $GUARD_ROOT/primary" <<<"$guard_env_out" \
+  && [ ! -e "$GUARD_ROOT/primary/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  inherited GIT_DIR cannot disguise a primary checkout"; pass=$((pass+1))
+else
+  echo "  FAIL  inherited GIT_DIR must not bypass the guard (rc=$guard_env_rc)"; fail=$((fail+1))
+fi
+
+GUARD_FAIL="$BOX/main-tree-guard-revparse"
+mkdir -p "$GUARD_FAIL/bin" "$GUARD_FAIL/repo"
+(
+  cd "$GUARD_FAIL/repo" && git init -q && git config user.name tester \
+    && git config user.email tester@example.invalid \
+    && printf 'base\n' > tracked && git add tracked && git commit -qm init
+)
+printf '#!/usr/bin/env bash\nexit 1\n' > "$GUARD_FAIL/bin/git"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$GUARD_FAIL/bin/codex"
+chmod +x "$GUARD_FAIL/bin/git" "$GUARD_FAIL/bin/codex"
+guard_revparse_out="$(PATH="$GUARD_FAIL/bin:$PATH" CHARLES_STATE_DIR="$GUARD_FAIL/state" \
+  bash "$RUN_SH" --lane implement --dir "$GUARD_FAIL/repo" --no-fallback \
+  "guard rev-parse failure" 2>&1)"; guard_revparse_rc=$?
+if [ "$guard_revparse_rc" -eq 4 ] \
+  && grep -qF 'repository state could not be determined' <<<"$guard_revparse_out" \
+  && [ ! -e "$GUARD_FAIL/repo/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  rev-parse failure refuses with exit 4"; pass=$((pass+1))
+else
+  echo "  FAIL  rev-parse failure must refuse before start (rc=$guard_revparse_rc)"; fail=$((fail+1))
+fi
+
+guard_link_out="$(guard_run linked --lane implement --dir "$GUARD_ROOT/linked" --no-fallback "guard linked" 2>&1)"; guard_link_rc=$?
+if [ "$guard_link_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .lane == "implement" and .allow_main_tree == false)' \
+    "$GUARD_ROOT/linked/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  linked worktree implement dispatch is allowed"; pass=$((pass+1))
+else
+  echo "  FAIL  linked worktree implement dispatch must be allowed (rc=$guard_link_rc)"; fail=$((fail+1))
+fi
+
+guard_flag_out="$(guard_run flag --lane implement --allow-main-tree --dir "$GUARD_ROOT/primary" --no-fallback "guard flag" 2>&1)"; guard_flag_rc=$?
+if [ "$guard_flag_rc" -eq 0 ] \
+  && jq -e -s 'any(.[]; .event == "start" and .lane == "implement" and .allow_main_tree == true)
+              and any(.[]; .event == "end" and .lane == "implement" and .allow_main_tree == true)' \
+    "$GUARD_ROOT/primary/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --allow-main-tree records the waiver"; pass=$((pass+1))
+else
+  echo "  FAIL  --allow-main-tree must record the waiver (rc=$guard_flag_rc)"; fail=$((fail+1))
+fi
+
+guard_env_out="$(CHARLES_ALLOW_MAIN_TREE=1 guard_run env --lane implement --dir "$GUARD_ENV" --no-fallback "guard env" 2>&1)"; guard_env_rc=$?
+if [ "$guard_env_rc" -eq 0 ] \
+  && jq -e -s 'any(.[]; .event == "start" and .lane == "implement" and .allow_main_tree == true)
+              and any(.[]; .event == "end" and .lane == "implement" and .allow_main_tree == true)' \
+    "$GUARD_ENV/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  CHARLES_ALLOW_MAIN_TREE records the waiver"; pass=$((pass+1))
+else
+  echo "  FAIL  CHARLES_ALLOW_MAIN_TREE must record the waiver (rc=$guard_env_rc)"; fail=$((fail+1))
+fi
+
+guard_explore_out="$(guard_run explore --lane explore --dir "$GUARD_ROOT/primary" --no-fallback "guard explore" 2>&1)"; guard_explore_rc=$?
+if [ "$guard_explore_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .lane == "explore")' \
+    "$GUARD_ROOT/primary/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  explore primary checkout is unaffected"; pass=$((pass+1))
+else
+  echo "  FAIL  explore primary checkout must be unaffected (rc=$guard_explore_rc)"; fail=$((fail+1))
+fi
+
+printf 'changed\n' > "$GUARD_ROOT/primary/changed"
+guard_review_out="$(guard_run review --lane review --dir "$GUARD_ROOT/primary" --plan "$GUARD_ROOT/plan.md" --no-fallback "guard review" 2>&1)"; guard_review_rc=$?
+if [ "$guard_review_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .lane == "review")' \
+    "$GUARD_ROOT/primary/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  review primary checkout is unaffected"; pass=$((pass+1))
+else
+  echo "  FAIL  review primary checkout must be unaffected (rc=$guard_review_rc)"; fail=$((fail+1))
+fi
+
+printf 'base\n' > "$GUARD_ROOT/not-git/file"
+guard_nongit_out="$(guard_run non-git --lane implement --dir "$GUARD_ROOT/not-git" --no-fallback "guard non-git" 2>&1)"; guard_nongit_rc=$?
+if [ "$guard_nongit_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .lane == "implement" and .allow_main_tree == false)' \
+    "$GUARD_ROOT/not-git/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  non-git implement dispatch is unaffected"; pass=$((pass+1))
+else
+  echo "  FAIL  non-git implement dispatch must be unaffected (rc=$guard_nongit_rc)"; fail=$((fail+1))
+fi
+
+GUARD_BARE="$BOX/main-tree-guard-bare"
+git init --bare -q "$GUARD_BARE"
+sed -i 's/^bare = true$/bare = 1/' "$GUARD_BARE/config"
+guard_bare_out="$(guard_run bare --lane implement --dir "$GUARD_BARE" --no-fallback "guard bare" 2>&1)"; guard_bare_rc=$?
+if [ "$guard_bare_rc" -eq 4 ] && grep -qF 'bare repository' <<<"$guard_bare_out"; then
+  echo "  PASS  bare repository implement dispatch remains refused"; pass=$((pass+1))
+else
+  echo "  FAIL  bare repository implement dispatch must remain refused (rc=$guard_bare_rc)"; fail=$((fail+1))
+fi
+
 RT="$BOX/runrepo"; mkdir -p "$RT/docs/specs"
 ( cd "$RT" && git init -q && git config user.name tester && git config user.email tester@example.invalid )
 printf 'green = "true"\n' > "$RT/.charles.toml"

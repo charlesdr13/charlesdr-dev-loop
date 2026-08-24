@@ -20,6 +20,12 @@ the flow, and do not silently skip it either.
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
+Implement lanes never run against a main checkout by default; use a `treehouse`
+worktree. If the parallel path refuses for a machinery reason, the fallback is
+a hand-made worktree. An operator may deliberately waive the rule with
+`--allow-main-tree` or `CHARLES_ALLOW_MAIN_TREE=1`; the override is logged in
+the dispatch record.
+
 Review accepts `--base <ref>` when grading already-committed work: it reviews
 `<ref>..working-tree`, including uncommitted changes on top and untracked files.
 The ref must resolve; without `--base`, review keeps its normal `HEAD` plus

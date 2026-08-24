@@ -24,7 +24,7 @@
 #
 # Usage:
 #   codex-run.sh --lane explore   [--dir D] [--engine E] [--effort max|high|medium] [--fast] "task"
-#   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--run ID] [--req R1,A3] [--plan FILE] [--read-only] "task"
+#   codex-run.sh --lane implement [--dir D] [--engine E] [--effort E] [--fast] [--run ID] [--req R1,A3] [--plan FILE] [--read-only] [--allow-main-tree] "task"
 #   codex-run.sh --lane review    --dir D --plan FILE [--base REF] [--files a,b] "task"
 #
 # --fast is shorthand for --effort high. fast_mode is enabled explicitly on the
@@ -59,6 +59,7 @@ BASE=""
 FILES=""
 REQ=""
 REQ_SET=0
+ALLOW_MAIN_TREE=0
 RUN_SELECTOR="${CHARLES_RUN:-}"
 RUN_SELECTOR_SET=0
 if [ -n "$RUN_SELECTOR" ]; then RUN_SELECTOR_SET=1; fi
@@ -83,6 +84,7 @@ while [ $# -gt 0 ]; do
     --req)       [ $# -ge 2 ] || { echo "codex-run.sh: --req requires identifiers" >&2; exit 2; }; REQ="$2"; REQ_SET=1; shift 2 ;;
     --validate-only) VALIDATE_ONLY=1; shift ;;
     --read-only) SANDBOX="read-only"; shift ;;
+    --allow-main-tree) ALLOW_MAIN_TREE=1; shift ;;
     --resume)    RESUME=1; shift ;;
     --timeout)   TIMEOUT="$2"; shift 2 ;;
     --no-fallback) FALLBACK=0; shift ;;
@@ -94,6 +96,7 @@ while [ $# -gt 0 ]; do
 done
 
 TASK="${1:-}"
+[ "${CHARLES_ALLOW_MAIN_TREE:-0}" = "1" ] && ALLOW_MAIN_TREE=1
 [ -n "$LANE" ] || { echo "codex-run.sh: --lane is required" >&2; usage; }
 [ -n "$TASK" ] || { echo "codex-run.sh: no task given" >&2; exit 2; }
 [ -d "$DIR" ]  || { echo "codex-run.sh: no such directory: $DIR" >&2; exit 2; }
@@ -302,6 +305,66 @@ validate_dispatch_scope() {
   done
 }
 
+validate_main_tree() {
+  [ "$LANE" = "implement" ] || return 0
+  [ "$ALLOW_MAIN_TREE" -eq 1 ] && return 0
+
+  command -v git >/dev/null 2>&1 || return 0
+
+  # An inherited GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR makes rev-parse describe a
+  # repository other than the one on disk, which would let a primary checkout
+  # pass as linked. The guard asks about $DIR itself, never about the ambient
+  # git environment.
+  local -a git_clean=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY git)
+
+  local probe
+  probe="$(cd "$DIR" 2>/dev/null && pwd -P)" || {
+    echo "codex-run.sh: REFUSING — cannot resolve --dir physically: $DIR" >&2
+    return 4
+  }
+  [ -n "$probe" ] || {
+    echo "codex-run.sh: REFUSING — cannot resolve --dir physically: $DIR" >&2
+    return 4
+  }
+  if [ ! -e "$probe/.git" ] && [ ! -L "$probe/.git" ]; then
+    local bare_state
+    bare_state="$("${git_clean[@]}" -C "$DIR" rev-parse --is-bare-repository 2>/dev/null)" || bare_state=""
+    case "$bare_state" in
+      true)
+        echo "codex-run.sh: REFUSING — implement dispatch cannot run against a bare repository: $DIR" >&2
+        echo "codex-run.sh: use a non-bare worktree with --dir <that worktree>" >&2
+        return 4
+        ;;
+      false) ;;
+      *) return 0 ;;
+    esac
+  fi
+
+  local has_git_entry=0
+  while :; do
+    if [ -e "$probe/.git" ] || [ -L "$probe/.git" ]; then
+      has_git_entry=1
+      break
+    fi
+    [ "$probe" = "/" ] && break
+    probe="${probe%/*}"
+    [ -n "$probe" ] || probe="/"
+  done
+  [ "$has_git_entry" -eq 1 ] || return 0
+
+  local git_dir common_dir
+  if ! git_dir="$("${git_clean[@]}" -C "$probe" rev-parse --git-dir 2>/dev/null)" \
+    || ! common_dir="$("${git_clean[@]}" -C "$probe" rev-parse --git-common-dir 2>/dev/null)"; then
+    echo "codex-run.sh: REFUSING — repository state could not be determined: $DIR" >&2
+    return 4
+  fi
+  [ "$git_dir" != "$common_dir" ] || {
+    echo "codex-run.sh: REFUSING — implement dispatch cannot run against primary working tree: $DIR" >&2
+    echo "codex-run.sh: run treehouse get, then re-run with --dir <that worktree>" >&2
+    return 4
+  }
+}
+
 # --- always announce termination ---------------------------------------------
 # .last is written only on success, so a dispatch that dies leaves nothing and
 # anything waiting on it waits forever — observed as agents stuck 27 minutes on
@@ -360,8 +423,9 @@ log_start() {
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
      --arg engine "$event_engine" --arg run "$RUN_ID" --arg dir "$DIR" \
      --arg task "$(printf '%.200s' "$TASK")" --arg req "$REQ" \
+     --arg allow_main_tree "$ALLOW_MAIN_TREE" \
      '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}
-      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end)} else . end' \
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end' \
      >> "$f" 2>/dev/null
 }
 
@@ -382,8 +446,9 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
      --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN_ID" \
      --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
      --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" --arg req "$REQ" \
+     --arg allow_main_tree "$ALLOW_MAIN_TREE" \
      '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,dir:$dir,task:$task}
-      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end)} else . end
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end
       | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
      >> "$f" 2>/dev/null || true
 }
@@ -606,6 +671,7 @@ fi
 [ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
 validate_dispatch_scope || exit $?
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
+validate_main_tree || exit $?
 command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 
 # --- refuse a second writer on the same tree ---------------------------------

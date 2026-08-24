@@ -278,6 +278,24 @@ safe_copy() {
   esac
 }
 
+ignored_path_inside_worktree() {
+  local wt="$1" path="${2%/}" worktree_root target
+  [ -L "$wt/$path" ] || return 0
+  worktree_root="$(realpath -- "$wt" 2>/dev/null)" || return 1
+  target="$(realpath -- "$wt/$path" 2>/dev/null)" || return 1
+  case "$target" in
+    "$worktree_root"|"$worktree_root"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+sanitize_ignored_path() {
+  local clean
+  clean="$(printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]' | LC_ALL=C cut -c1-200)"
+  [ -n "$clean" ] || clean='<control-only>'
+  printf '%s' "$clean"
+}
+
 # Acceptance is a separate pass: a failed sibling must not leave earlier
 # accepted chunks copied into the root.
 for i in "${!CH_WT[@]}"; do
@@ -301,6 +319,9 @@ for i in "${!CH_WT[@]}"; do
   fi
 
   status_file="$TMP/$i.status"
+  # Keep --ignored so setup output such as node_modules is reported, never
+  # rejected: ignored files are setup noise, while -uall still catches untracked
+  # non-ignored files and ordinary status still catches tracked undeclared writes.
   if ! git -C "$wt" status --porcelain -z -uall --ignored > "$status_file" 2>/dev/null; then
     echo "  ${CH_NAME[$i]}: REJECTED — could not read worktree status" >&2
     CH_KEEP[$i]=1; rc=3
@@ -309,6 +330,8 @@ for i in "${!CH_WT[@]}"; do
   CH_STATUS[$i]="$status_file"
 
   changed=()
+  ignored=()
+  ignored_escape=()
   status_error=0
   while IFS= read -r -d '' record; do
     if [ "${#record}" -lt 3 ]; then
@@ -316,7 +339,10 @@ for i in "${!CH_WT[@]}"; do
       break
     fi
     xy="${record:0:2}"; path="${record:3}"
-    if [[ "$xy" == *R* ]]; then
+    if [[ "$xy" == "!!" ]]; then
+      ignored+=("$path")
+      ignored_path_inside_worktree "$wt" "$path" || ignored_escape+=("$path")
+    elif [[ "$xy" == *R* ]]; then
       if ! IFS= read -r -d '' old_path; then
         status_error=1
         break
@@ -337,6 +363,23 @@ for i in "${!CH_WT[@]}"; do
 
   if [ "$status_error" -ne 0 ]; then
     echo "  ${CH_NAME[$i]}: REJECTED — malformed git status" >&2
+    CH_KEEP[$i]=1; rc=3
+    continue
+  fi
+  if [ "${#ignored[@]}" -gt 0 ]; then
+    ignored_preview=""
+    for ignored_path in "${ignored[@]:0:3}"; do
+      [ -z "$ignored_preview" ] || ignored_preview+=", "
+      ignored_preview+="$(sanitize_ignored_path "$ignored_path")"
+    done
+    [ "${#ignored[@]}" -le 3 ] || ignored_preview+=" ..."
+    echo "  ${CH_NAME[$i]}: ignored ${#ignored[@]} path(s): $ignored_preview" >&2
+  fi
+  if [ "${#ignored_escape[@]}" -gt 0 ]; then
+    echo "  ${CH_NAME[$i]}: REJECTED — wrote outside its declared files:" >&2
+    for ignored_path in "${ignored_escape[@]}"; do
+      printf '    %s\n' "$(sanitize_ignored_path "$ignored_path")" >&2
+    done
     CH_KEEP[$i]=1; rc=3
     continue
   fi
@@ -368,7 +411,14 @@ for i in "${!CH_WT[@]}"; do
   deletions=()
   while IFS= read -r -d '' record; do
     xy="${record:0:2}"; path="${record:3}"
-    if [[ "$xy" == *R* ]]; then
+    if [[ "$xy" == "!!" ]]; then
+      if ! ignored_path_inside_worktree "$wt" "$path"; then
+        echo "  ${CH_NAME[$i]}: REJECTED — wrote outside its declared files:" >&2
+        printf '    %s\n' "$(sanitize_ignored_path "$path")" >&2
+        CH_KEEP[$i]=1; rc=3
+      fi
+      continue
+    elif [[ "$xy" == *R* ]]; then
       IFS= read -r -d '' old_path || { echo "  ${CH_NAME[$i]}: FAILED — malformed rename" >&2; CH_KEEP[$i]=1; rc=3; continue; }
       if internal_path "$path" || internal_path "$old_path"; then
         continue
