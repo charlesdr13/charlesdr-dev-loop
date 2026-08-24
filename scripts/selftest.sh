@@ -1773,6 +1773,194 @@ bash "$FS" "$FD" >/dev/null 2>&1
 [ $? -eq 0 ] && { echo "  PASS  reviewed, grilled and closed reports clean"; pass=$((pass+1)); } \
              || { echo "  FAIL  a complete flow should report clean"; fail=$((fail+1)); }
 
+# --- close-time flow scoping -------------------------------------------------
+CS="$BOX/close-scope"; CS_STATE="$CS/state"
+mkdir -p "$CS/.charles/runs/close-run" "$CS/.charles/runs/stale-run" "$CS/docs/specs" "$CS_STATE"
+printf 'green = "true"\n' > "$CS/.charles.toml"
+( cd "$CS" && git init -q && git config user.name tester && git config user.email tester@example.invalid && \
+  printf 'base\n' > tracked && git add tracked && git commit -qm init ) >/dev/null 2>&1
+CS_OLD="$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+CS_CLOSE="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+CS_IMPL="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+CS_PLAN="$(date -u -d '4 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+CS_MID="$(date -u -d '3 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+CS_UNSOURCED="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+printf '# Close plan\n\n## Grill verdict\n\n- Rounds: 1\n' > "$CS/docs/specs/close-plan.md"
+printf '# Own ungrilled plan\n' > "$CS/docs/specs/own-ungrilled.md"
+printf '# Run close-run\n\n- flow: feature\n- spec: docs/specs/close-plan.md\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_CLOSE" "$CS" > "$CS/.charles/runs/close-run/RUN.md"
+printf '# Run stale-run\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_OLD" "$CS" > "$CS/.charles/runs/stale-run/RUN.md"
+printf '{"ts":"%s","event":"start","lane":"explore","run":"old-orphan","dir":"%s","task":"old"}\n' \
+  "$CS_OLD" "$CS" > "$CS/.charles/dispatches.jsonl"
+
+scope_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/close-run" 2>&1)"; scope_status_rc=$?
+if [ "$scope_status_rc" -eq 0 ] && grep -q 'repo backlog' <<<"$scope_status" \
+  && grep -q 'old-orphan' <<<"$scope_status" && grep -q 'run stale-run' <<<"$scope_status" \
+  && grep -q '/charlesdr-dev-loop:resolve' <<<"$scope_status" && grep -q 'runs-sweep.sh' <<<"$scope_status"; then
+  echo "  PASS  closing audit reports stale findings as repo backlog"; pass=$((pass+1))
+else
+  echo "  FAIL  closing audit should report stale findings without blocking (rc=$scope_status_rc)"; fail=$((fail+1))
+fi
+scope_close="$(CHARLES_STATE_DIR="$CS_STATE" bash "$RS" close "$CS" done --run close-run 2>&1)"; scope_close_rc=$?
+if [ "$scope_close_rc" -eq 0 ]; then
+  echo "  PASS  close ignores stale open runs and pre-dating orphan"; pass=$((pass+1))
+else
+  echo "  FAIL  complete run should close despite stale repo findings (rc=$scope_close_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$CS/.charles/runs/own-impl"
+printf '# Run own-impl\n\n- flow: feature\n- spec: docs/specs/close-plan.md\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_IMPL" "$CS" > "$CS/.charles/runs/own-impl/RUN.md"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"own-impl","dir":"%s","task":"own"}\n' \
+  "$CS_IMPL" "$CS" >> "$CS/.charles/dispatches.jsonl"
+impl_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/own-impl" 2>&1)"; impl_status_rc=$?
+if [ "$impl_status_rc" -eq 1 ] && grep -q 'ISSUE.*never reviewed' <<<"$impl_status" \
+  && grep -q 'NOTE.*run(s) still open' <<<"$impl_status"; then
+  echo "  PASS  own ungraded implement stays blocking"; pass=$((pass+1))
+else
+  echo "  FAIL  own ungraded implement must be the blocking finding (rc=$impl_status_rc)"; fail=$((fail+1))
+fi
+impl_close="$(CHARLES_STATE_DIR="$CS_STATE" bash "$RS" close "$CS" done --run own-impl 2>&1)"; impl_close_rc=$?
+if [ "$impl_close_rc" -eq 5 ] && grep -q 'never reviewed' <<<"$impl_close"; then
+  echo "  PASS  close refuses on own ungraded implement"; pass=$((pass+1))
+else
+  echo "  FAIL  close should refuse on own ungraded implement (rc=$impl_close_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$CS/.charles/runs/own-plan"
+printf '# Run own-plan\n\n- flow: feature\n- spec: docs/specs/own-ungrilled.md\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_PLAN" "$CS" > "$CS/.charles/runs/own-plan/RUN.md"
+plan_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/own-plan" 2>&1)"; plan_status_rc=$?
+if [ "$plan_status_rc" -eq 1 ] && grep -q 'ISSUE.*grill verdict' <<<"$plan_status" \
+  && grep -q 'NOTE.*never reviewed' <<<"$plan_status" \
+  && grep -q 'NOTE.*run(s) still open' <<<"$plan_status"; then
+  echo "  PASS  own ungrilled plan is the blocking plan finding"; pass=$((pass+1))
+else
+  echo "  FAIL  only the closing run's ungrilled plan should block (rc=$plan_status_rc)"; fail=$((fail+1))
+fi
+plan_close="$(CHARLES_STATE_DIR="$CS_STATE" bash "$RS" close "$CS" done --run own-plan 2>&1)"; plan_close_rc=$?
+if [ "$plan_close_rc" -eq 5 ] && grep -q 'grill verdict' <<<"$plan_close"; then
+  echo "  PASS  close refuses on own ungrilled spec"; pass=$((pass+1))
+else
+  echo "  FAIL  close should refuse on own ungrilled spec (rc=$plan_close_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$CS/.charles/runs/own-midflow"
+printf '# Run own-midflow\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] implement-chunk-A\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_MID" "$CS" > "$CS/.charles/runs/own-midflow/RUN.md"
+mid_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/own-midflow" 2>&1)"; mid_status_rc=$?
+if [ "$mid_status_rc" -eq 1 ] && grep -q 'ISSUE.*died mid-flow' <<<"$mid_status" \
+  && grep -q 'NOTE.*never reviewed' <<<"$mid_status" \
+  && grep -q 'NOTE.*run(s) still open' <<<"$mid_status"; then
+  echo "  PASS  own mid-flow death stays blocking"; pass=$((pass+1))
+else
+  echo "  FAIL  only the closing run's mid-flow death should block (rc=$mid_status_rc)"; fail=$((fail+1))
+fi
+mid_close="$(CHARLES_STATE_DIR="$CS_STATE" bash "$RS" close "$CS" done --run own-midflow 2>&1)"; mid_close_rc=$?
+if [ "$mid_close_rc" -eq 5 ] && grep -q 'died mid-flow' <<<"$mid_close"; then
+  echo "  PASS  close refuses on own mid-flow death"; pass=$((pass+1))
+else
+  echo "  FAIL  close should refuse on own mid-flow death (rc=$mid_close_rc)"; fail=$((fail+1))
+fi
+
+all_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" 2>&1)"; all_status_rc=$?
+if [ "$all_status_rc" -eq 1 ] && grep -q 'ISSUE.*orphan' <<<"$all_status" \
+  && grep -q 'ISSUE.*never reviewed' <<<"$all_status" \
+  && grep -q 'ISSUE.*grill verdict' <<<"$all_status" \
+  && grep -q 'ISSUE.*run(s) still open' <<<"$all_status"; then
+  echo "  PASS  repo-wide flow status still reports every finding"; pass=$((pass+1))
+else
+  echo "  FAIL  repo-wide flow status must keep every finding (rc=$all_status_rc)"; fail=$((fail+1))
+fi
+
+UC="$BOX/unsourced-close"; mkdir -p "$UC/.charles/runs/unsourced-run"
+printf 'green = "true"\n' > "$UC/.charles.toml"
+( cd "$UC" && git init -q && git config user.name tester && git config user.email tester@example.invalid && \
+  printf 'base\n' > tracked && git add tracked && git commit -qm init ) >/dev/null 2>&1
+printf '# Run unsourced-run\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_UNSOURCED" "$UC" > "$UC/.charles/runs/unsourced-run/RUN.md"
+printf 'unaccounted\n' > "$UC/tracked"
+unsourced_status="$(bash "$FS" "$UC" --closing "$UC/.charles/runs/unsourced-run" 2>&1)"; unsourced_status_rc=$?
+unsourced_issues="$(grep -c '  ISSUE ' <<<"$unsourced_status" || true)"
+if [ "$unsourced_status_rc" -eq 1 ] && [ "$unsourced_issues" -eq 1 ] \
+  && grep -q 'ISSUE.*working-tree changes' <<<"$unsourced_status" \
+  && ! grep -q 'NOTE.*working-tree changes' <<<"$unsourced_status"; then
+  echo "  PASS  unsourced changes remain a blocking close finding"; pass=$((pass+1))
+else
+  echo "  FAIL  unsourced changes must block even with no attributable flow issue (rc=$unsourced_status_rc)"; fail=$((fail+1))
+fi
+unsourced_close="$(bash "$RS" close "$UC" done --run unsourced-run 2>&1)"; unsourced_close_rc=$?
+if [ "$unsourced_close_rc" -eq 5 ]; then
+  echo "  PASS  close refuses on unsourced working-tree changes"; pass=$((pass+1))
+else
+  echo "  FAIL  close should refuse on unsourced working-tree changes (rc=$unsourced_close_rc)"; fail=$((fail+1))
+fi
+
+MISSING_START="$BOX/close-missing-start"; mkdir -p "$MISSING_START/.charles/runs/closing"
+printf '# Run closing\n\n- flow: feature\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  > "$MISSING_START/.charles/runs/closing/RUN.md"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"closing","dir":"%s","task":"own"}\n' \
+  "$CS_IMPL" "$MISSING_START" > "$MISSING_START/.charles/dispatches.jsonl"
+missing_start_status="$(bash "$FS" "$MISSING_START" --closing "$MISSING_START/.charles/runs/closing" 2>&1)"; missing_start_rc=$?
+if [ "$missing_start_rc" -eq 1 ] && grep -q 'ISSUE.*never reviewed' <<<"$missing_start_status" \
+  && grep -q 'attribution degraded' <<<"$missing_start_status" \
+  && ! grep -q 'NOTE.*never reviewed' <<<"$missing_start_status"; then
+  echo "  PASS  missing closing start blocks attribution"; pass=$((pass+1))
+else
+  echo "  FAIL  missing closing start must block, not note (rc=$missing_start_rc)"; fail=$((fail+1))
+fi
+printf '# Run closing\n\n- flow: feature\n- started: not-an-iso-timestamp\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  > "$MISSING_START/.charles/runs/closing/RUN.md"
+malformed_start_status="$(bash "$FS" "$MISSING_START" --closing "$MISSING_START/.charles/runs/closing" 2>&1)"; malformed_start_rc=$?
+if [ "$malformed_start_rc" -eq 1 ] && grep -q 'ISSUE.*never reviewed' <<<"$malformed_start_status" \
+  && grep -q 'attribution degraded' <<<"$malformed_start_status" \
+  && ! grep -q 'NOTE.*never reviewed' <<<"$malformed_start_status"; then
+  echo "  PASS  malformed closing start blocks attribution"; pass=$((pass+1))
+else
+  echo "  FAIL  malformed closing start must block, not note (rc=$malformed_start_rc)"; fail=$((fail+1))
+fi
+
+UNREADABLE_START="$BOX/close-unreadable-start"
+mkdir -p "$UNREADABLE_START/.charles/runs/closing"
+printf '# Run closing\n\n- flow: feature\n- started: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_CLOSE" > "$UNREADABLE_START/.charles/runs/closing/RUN.md"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"closing","dir":"%s","task":"own"}\n' \
+  "$CS_IMPL" "$UNREADABLE_START" > "$UNREADABLE_START/.charles/dispatches.jsonl"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "  SKIP  unreadable closing RUN.md assertion as root"
+else
+  chmod 000 "$UNREADABLE_START/.charles/runs/closing/RUN.md"
+  unreadable_start_status="$(bash "$FS" "$UNREADABLE_START" --closing "$UNREADABLE_START/.charles/runs/closing" 2>&1)"; unreadable_start_rc=$?
+  chmod 644 "$UNREADABLE_START/.charles/runs/closing/RUN.md"
+  if [ "$unreadable_start_rc" -eq 1 ] && grep -q 'ISSUE.*never reviewed' <<<"$unreadable_start_status" \
+    && grep -q 'attribution degraded: closing run RUN.md is missing or unreadable' <<<"$unreadable_start_status" \
+    && ! grep -q 'NOTE.*never reviewed' <<<"$unreadable_start_status"; then
+    echo "  PASS  unreadable closing RUN.md blocks attribution"; pass=$((pass+1))
+  else
+    echo "  FAIL  unreadable closing RUN.md must block, not note (rc=$unreadable_start_rc)"; fail=$((fail+1))
+  fi
+fi
+
+NO_REALPATH="$BOX/close-no-realpath"; NO_REALPATH_BIN="$BOX/no-realpath-bin"
+mkdir -p "$NO_REALPATH/.charles/runs/own-plan" "$NO_REALPATH/docs/specs" "$NO_REALPATH_BIN"
+printf '# Own ungrilled plan\n' > "$NO_REALPATH/docs/specs/own-ungrilled.md"
+printf '# Run own-plan\n\n- flow: feature\n- spec: docs/specs/../specs/own-ungrilled.md\n- started: %s\n\n## Phases\n\n- [12:00Z] implement-chunk-A\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_CLOSE" > "$NO_REALPATH/.charles/runs/own-plan/RUN.md"
+for tool in bash dirname sed head jq sort tail grep awk basename date git wc ls; do
+  ln -s "$(command -v "$tool")" "$NO_REALPATH_BIN/$tool"
+done
+no_realpath_status="$(PATH="$NO_REALPATH_BIN" bash "$FS" "$NO_REALPATH" --closing "$NO_REALPATH/.charles/runs/own-plan/../own-plan" 2>&1)"; no_realpath_rc=$?
+if [ "$no_realpath_rc" -eq 1 ] && grep -q 'ISSUE.*grill verdict' <<<"$no_realpath_status" \
+  && grep -q 'ISSUE.*died mid-flow' <<<"$no_realpath_status" \
+  && grep -q 'WARN.*realpath' <<<"$no_realpath_status" \
+  && ! grep -q 'NOTE.*grill verdict' <<<"$no_realpath_status" \
+  && ! grep -q 'NOTE.*died mid-flow' <<<"$no_realpath_status"; then
+  echo "  PASS  non-canonical own spec and run block without realpath"; pass=$((pass+1))
+else
+  echo "  FAIL  unavailable realpath must fail closed for own paths (rc=$no_realpath_rc)"; fail=$((fail+1))
+fi
+
 # --- flow graph lookup -------------------------------------------------------
 FG="$BOX/flow-graph"; mkdir -p "$FG"
 bash "$RS" init "$FG" feature "prefix mapping" >/dev/null 2>&1

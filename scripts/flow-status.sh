@@ -20,9 +20,78 @@ while [ $# -gt 0 ]; do
 done
 [ -d "$DIR" ] || { echo "flow-status.sh: no such directory: $DIR" >&2; exit 1; }
 DIR="$(cd "$DIR" && pwd)"
+if [ -n "$CLOSING" ]; then
+  case "$CLOSING" in /*) ;; *) CLOSING="$DIR/$CLOSING" ;; esac
+  CLOSING="${CLOSING%/}"
+fi
 log="$DIR/.charles/dispatches.jsonl"
 FLOW_FILE="$(dirname "$0")/flow.json"
 issues=0
+repo_issues=0
+
+iso_timestamp_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+closing_started=""
+closing_spec=""
+attribution_degraded=0
+attribution_reason=""
+if [ -n "$CLOSING" ]; then
+  if [ ! -r "$CLOSING/RUN.md" ]; then
+    attribution_degraded=1
+    attribution_reason="closing run RUN.md is missing or unreadable"
+  else
+    closing_started="$(sed -n 's/^- started: //p' "$CLOSING/RUN.md" | head -1)"
+    closing_spec="$(sed -n 's/^- spec: //p' "$CLOSING/RUN.md" | head -1)"
+    if [ -z "$closing_started" ]; then
+      attribution_degraded=1
+      attribution_reason="closing run RUN.md has no '- started:' line"
+    elif [[ ! "$closing_started" =~ $iso_timestamp_re ]]; then
+      attribution_degraded=1
+      attribution_reason="closing run '- started:' is not an ISO timestamp"
+    fi
+  fi
+fi
+
+paths_match() {
+  local left="${1%/}" right="${2%/}" left_key right_key
+  [ "$left" = "$right" ] && return 0
+  if ! command -v realpath >/dev/null 2>&1; then
+    attribution_degraded=1
+    attribution_reason="realpath is unavailable for non-identical path attribution"
+    return 0
+  fi
+  case "$left" in /*) ;; *) left="$DIR/$left" ;; esac
+  case "$right" in /*) ;; *) right="$DIR/$right" ;; esac
+  left_key="$(realpath -m "$left" 2>/dev/null)" || left_key=""
+  right_key="$(realpath -m "$right" 2>/dev/null)" || right_key=""
+  if [ -z "$left_key" ] || [ -z "$right_key" ]; then
+    attribution_degraded=1
+    attribution_reason="realpath could not canonicalize paths for attribution"
+    return 0
+  fi
+  [ "$left_key" = "$right_key" ]
+}
+
+dispatch_is_attributable() {
+  [ -z "$CLOSING" ] || [ "$attribution_degraded" -eq 1 ] || {
+    [ -n "${1:-}" ] && { [ "$1" = "$closing_started" ] || [[ "$1" > "$closing_started" ]]; }
+  }
+}
+
+spec_is_attributable() {
+  local spec="$1"
+  [ -z "$CLOSING" ] || [ "$attribution_degraded" -eq 1 ] || {
+    [ "$spec" = "$closing_spec" ] && return 0
+    [ -n "$closing_spec" ] || return 0
+    paths_match "$spec" "$closing_spec"
+  }
+}
+
+run_is_closing() {
+  [ -z "$CLOSING" ] && return 0
+  [ "$attribution_degraded" -eq 1 ] && return 0
+  [ "${1%/}" = "${CLOSING%/}" ] && return 0
+  paths_match "$1" "$CLOSING"
+}
 
 flow_graph=1
 if ! command -v jq >/dev/null 2>&1 || [ ! -r "$FLOW_FILE" ] || ! jq -e '
@@ -85,6 +154,7 @@ last_phase() {
 
 say_bad() { echo "  ISSUE  $1"; issues=$((issues+1)); }
 say_ok()  { echo "  ok     $1"; }
+say_repo() { echo "  NOTE   repo backlog (not this close): $1"; repo_issues=$((repo_issues+1)); }
 
 echo "flow status: $(basename "$DIR")"
 
@@ -112,7 +182,14 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     orphan_lane="$(jq -r --arg r "$orphan" -s '
       [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r)) | .lane] | last // ""
     ' "$log" 2>/dev/null)"
-    say_bad "orphan dispatch $orphan ($orphan_lane lane)"
+    orphan_ts="$(jq -r --arg r "$orphan" -s '
+      [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r)) | .ts] | last // ""
+    ' "$log" 2>/dev/null)"
+    if dispatch_is_attributable "$orphan_ts"; then
+      say_bad "orphan dispatch $orphan ($orphan_lane lane)"
+    else
+      say_repo "orphan dispatch $orphan ($orphan_lane lane)"
+    fi
     status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$orphan" 2>&1)"; status_rc=$?
     if [ "$status_rc" -eq 0 ]; then
       echo "         lane in flight — consult lane-status.sh before concluding"
@@ -124,18 +201,29 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
 fi
 
 # --- 1. implements that were never graded -------------------------------------
+impl=0
+revs=0
+ungraded=0
 if [ -s "$log" ] && command -v jq >/dev/null; then
   last_review="$(last_ends | jq -r 'select(.lane=="review" and .rc==0) | .ts' | sort | tail -1)"
-  if [ -n "$last_review" ]; then
-    ungraded="$(last_ends | jq -r --arg t "$last_review" \
-      'select(.lane=="implement" and .rc==0 and .ts > $t) | .ts' | wc -l)"
-  else
-    ungraded="$(last_ends | jq -r 'select(.lane=="implement" and .rc==0) | .ts' | wc -l)"
-  fi
   impl="$(last_ends | jq -r 'select(.lane=="implement") | .ts' | wc -l)"
   revs="$(last_ends | jq -r 'select(.lane=="review") | .ts' | wc -l)"
+  ungraded_close=0
+  ungraded_repo=0
+  while IFS= read -r dispatch_ts; do
+    if dispatch_is_attributable "$dispatch_ts"; then
+      ungraded_close=$((ungraded_close+1))
+    else
+      ungraded_repo=$((ungraded_repo+1))
+    fi
+  done < <(last_ends | jq -r --arg t "$last_review" '
+    select(.lane == "implement" and .rc == 0 and ($t == "" or .ts > $t)) |
+    .ts // ""
+  ')
+  ungraded=$((ungraded_close + ungraded_repo))
   if [ "${ungraded:-0}" -gt 0 ]; then
-    say_bad "$ungraded implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
+    [ "$ungraded_close" -eq 0 ] || say_bad "$ungraded_close implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
+    [ "$ungraded_repo" -eq 0 ] || say_repo "$ungraded_repo implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
     echo "         the isolated reviewer is the point of this plugin; run codex-reviewer against the plan"
   else
     if [ "${revs:-0}" -eq 0 ] && [ "${impl:-0}" -gt 0 ]; then
@@ -165,12 +253,33 @@ if [ "${impl:-0}" -gt 0 ] && [ "$specs" -eq 0 ]; then
   say_bad "code was implemented but docs/specs/ is empty — the review lane has nothing to judge against"
 elif [ "$specs" -gt 0 ]; then
   graded=$(grep -rl 'Grill verdict' "$DIR"/docs/specs/*.md 2>/dev/null | wc -l)
-  if [ "$graded" -eq 0 ]; then
-    say_bad "$specs plan(s), none carrying a grill verdict — plans went to implementation unchallenged"
-  elif [ "$graded" -lt "$specs" ]; then
-    say_bad "$((specs - graded)) of $specs plan(s) have no grill verdict"
+  if [ -z "$CLOSING" ]; then
+    if [ "$graded" -eq 0 ]; then
+      say_bad "$specs plan(s), none carrying a grill verdict — plans went to implementation unchallenged"
+    elif [ "$graded" -lt "$specs" ]; then
+      say_bad "$((specs - graded)) of $specs plan(s) have no grill verdict"
+    else
+      say_ok "all $specs plan(s) carry a grill verdict"
+    fi
   else
-    say_ok "all $specs plan(s) carry a grill verdict"
+    closing_missing=0
+    repo_missing=0
+    while IFS= read -r spec; do
+      [ -f "$spec" ] || continue
+      grep -q 'Grill verdict' "$spec" 2>/dev/null && continue
+      if spec_is_attributable "$spec"; then
+        closing_missing=$((closing_missing+1))
+      else
+        repo_missing=$((repo_missing+1))
+      fi
+    done < <(printf '%s\n' "$DIR"/docs/specs/*.md)
+    if [ "$closing_missing" -gt 0 ]; then
+      say_bad "$closing_missing plan(s) have no grill verdict — the closing run's spec is unchallenged"
+    fi
+    if [ "$repo_missing" -gt 0 ]; then
+      say_repo "$repo_missing plan(s) have no grill verdict"
+    fi
+    [ "$graded" -eq "$specs" ] && say_ok "all $specs plan(s) carry a grill verdict"
   fi
 fi
 
@@ -209,22 +318,40 @@ for d in "$DIR"/.charles/runs/*/; do
           if jq -e --arg f "$flow" --arg p "$canonical" '.[$f].terminal | index($p) != null' "$FLOW_FILE" >/dev/null 2>&1; then
             say_ok "run $run_id: last phase: $phase | expected next: $expected"
           else
-            say_bad "run $run_id: last phase: $phase | expected next: $expected — died mid-flow at $canonical"
+            if run_is_closing "$d"; then
+              say_bad "run $run_id: last phase: $phase | expected next: $expected — died mid-flow at $canonical"
+            else
+              say_repo "run $run_id: last phase: $phase | expected next: $expected — died mid-flow at $canonical"
+            fi
           fi
         fi
       fi
   else
     echo "  NOTE   run $run_id: last phase: $phase_label | expected next: (no guidance)"
   fi
-  [ -n "$CLOSING" ] && [ "${d%/}" = "${CLOSING%/}" ] || open=$((open+1))
+  if [ -n "$CLOSING" ] && run_is_closing "$d" && [ "$attribution_degraded" -eq 0 ]; then
+    :
+  else
+    open=$((open+1))
+  fi
 done
 if [ "$open" -gt 0 ]; then
-  say_bad "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"
+  if [ -n "$CLOSING" ] && [ "$attribution_degraded" -eq 0 ]; then
+    say_repo "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"
+  else
+    say_bad "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"
+  fi
 else
   say_ok "no runs left open"
 fi
 
 echo
+if [ "$attribution_degraded" -eq 1 ]; then
+  echo "  WARN   attribution degraded: $attribution_reason; every finding blocks this close"
+fi
+if [ "$repo_issues" -gt 0 ]; then
+  echo "$repo_issues repo backlog finding(s) — use /charlesdr-dev-loop:resolve; audit with runs-sweep.sh"
+fi
 if [ "$issues" -eq 0 ]; then echo "flow complete: nothing outstanding"; exit 0; fi
 echo "$issues outstanding — a dispatch succeeding is not a flow finishing"
 exit 1
