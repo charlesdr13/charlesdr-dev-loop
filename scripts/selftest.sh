@@ -2239,6 +2239,95 @@ bash "$US" "$UD" >/dev/null 2>&1
 [ $? -eq 2 ] && { echo "  PASS  a failed dispatch does not launder edits (2, not 0)"; pass=$((pass+1)); } \
              || { echo "  FAIL  rc!=0 must not account for edits"; fail=$((fail+1)); }
 
+make_unsourced_repo() {
+  local dir="$1"
+  mkdir -p "$dir/.charles"
+  ( cd "$dir" && git init -q && git config user.name tester && git config user.email tester@example.invalid &&
+    printf 'base\n' > tracked && git add tracked && git commit -qm init ) >/dev/null 2>&1
+}
+
+US_CLEAN="$BOX/unsourced-clean-dead"; make_unsourced_repo "$US_CLEAN"
+US_OLD="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"start","lane":"implement","run":"dead-clean","dir":"%s","task":"t"}\n' \
+  "$US_OLD" "$US_CLEAN" > "$US_CLEAN/.charles/dispatches.jsonl"
+clean_orphan_out="$(CHARLES_STATE_DIR="$US_CLEAN/state" bash "$US" "$US_CLEAN" 2>&1)"; clean_orphan_rc=$?
+if [ "$clean_orphan_rc" -eq 0 ] && grep -q 'ORPHAN: dead-clean' <<<"$clean_orphan_out" \
+  && grep -q 'clean tree — nothing to account for' <<<"$clean_orphan_out"; then
+  echo "  PASS  clean tree with dead orphan exits 0 and reports the orphan"; pass=$((pass+1))
+else
+  echo "  FAIL  clean dead orphan should be visible but non-blocking (rc=$clean_orphan_rc)"; fail=$((fail+1))
+fi
+
+US_FLIGHT="$BOX/unsourced-clean-inflight"; make_unsourced_repo "$US_FLIGHT"
+printf '{"ts":"%s","event":"start","lane":"implement","run":"inflight-orphan","dir":"%s","task":"t"}\n' \
+  "$US_OLD" "$US_FLIGHT" > "$US_FLIGHT/.charles/dispatches.jsonl"
+bash -c 'while sleep 1; do :; done' inflight-orphan & flight_pid=$!
+sleep 0.1
+flight_out="$(CHARLES_STATE_DIR="$US_FLIGHT/state" bash "$US" "$US_FLIGHT" 2>&1)"; flight_rc=$?
+kill "$flight_pid" 2>/dev/null || true; wait "$flight_pid" 2>/dev/null || true
+if [ "$flight_rc" -eq 3 ] && grep -q 'ORPHAN: inflight-orphan — lane in flight' <<<"$flight_out"; then
+  echo "  PASS  clean tree with in-flight orphan exits 3"; pass=$((pass+1))
+else
+  echo "  FAIL  in-flight orphan must block a clean tree (rc=$flight_rc)"; fail=$((fail+1))
+fi
+
+US_DIRTY="$BOX/unsourced-dirty-dead"; make_unsourced_repo "$US_DIRTY"
+printf 'changed\n' > "$US_DIRTY/tracked"
+printf '{"ts":"%s","event":"start","lane":"implement","run":"dead-dirty","dir":"%s","task":"t"}\n' \
+  "$US_OLD" "$US_DIRTY" > "$US_DIRTY/.charles/dispatches.jsonl"
+dirty_orphan_out="$(CHARLES_STATE_DIR="$US_DIRTY/state" bash "$US" "$US_DIRTY" 2>&1)"; dirty_orphan_rc=$?
+if [ "$dirty_orphan_rc" -eq 3 ] && grep -q 'ORPHAN: dead-dirty' <<<"$dirty_orphan_out"; then
+  echo "  PASS  dirty tree with dead orphan still exits 3"; pass=$((pass+1))
+else
+  echo "  FAIL  dirty dead orphan must remain blocking (rc=$dirty_orphan_rc)"; fail=$((fail+1))
+fi
+
+US_TOCTOU="$BOX/unsourced-toctou"; make_unsourced_repo "$US_TOCTOU"
+TOCTOU_BIN="$BOX/unsourced-toctou-bin"; mkdir -p "$TOCTOU_BIN"
+TOCTOU_REAL_PGREP="$(command -v pgrep)"
+printf '#!/usr/bin/env bash\nprintf "changed\\n" > "$TOCTOU_REPO/tracked"\nexec "$TOCTOU_REAL_PGREP" "$@"\n' > "$TOCTOU_BIN/pgrep"
+chmod +x "$TOCTOU_BIN/pgrep"
+printf '{"ts":"%s","event":"start","lane":"implement","run":"dead-toctou","dir":"%s","task":"t"}\n' \
+  "$US_OLD" "$US_TOCTOU" > "$US_TOCTOU/.charles/dispatches.jsonl"
+toctou_out="$(TOCTOU_REPO="$US_TOCTOU" TOCTOU_REAL_PGREP="$TOCTOU_REAL_PGREP" \
+  PATH="$TOCTOU_BIN:$PATH" CHARLES_STATE_DIR="$US_TOCTOU/state" bash "$US" "$US_TOCTOU" 2>&1)"; toctou_rc=$?
+if [ "$toctou_rc" -eq 3 ] && [ "$(cat "$US_TOCTOU/tracked")" = "changed" ] \
+  && grep -q 'ORPHAN: dead-toctou' <<<"$toctou_out"; then
+  echo "  PASS  changes made during orphan probing are recounted"; pass=$((pass+1))
+else
+  echo "  FAIL  orphan probing must recount changes made during the probe (rc=$toctou_rc)"; fail=$((fail+1))
+fi
+
+US_FRESH="$BOX/unsourced-fresh"; make_unsourced_repo "$US_FRESH"
+fresh_log_out="$(CHARLES_STATE_DIR="$US_FRESH/state" bash "$US" "$US_FRESH" 2>&1)"; fresh_log_rc=$?
+if [ "$fresh_log_rc" -eq 0 ] && grep -q 'clean tree — nothing to account for' <<<"$fresh_log_out" \
+  && ! grep -q 'cannot read or parse' <<<"$fresh_log_out"; then
+  echo "  PASS  fresh clean repo with no dispatch log exits 0"; pass=$((pass+1))
+else
+  echo "  FAIL  fresh clean repo with no dispatch log should exit 0 (rc=$fresh_log_rc)"; fail=$((fail+1))
+fi
+
+US_BAD="$BOX/unsourced-bad-log"; make_unsourced_repo "$US_BAD"
+printf '{not json\n' > "$US_BAD/.charles/dispatches.jsonl"
+bad_log_out="$(CHARLES_STATE_DIR="$US_BAD/state" bash "$US" "$US_BAD" 2>&1)"; bad_log_rc=$?
+if [ "$bad_log_rc" -eq 3 ] && grep -q 'ORPHAN CENSUS IMPOSSIBLE: cannot read or parse' <<<"$bad_log_out"; then
+  echo "  PASS  clean tree with unparseable dispatch log exits 3"; pass=$((pass+1))
+else
+  echo "  FAIL  existing unparseable dispatch log should exit 3 (rc=$bad_log_rc)"; fail=$((fail+1))
+fi
+
+mkdir -p "$US_CLEAN/.charles/runs/closing"
+printf '# Run closing\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$US_CLEAN" > "$US_CLEAN/.charles/runs/closing/RUN.md"
+flow_clean_out="$(CHARLES_STATE_DIR="$US_CLEAN/state" bash "$REPO_ROOT/scripts/flow-status.sh" \
+  "$US_CLEAN" --closing "$US_CLEAN/.charles/runs/closing" 2>&1)"; flow_clean_rc=$?
+if [ "$flow_clean_rc" -eq 0 ] && grep -q 'flow complete: nothing outstanding' <<<"$flow_clean_out" \
+  && ! grep -q 'ISSUE.*working-tree changes' <<<"$flow_clean_out"; then
+  echo "  PASS  closing audit does not block on a clean dead orphan"; pass=$((pass+1))
+else
+  echo "  FAIL  clean dead orphan must not create a closing ISSUE (rc=$flow_clean_rc)"; fail=$((fail+1))
+fi
+
 # --- engine routing -----------------------------------------------------------
 # terra is the capability escalation; deepseek is the availability fallback.
 ED="$BOX/engines"; mkdir -p "$ED/bin"

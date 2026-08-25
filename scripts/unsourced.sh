@@ -57,17 +57,22 @@ if [ -s "$log" ]; then
   ' "$log" 2>/dev/null)"
 fi
 if [ -n "$orphan_runs" ]; then
+  in_flight=0
   while IFS= read -r run; do
     [ -n "$run" ] || continue
     status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$run" 2>&1)"; status_rc=$?
     if [ "$status_rc" -eq 0 ]; then
+      in_flight=1
       echo "ORPHAN: $run — lane in flight; do not classify tree changes yet." >&2
     else
       echo "ORPHAN: $run — killed lane may own these changes — census before discarding" >&2
     fi
     echo "  $status_out" >&2
   done <<<"$orphan_runs"
-  exit 3
+  changed="$(git -C "$DIR" status --porcelain -uall 2>/dev/null | grep -vE "$ignore" | wc -l)"
+  if [ "$in_flight" -eq 1 ] || [ "${changed:-0}" -ne 0 ]; then
+    exit 3
+  fi
 fi
 
 [ "${changed:-0}" -eq 0 ] && { echo "clean tree — nothing to account for"; exit 0; }
