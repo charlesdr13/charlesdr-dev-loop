@@ -83,3 +83,24 @@ Grill skipped deliberately: the defect, its cause, its measured symptom and the
 one carve-out that must survive (U2, an in-flight lane) are all stated above, and
 the change is a reordering plus one condition. The isolated review lane still
 grades the diff.
+
+## Sign-off
+
+- [x] **U1** clean tree + dead orphan exits 0, orphan still reported on stderr — probed live on this repo: `unsourced rc=0`, was 3
+- [x] **U2** an IN-FLIGHT orphan still exits 3 on a clean tree — selftest `clean tree with in-flight orphan exits 3`, which asserts the `lane in flight` message, not just the code; `lane-status.sh:116-122` detects liveness by process cmdline
+- [x] **U3** every prior non-zero outcome survives on a dirty tree — selftest `dirty tree with dead orphan still exits 3`
+- [x] **U4** an existing but unparseable log still exits 3; an ABSENT log is not a failed census and exits 0 on a clean tree — this requirement was wrong as first written and the first cycle implemented it faithfully, breaking every fresh repo; caught by direct probe, corrected here and in code
+- [x] **U5** selftests use real repos, real logs and a real live process, and assert exit codes: `clean tree with dead orphan exits 0 and reports the orphan`, `clean tree with in-flight orphan exits 3`, `dirty tree with dead orphan still exits 3`, `fresh clean repo with no dispatch log exits 0`, `clean tree with unparseable dispatch log exits 3`, `changes made during orphan probing are recounted`
+- [x] **U6** version is 2.33.1 in plugin.json and both marketplace.json fields
+- [x] **U7** green holds — `271 passed, 0 failed` (was 264); doctor `21 ok, 0 failing`
+
+Hardening beyond the seven requirements:
+
+- [x] The change count is recounted AFTER the per-orphan liveness probes, closing a fail-open race where a lane writing during the probes would be missed by a stale count. Test proven non-vacuous: disabling the recount flips it to `FAIL … rc=0`
+- [x] End-to-end proof that the defect this run targeted is gone: `flow-status.sh --closing` on this repo now reports `flow complete: nothing outstanding`, where before it blocked and forced `--force`
+
+Filed, not fixed here: `cdl-lane-status-scope` — lane-status.sh exit 2 means both "dead" and "undeterminable", and its cache is keyed by run id globally rather than per repo.
+
+## Run outcome — 2026-08-25
+
+unsourced.sh no longer exits 3 on a clean tree, shipped as 2.33.1. A dead orphan with nothing on disk to own is reported and exits 0; an in-flight orphan still exits 3 because a running lane can write at any moment; a dirty tree with a dead orphan is unchanged; an existing but unparseable log still exits 3 while an absent log is not a failed census. The change count is recounted after the liveness probes, closing a fail-open race. This restores the F4 blocker that 2.33.0 deliberately kept blocking - before this fix any repo with a historical orphan start could never satisfy it, so every close needed --force, which is exactly what 2.33.0 set out to stop. Two cycles: cycle 1 implemented a requirement (U4) that was wrong as written and broke every fresh repository with no dispatch log, caught by direct probe rather than by tests and corrected in both the plan and the code; cycle 2 fixed a TOCTOU on the change count and reverted a fixture change. Selftest 264 -> 271. End-to-end proof: flow-status --closing on this repo now reports 'flow complete: nothing outstanding'. Built in a worktree at f6a944c, never the main tree, committed as 9bd0e1e. Rollback: git revert 9bd0e1e
