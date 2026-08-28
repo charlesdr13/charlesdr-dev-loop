@@ -254,11 +254,12 @@ Preserve all-or-nothing acceptance (`parallel-chunks.sh:299-405`) and the
 
 ## Sign-off
 
-- [ ] R1 —
-- [ ] R2 —
-- [ ] R3 —
-- [ ] R4 —
-- [ ] R5 —
-- [ ] R6 —
-- [ ] R7 —
-- [ ] R8 —
+- [x] R1 — selftest (293-green run, merged 031752e): `PASS rc=124 at the timeout deadline skips deepseek fallback` · `PASS rc=1 still falls back to deepseek` · `PASS early rc=124 still falls back to deepseek`
+- [x] R2 — real-process tests: `PASS SIGKILLed wrapper leaves no child group and completes one end marker` · `PASS watchdog is detached and its command line omits the run id` · `PASS clean dispatch has one end per attempt and no watchdog survivor` · `PASS SIGKILLed dispatch (no marker) reports DEAD`; `.done` written before watchdog stop (`codex-run.sh:1000-1001`), zero single-pid kill fallbacks remain
+- [x] R3 — `PASS clean shared three-way merge is accepted` · `PASS conflicting shared merge rejects before changing the root` · `PASS manifest refusal names the reason: one-sided-shared / shared-outside-files / three-shared` · `PASS shared manifest refuses --no-green before leasing`
+- [x] R4 — SKILL.md (both overlap rules + shared⊆files line), README.md, commands/{feature,debug,polish}.md, agents/codex-reviewer.md (foreground `--timeout 540` replaced with background lifecycle) all updated in 031752e
+- [x] R5 — `jq .version`: 2.34.0 / 2.34.0 / 2.34.0 (plugin.json + both marketplace.json fields)
+- [x] R6 — main tree post-merge: `293 passed, 0 failed`; doctor `21 ok, 0 failing` (baseline 271)
+- [x] R7 — `PASS stale lease refuses before dispatch` · `PASS target HEAD move refuses before merge`
+- [x] R8 — `PASS R8 luna 85% used_percent selects --disable fast_mode` · `PASS R8 luna 28% → --enable` · `PASS R8 luna empty → --enable` · `PASS R8 terra keeps --disable` (all three cases); live weekly window at dispatch time: 28% used
+
