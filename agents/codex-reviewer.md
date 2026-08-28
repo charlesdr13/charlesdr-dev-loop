@@ -20,13 +20,18 @@ SCRIPTS="$(dirname "$(readlink -f "$RUN")")"
 [ -x "$RUN" ] || { echo "codex-run not found — report this and STOP"; exit 1; }
 ```
 
-Then dispatch with `"$RUN"`:
+For a review expected to finish within roughly 9 minutes, dispatch with `"$RUN"`:
 
 ```bash
 "$RUN" --lane review \
-  --dir <REPO> --plan <PATH-TO-PLAN.md> [--base <REF>] --timeout 540   # review is fast: p90 3.2 min, foreground is fine \
+  --dir <REPO> --plan <PATH-TO-PLAN.md> [--base <REF>] --timeout 540 \
   "<what to pay special attention to>"
 ```
+
+For a review expected to exceed roughly 9 minutes (heavy diff, big repo, or
+terra at max), use the background path below with its real `--timeout 2700`
+and bounded completion checks; do not run the 540-second command in the
+foreground.
 
 The script builds a temp directory containing exactly two files — `plan.md` and
 `changes.diff` — and runs sol at medium by default, luna/terra at max when
@@ -76,8 +81,9 @@ is killed mid-flight while codex keeps going, which is how a dispatcher ends up
 polling an output file for six minutes and then re-dispatching on top of a run
 that never died.
 
-**Review runs in the foreground.** Measured p90 is 3.2 minutes and no review
-run has ever exceeded 540s, so it comfortably fits the Bash tool's 600s cap.
+**Short reviews run in the foreground.** A review expected to exceed roughly 9
+minutes (heavy diff, big repo, or terra at max) runs in the background with
+`--timeout 2700` and the bounded completion protocol below.
 
 **If the Bash call times out anyway:**
 
@@ -87,17 +93,21 @@ run has ever exceeded 540s, so it comfortably fits the Bash tool's 600s cap.
    timed-out lane is a `FAILED` item for `/charlesdr-dev-loop:resolve`, not a
    cue to improvise.
 
-**If the work genuinely needs longer than 10 minutes**, launch once in the
-background and check a bounded number of times, sleeping inside the call so
-waiting costs turns instead of tokens:
+**If the review genuinely needs longer than 10 minutes**, launch it once in the
+background with the real timeout and check a bounded number of times, sleeping
+inside the call so waiting costs turns instead of tokens:
 
 ```bash
-nohup <the codex-run.sh command> > /tmp/lane-$$.log 2>&1 &
+REVIEW_LOG="/tmp/charles-review-$$.log"
+nohup "$RUN" --lane review --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 2700 \
+  "<what to pay special attention to>" >"$REVIEW_LOG" 2>&1 &
 # then AT MOST three checks, each one a single call:
-sleep 300; tail -20 /tmp/lane-$$.log
+sleep 300; "$SCRIPTS/lane-status.sh"; tail -20 "$REVIEW_LOG"
 ```
 
-Three checks maximum. Still running after that? Report it as `FAILED` and stop.
+Three checks maximum. Exit 1 means `DONE` and the receipt/result can be read;
+exit 2 means `DEAD` and must be reported as `FAILED`; still running after the
+third check is also `FAILED`. Never re-dispatch it.
 
 ## If you end up waiting
 

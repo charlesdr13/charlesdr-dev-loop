@@ -285,7 +285,7 @@ PARALLEL="$(cd "$(dirname "$0")/.." && pwd)/scripts/parallel-chunks.sh"
 PD="$BOX/parallel"; mkdir -p "$PD/bin"
 
 parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND [TRACKED-OUTSIDE]
-  local repo="$1" worktree="$2" green_command="$3" tracked_outside="${4:-}"
+  local repo="$1" worktree="$2" green_command="$3" tracked_outside="${4:-}" shared_file="${5:-}"
   mkdir -p "$repo" "$(dirname "$worktree")"
   (
     cd "$repo" && git init -q && git config user.name tester \
@@ -293,6 +293,7 @@ parallel_fixture() { # parallel_fixture REPO WORKTREE GREEN-COMMAND [TRACKED-OUT
       && printf 'green = "%s"\n' "$green_command" > .charles.toml \
       && printf 'base\n' > alpha && printf 'base\n' > beta \
       && { [ "$tracked_outside" != tracked ] || printf 'base\n' > outside; } \
+      && { [ -z "$shared_file" ] || printf 'base\nbase\nbase\n' > "$shared_file"; } \
       && git add . && git commit -qm init
   )
   git -C "$repo" worktree add -q "$worktree" HEAD
@@ -322,9 +323,13 @@ parallel_fixture "$PD/tracked-oob-repo" "$PD/tracked-oob-alpha" true tracked
 parallel_fixture "$PD/delete-repo" "$PD/delete-alpha" true
 parallel_fixture "$PD/rename-repo" "$PD/rename-alpha" true
 parallel_fixture "$PD/bad-receipt-repo" "$PD/bad-receipt-alpha" true
-parallel_fixture "$PD/space-repo" "$PD/space-alpha" false
+parallel_fixture "$PD/space-repo" "$PD/space-alpha" false '' 'space file'
 parallel_fixture "$PD/r10-repo" "$PD/r10-alpha" true
 parallel_swap_fixture "$PD/swap-repo" "$PD/swap-alpha"
+parallel_fixture "$PD/shared-clean-repo" "$PD/shared-clean-alpha" true '' shared
+parallel_fixture "$PD/shared-conflict-repo" "$PD/shared-conflict-alpha" true '' shared
+parallel_fixture "$PD/stale-repo" "$PD/stale-alpha" true
+parallel_fixture "$PD/head-moved-repo" "$PD/head-moved-alpha" true
 git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
 git -C "$PD/oob-repo" worktree add -q "$PD/oob-beta" HEAD
 git -C "$PD/failed-repo" worktree add -q "$PD/failed-beta" HEAD
@@ -337,8 +342,13 @@ git -C "$PD/delete-repo" worktree add -q "$PD/delete-beta" HEAD
 git -C "$PD/rename-repo" worktree add -q "$PD/rename-beta" HEAD
 git -C "$PD/bad-receipt-repo" worktree add -q "$PD/bad-receipt-beta" HEAD
 git -C "$PD/r10-repo" worktree add -q "$PD/r10-beta" HEAD
-printf 'base\n' > "$PD/space-repo/space file"
-git -C "$PD/space-repo" add -- 'space file' && git -C "$PD/space-repo" commit -qm 'space fixture'
+git -C "$PD/shared-clean-repo" worktree add -q "$PD/shared-clean-beta" HEAD
+git -C "$PD/shared-conflict-repo" worktree add -q "$PD/shared-conflict-beta" HEAD
+(
+  cd "$PD/stale-repo" && printf 'current\n' > current && git add current && git commit -qm advance
+)
+git -C "$PD/stale-repo" worktree add -q "$PD/stale-beta" HEAD
+git -C "$PD/head-moved-repo" worktree add -q "$PD/head-moved-beta" HEAD
 git -C "$PD/space-repo" worktree add -q "$PD/space-beta" HEAD
 git -C "$PD/swap-repo" worktree add -q "$PD/swap-gamma" HEAD
 printf 'ignored-dir/\nignored-*\n' >> "$PD/ignored-repo/.git/info/exclude"
@@ -351,8 +361,10 @@ printf '[{"name":"delete","files":["alpha"],"task":"x"},{"name":"beta","files":[
 printf '[{"name":"rename","files":["renamed"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/rename-spec.json"
 printf '[{"name":"bad","files":["alpha"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/bad-receipt-spec.json"
 printf '[{"name":"space","files":["space file"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]\n' > "$PD/space-spec.json"
+printf '[{"name":"alpha","files":["shared"],"shared":["shared"],"task":"x"},{"name":"beta","files":["shared"],"shared":["shared"],"task":"x"}]\n' > "$PD/shared-spec.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$PD/bin/treehouse"; chmod +x "$PD/bin/treehouse"
-mkdir -p "$PD/lease-repo"; ( cd "$PD/lease-repo" && git init -q ) >/dev/null 2>&1
+mkdir -p "$PD/lease-repo"; ( cd "$PD/lease-repo" && git init -q && git config user.name tester \
+  && git config user.email tester@example.invalid && printf 'seed\n' > seed && git add seed && git commit -qm init ) >/dev/null 2>&1
 parallel_out="$(PATH="$PD/bin:$PATH" bash "$PARALLEL" "$PD/lease-repo" "$PD/spec.json" 2>&1)"; parallel_rc=$?
 if [ "$parallel_rc" -eq 3 ] && grep -qF 'refusing the whole batch' <<<"$parallel_out" \
   && ! grep -qF 'dispatching 2 chunks' <<<"$parallel_out"; then
@@ -362,7 +374,9 @@ else
 fi
 
 RECOVERY_REPO="$PD/recovery-repo"; RECOVERY_WT="$PD/recovery-first"
-mkdir -p "$RECOVERY_REPO" "$RECOVERY_WT"; ( cd "$RECOVERY_REPO" && git init -q ) >/dev/null 2>&1
+mkdir -p "$RECOVERY_REPO"; ( cd "$RECOVERY_REPO" && git init -q && git config user.name tester \
+  && git config user.email tester@example.invalid && printf 'seed\n' > seed && git add seed && git commit -qm init ) >/dev/null 2>&1
+git -C "$RECOVERY_REPO" worktree add -q "$RECOVERY_WT" HEAD
 printf '0\n' > "$PD/recovery-get-count"; : > "$PD/recovery-returns"
 cat > "$PD/bin/treehouse" <<EOF
 #!/usr/bin/env bash
@@ -418,6 +432,14 @@ case "\${1:-}" in
       rename-repo:chunk-beta) printf '%s\n' "$PD/rename-beta" ;;
       r10-repo:chunk-alpha) printf '%s\n' "$PD/r10-alpha" ;;
       r10-repo:chunk-beta) printf '%s\n' "$PD/r10-beta" ;;
+      shared-clean-repo:chunk-alpha) printf '%s\n' "$PD/shared-clean-alpha" ;;
+      shared-clean-repo:chunk-beta) printf '%s\n' "$PD/shared-clean-beta" ;;
+      shared-conflict-repo:chunk-alpha) printf '%s\n' "$PD/shared-conflict-alpha" ;;
+      shared-conflict-repo:chunk-beta) printf '%s\n' "$PD/shared-conflict-beta" ;;
+      stale-repo:chunk-alpha) printf '%s\n' "$PD/stale-alpha" ;;
+      stale-repo:chunk-beta) printf '%s\n' "$PD/stale-beta" ;;
+      head-moved-repo:chunk-alpha) printf '%s\n' "$PD/head-moved-alpha" ;;
+      head-moved-repo:chunk-beta) printf '%s\n' "$PD/head-moved-beta" ;;
       bad-receipt-repo:chunk-bad) printf '%s\n' "$PD/bad-receipt-alpha" ;;
       bad-receipt-repo:chunk-beta) printf '%s\n' "$PD/bad-receipt-beta" ;;
       space-repo:chunk-space) printf '%s\n' "$PD/space-alpha" ;;
@@ -452,6 +474,30 @@ manifest_check "dot-dot-path" '[{"name":"alpha","files":["../alpha"],"task":"x"}
 manifest_check "bad-req-shape" '[{"name":"alpha","files":["alpha"],"task":"x","req":"R1"},{"name":"beta","files":["beta"],"task":"x"}]'
 manifest_check "malformed-req-id" '[{"name":"alpha","files":["alpha"],"task":"x","req":["R1.bad"]},{"name":"beta","files":["beta"],"task":"x"}]'
 
+manifest_refusal() { # manifest_refusal NAME JSON REASON
+  local name="$1" manifest="$2" reason="$3" out rc
+  printf '%s\n' "$manifest" > "$PD/manifest-$name.json"
+  out="$(bash "$PARALLEL" "$PD/lease-repo" "$PD/manifest-$name.json" 2>&1)"; rc=$?
+  if [ "$rc" -eq 1 ] && grep -qF "$reason" <<<"$out"; then
+    echo "  PASS  manifest refusal names the reason: $name"; pass=$((pass+1))
+  else
+    echo "  FAIL  manifest refusal must name the reason: $name (rc=$rc)"; fail=$((fail+1))
+  fi
+}
+
+manifest_refusal "undeclared-overlap" \
+  '[{"name":"alpha","files":["shared"],"task":"x"},{"name":"beta","files":["shared"],"task":"x"}]' \
+  'chunks declare overlapping files'
+manifest_refusal "one-sided-shared" \
+  '[{"name":"alpha","files":["shared"],"shared":["shared"],"task":"x"},{"name":"beta","files":["shared"],"task":"x"}]' \
+  "shared path 'shared' is not declared shared by every overlapping chunk"
+manifest_refusal "shared-outside-files" \
+  '[{"name":"alpha","files":["alpha"],"shared":["shared"],"task":"x"},{"name":"beta","files":["beta"],"task":"x"}]' \
+  "shared path 'shared' is not in files for chunk alpha"
+manifest_refusal "three-shared" \
+  '[{"name":"alpha","files":["shared"],"shared":["shared"],"task":"x"},{"name":"beta","files":["shared"],"shared":["shared"],"task":"x"},{"name":"gamma","files":["shared"],"shared":["shared"],"task":"x"}]' \
+  "shared path 'shared' is declared by 3 chunks"
+
 cat > "$PD/bin/codex" <<'EOF'
 #!/usr/bin/env bash
 [ -z "${CHARLES_LANE_MARKER:-}" ] || : > "$CHARLES_LANE_MARKER"
@@ -476,6 +522,19 @@ case "$PWD" in
   */rename-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */r10-alpha) printf 'alpha merged\n' > alpha; exit 0 ;;
   */r10-beta) printf 'beta merged\n' > beta; exit 0 ;;
+  */shared-clean-alpha) printf 'alpha\nbase\nbase\n' > shared; exit 0 ;;
+  */shared-clean-beta) printf 'base\nbase\nbeta\n' > shared; exit 0 ;;
+  */shared-conflict-alpha) printf 'base\nalpha\nbase\n' > shared; exit 0 ;;
+  */shared-conflict-beta) printf 'base\nbeta\nbase\n' > shared; exit 0 ;;
+  */stale-alpha) printf 'stale alpha\n' > alpha; exit 0 ;;
+  */stale-beta) printf 'stale beta\n' > beta; exit 0 ;;
+  */head-moved-alpha)
+    printf 'moved alpha\n' > alpha
+    printf 'head moved\n' > "$CHARLES_TARGET_ROOT/moved"
+    git -C "$CHARLES_TARGET_ROOT" add -- moved && git -C "$CHARLES_TARGET_ROOT" commit -qm 'move head'
+    exit $?
+    ;;
+  */head-moved-beta) printf 'moved beta\n' > beta; exit 0 ;;
   */bad-receipt-alpha) printf 'alpha changed\n' > alpha; printf '{malformed\n' > .charles/dispatches.jsonl; exit 0 ;;
   */bad-receipt-beta) printf 'beta changed\n' > beta; exit 0 ;;
   */missing-alpha)
@@ -714,6 +773,75 @@ if [ "$red_rc" -ne 0 ] && [ "$(cat "$PD/red-repo/alpha")" = "alpha merged" ] \
   echo "  PASS  combined-green failure fails the batch after merge"; pass=$((pass+1))
 else
   echo "  FAIL  combined-green failure must fail the batch (rc=$red_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/shared-no-green-returns"
+shared_no_green_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/shared-no-green-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/shared-clean-repo" "$PD/shared-spec.json" --no-green 2>&1)"; shared_no_green_rc=$?
+if [ "$shared_no_green_rc" -eq 1 ] \
+  && grep -qF 'shared files require the combined green check' <<<"$shared_no_green_out" \
+  && [ ! -s "$PD/shared-no-green-returns" ]; then
+  echo "  PASS  shared manifest refuses --no-green before leasing"; pass=$((pass+1))
+else
+  echo "  FAIL  shared manifest must refuse --no-green before leasing (rc=$shared_no_green_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/shared-clean-returns"
+shared_clean_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/shared-clean-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/shared-clean-repo" "$PD/shared-spec.json" 2>&1)"; shared_clean_rc=$?
+if [ "$shared_clean_rc" -eq 0 ] \
+  && [ "$(cat "$PD/shared-clean-repo/shared")" = $'alpha\nbase\nbeta' ] \
+  && grep -qF 'merged shared shared' <<<"$shared_clean_out" \
+  && grep -qF 'running combined green check' <<<"$shared_clean_out"; then
+  echo "  PASS  clean shared three-way merge is accepted"; pass=$((pass+1))
+else
+  echo "  FAIL  clean shared three-way merge must be accepted (rc=$shared_clean_rc)"; fail=$((fail+1))
+fi
+
+shared_conflict_before="$PD/shared-conflict-before"
+cp "$PD/shared-conflict-repo/shared" "$shared_conflict_before"
+: > "$PD/shared-conflict-returns"
+shared_conflict_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/shared-conflict-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/shared-conflict-repo" "$PD/shared-spec.json" 2>&1)"; shared_conflict_rc=$?
+if [ "$shared_conflict_rc" -eq 3 ] \
+  && grep -qF "shared path 'shared' has a conflicting merge" <<<"$shared_conflict_out" \
+  && cmp -s "$PD/shared-conflict-repo/shared" "$shared_conflict_before" \
+  && ! grep -qF 'merged shared shared' <<<"$shared_conflict_out"; then
+  echo "  PASS  conflicting shared merge rejects before changing the root"; pass=$((pass+1))
+else
+  echo "  FAIL  conflicting shared merge must reject before root mutation (rc=$shared_conflict_rc)"; fail=$((fail+1))
+fi
+
+: > "$PD/stale-returns"
+rm -f "$PD/stale-lane-ran"
+stale_batch_head="$(git -C "$PD/stale-repo" rev-parse HEAD)"
+stale_lease_head="$(git -C "$PD/stale-alpha" rev-parse HEAD)"
+stale_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/stale-returns" CHARLES_LANE_MARKER="$PD/stale-lane-ran" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/stale-repo" "$PD/spec.json" 2>&1)"; stale_rc=$?
+if [ "$stale_rc" -eq 3 ] && grep -qF 'lease HEAD' <<<"$stale_out" \
+  && grep -qF "$stale_batch_head" <<<"$stale_out" && grep -qF "$stale_lease_head" <<<"$stale_out" \
+  && ! grep -qF 'dispatching 2 chunks' <<<"$stale_out" && [ ! -e "$PD/stale-lane-ran" ] \
+  && grep -Fxq "$PD/stale-alpha" "$PD/stale-returns"; then
+  echo "  PASS  stale lease refuses before dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  stale lease must refuse before dispatch (rc=$stale_rc)"; fail=$((fail+1))
+fi
+
+head_moved_before="$(git -C "$PD/head-moved-repo" rev-parse HEAD)"
+head_moved_alpha_before="$(cat "$PD/head-moved-repo/alpha")"
+head_moved_beta_before="$(cat "$PD/head-moved-repo/beta")"
+head_moved_out="$(PATH="$PD/bin:$PATH" CHARLES_TARGET_ROOT="$PD/head-moved-repo" CHARLES_RETURN_RECORD="$PD/head-moved-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/head-moved-repo" "$PD/spec.json" 2>&1)"; head_moved_rc=$?
+head_moved_after="$(git -C "$PD/head-moved-repo" rev-parse HEAD)"
+if [ "$head_moved_rc" -eq 3 ] && [ "$head_moved_after" != "$head_moved_before" ] \
+  && grep -qF 'target HEAD changed during batch' <<<"$head_moved_out" \
+  && grep -qF "$head_moved_before" <<<"$head_moved_out" && grep -qF "$head_moved_after" <<<"$head_moved_out" \
+  && [ "$(cat "$PD/head-moved-repo/alpha")" = "$head_moved_alpha_before" ] \
+  && [ "$(cat "$PD/head-moved-repo/beta")" = "$head_moved_beta_before" ] \
+  && [ -e "$PD/head-moved-repo/moved" ]; then
+  echo "  PASS  target HEAD move refuses before merge"; pass=$((pass+1))
+else
+  echo "  FAIL  target HEAD move must refuse before merge (rc=$head_moved_rc)"; fail=$((fail+1))
 fi
 
 # --- run state lifecycle ------------------------------------------------------
@@ -2362,11 +2490,208 @@ else
   echo "  FAIL  luna should keep fast_mode"; fail=$((fail+1))
 fi
 
+# R8: the local weekly quota disables fast_mode only once 20% remains.
+R8="$BOX/r8-sessions"
+for r8_case in 85 28; do
+  mkdir -p "$R8/$r8_case/2026/08/28"
+  printf '{"rate_limits":{"primary":{"used_percent":%s,"window_minutes":10080}}}\n' "$r8_case" \
+    > "$R8/$r8_case/2026/08/28/rollout-$r8_case.jsonl"
+done
+mkdir -p "$R8/empty/2026/08/28"
+for r8_case in 85 28 empty; do
+  case "$r8_case" in 85) r8_expected=disable ;; *) r8_expected=enable ;; esac
+  PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/$r8_case" \
+    bash "$RUN_SH" --lane implement --engine luna --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+  if grep -q -- "--$r8_expected fast_mode" "$ED/args.txt" 2>/dev/null; then
+    echo "  PASS  R8 luna $r8_case% used_percent selects --$r8_expected fast_mode"; pass=$((pass+1))
+  else
+    echo "  FAIL  R8 luna $r8_case% used_percent must select --$r8_expected fast_mode"; fail=$((fail+1))
+  fi
+
+  PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/$r8_case" \
+    bash "$RUN_SH" --lane implement --engine terra --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+  if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
+    echo "  PASS  R8 terra $r8_case% used_percent keeps --disable fast_mode"; pass=$((pass+1))
+  else
+    echo "  FAIL  R8 terra must keep --disable fast_mode ($r8_case% fixture)"; fail=$((fail+1))
+  fi
+done
+
 out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine nonsense --dir "$ED" --timeout 5 "t" 2>&1)"
 if grep -q 'unknown engine' <<<"$out"; then
   echo "  PASS  an unknown engine is rejected"; pass=$((pass+1))
 else
   echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
+fi
+
+# R1: a real timeout is not rescued, but an engine that merely returns 124 is.
+R1="$BOX/r1-fallback"; mkdir -p "$R1/bin" "$R1/home/.claude/skills/codex-deepseek/scripts"
+printf '#!/usr/bin/env bash\ncase "${CHARLES_R1_MODE:-}" in\n  deadline) sleep 2 ;;\n  early124) exit 124 ;;\n  failure) exit 1 ;;\nesac\n' > "$R1/bin/codex"
+chmod +x "$R1/bin/codex"
+printf '#!/usr/bin/env bash\n: > "${CHARLES_R1_DEEPSEEK_RAN:?}"\nprintf "deepseek result\\n"\n' \
+  > "$R1/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$R1/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+
+R1D="$R1/deadline"; mkdir -p "$R1D/repo"
+r1_dead_out="$(HOME="$R1/home" CHARLES_R1_MODE=deadline CHARLES_R1_DEEPSEEK_RAN="$R1D/deepseek-ran" \
+  CHARLES_STATE_DIR="$R1D/state" PATH="$R1/bin:$PATH" \
+  bash "$RUN_SH" --lane explore --dir "$R1D/repo" --timeout 1 "deadline" 2>&1)"; r1_dead_rc=$?
+r1_dead_ends="$(jq -r 'select(.event == "end") | .engine' "$R1D/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+if [ "$r1_dead_rc" -eq 124 ] && grep -qF 'fallback was skipped because the task timed out' <<<"$r1_dead_out" \
+  && [ ! -e "$R1D/deepseek-ran" ] && [ "$r1_dead_ends" -eq 1 ]; then
+  echo "  PASS  rc=124 at the timeout deadline skips deepseek fallback"; pass=$((pass+1))
+else
+  echo "  FAIL  rc=124 at the timeout deadline must skip fallback (rc=$r1_dead_rc, ends=$r1_dead_ends)"; fail=$((fail+1))
+fi
+
+R1F="$R1/failure"; mkdir -p "$R1F/repo"
+r1_fail_out="$(HOME="$R1/home" CHARLES_R1_MODE=failure CHARLES_R1_DEEPSEEK_RAN="$R1F/deepseek-ran" \
+  CHARLES_STATE_DIR="$R1F/state" PATH="$R1/bin:$PATH" \
+  bash "$RUN_SH" --lane explore --dir "$R1F/repo" --timeout 1 "failure" 2>&1)"; r1_fail_rc=$?
+r1_fail_ends="$(jq -r 'select(.event == "end") | .engine' "$R1F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+if [ "$r1_fail_rc" -eq 0 ] && [ -e "$R1F/deepseek-ran" ] && [ "$r1_fail_ends" -eq 2 ]; then
+  echo "  PASS  rc=1 still falls back to deepseek"; pass=$((pass+1))
+else
+  echo "  FAIL  rc=1 must still fall back to deepseek (rc=$r1_fail_rc, ends=$r1_fail_ends)"; fail=$((fail+1))
+fi
+
+R1E="$R1/early-124"; mkdir -p "$R1E/repo"
+r1_early_out="$(HOME="$R1/home" CHARLES_R1_MODE=early124 CHARLES_R1_DEEPSEEK_RAN="$R1E/deepseek-ran" \
+  CHARLES_STATE_DIR="$R1E/state" PATH="$R1/bin:$PATH" \
+  bash "$RUN_SH" --lane explore --dir "$R1E/repo" --timeout 1 "early 124" 2>&1)"; r1_early_rc=$?
+if [ "$r1_early_rc" -eq 0 ] && [ -e "$R1E/deepseek-ran" ]; then
+  echo "  PASS  early rc=124 still falls back to deepseek"; pass=$((pass+1))
+else
+  echo "  FAIL  early rc=124 must still fall back to deepseek (rc=$r1_early_rc)"; fail=$((fail+1))
+fi
+
+# R2: kill a live wrapper and prove its detached child group and receipt finish.
+R2="$BOX/r2-watchdog"; mkdir -p "$R2/bin" "$R2/repo"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'trap "" TERM INT HUP' \
+  'printf "%s\n" "$$" > "$CHARLES_R2_READY"' \
+  'while :; do sleep 1; done' > "$R2/bin/codex"
+chmod +x "$R2/bin/codex"
+( CHARLES_STATE_DIR="$R2/state" CHARLES_R2_READY="$R2/ready" PATH="$R2/bin:$PATH" \
+  exec bash "$RUN_SH" --lane explore --dir "$R2/repo" --no-fallback --timeout 30 "watchdog" ) \
+  >"$R2/wrapper.out" 2>&1 &
+r2_wrapper_pid=$!
+r2_run=""
+for _ in $(seq 1 100); do
+  r2_run="$(jq -r 'select(.event == "start") | .run' "$R2/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+  [ -n "$r2_run" ] && [ -s "$R2/ready" ] && break
+  sleep 0.05
+done
+r2_fake_pid="$(cat "$R2/ready" 2>/dev/null || true)"
+r2_pgid="$(ps -o pgid= -p "$r2_fake_pid" 2>/dev/null | tr -d '[:space:]')"
+r2_watchdog_pid=""
+r2_watchdog_cmd=""
+if [[ "$r2_wrapper_pid" =~ ^[0-9]+$ ]] && [ -n "$r2_run" ]; then
+  for _ in $(seq 1 100); do
+    for r2_proc in /proc/[0-9]*; do
+      r2_pid="${r2_proc##*/}"
+      [ "$r2_pid" = "$r2_wrapper_pid" ] && continue
+      r2_env="$(tr '\0' '\n' < "$r2_proc/environ" 2>/dev/null || true)"
+      if grep -qF "CHARLES_WATCHDOG_RUN=$r2_run" <<<"$r2_env"; then
+        r2_watchdog_pid="$r2_pid"
+        r2_watchdog_cmd="$(tr '\0' ' ' < "$r2_proc/cmdline" 2>/dev/null || true)"
+        break 2
+      fi
+    done
+    sleep 0.05
+  done
+fi
+r2_cmdline_ok=0
+[ -n "$r2_watchdog_pid" ] && ! grep -qF "$r2_run" <<<"$r2_watchdog_cmd" && r2_cmdline_ok=1
+if [[ "$r2_wrapper_pid" =~ ^[0-9]+$ ]]; then kill -KILL "$r2_wrapper_pid" 2>/dev/null || true; fi
+wait "$r2_wrapper_pid" 2>/dev/null || true
+r2_group_dead=0
+r2_receipt_ready=0
+for _ in $(seq 1 150); do
+  [ -n "$r2_pgid" ] && ! kill -0 -- "-$r2_pgid" 2>/dev/null && r2_group_dead=1
+  if [ -n "$r2_run" ] && [ -f "$R2/state/$r2_run.done" ] \
+    && jq -e --arg r "$r2_run" 'select(.event == "end" and .run == $r and .rc == 143 and .wrapper_death == true)' \
+      "$R2/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+    r2_receipt_ready=1
+  fi
+  [ "$r2_group_dead" -eq 1 ] && [ "$r2_receipt_ready" -eq 1 ] && break
+  sleep 0.1
+done
+r2_end_count="$(jq -r --arg r "$r2_run" 'select(.event == "end" and .run == $r) | .run' \
+  "$R2/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+r2_status_out="$(CHARLES_STATE_DIR="$R2/state" bash "$LS" --dir "$R2/repo" "$r2_run" 2>&1)"; r2_status_rc=$?
+if [ "$r2_group_dead" -eq 1 ] && [ "$r2_receipt_ready" -eq 1 ] && [ "$r2_end_count" -eq 1 ] \
+  && [ "$(cat "$R2/state/$r2_run.done" 2>/dev/null)" = 143 ] \
+  && [ "$r2_status_rc" -eq 2 ] && grep -qF "DEAD: $r2_run" <<<"$r2_status_out" \
+  && ! grep -qF "RUNNING: $r2_run" <<<"$r2_status_out"; then
+  echo "  PASS  SIGKILLed wrapper leaves no child group and completes one end marker"; pass=$((pass+1))
+else
+  echo "  FAIL  SIGKILLed wrapper must clean its child group and receipt (group=$r2_group_dead, receipt=$r2_receipt_ready, ends=$r2_end_count, status=$r2_status_rc)"; fail=$((fail+1))
+fi
+if [ "$r2_cmdline_ok" -eq 1 ]; then
+  echo "  PASS  watchdog is detached and its command line omits the run id"; pass=$((pass+1))
+else
+  echo "  FAIL  watchdog must be detached and omit the run id from its command line"; fail=$((fail+1))
+fi
+
+# A clean one-attempt dispatch must reap its watchdog and log exactly one end.
+R2C="$R2/clean"; mkdir -p "$R2C/bin" "$R2C/repo"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R2C/bin/codex"
+chmod +x "$R2C/bin/codex"
+sleep 1
+CHARLES_STATE_DIR="$R2C/state" PATH="$R2C/bin:$PATH" bash "$RUN_SH" \
+  --lane explore --dir "$R2C/repo" --no-fallback --timeout 5 "clean" >/dev/null 2>&1
+r2_clean_rc=$?
+r2_clean_run="$(jq -r 'select(.event == "start") | .run' "$R2C/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+r2_clean_ends="$(jq -r --arg r "$r2_clean_run" 'select(.event == "end" and .run == $r) | .run' \
+  "$R2C/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+r2_clean_survivor=0
+for _ in $(seq 1 30); do
+  for r2_proc in /proc/[0-9]*; do
+    r2_pid="${r2_proc##*/}"
+    r2_env="$(tr '\0' '\n' < "$r2_proc/environ" 2>/dev/null || true)"
+    if grep -qF "CHARLES_WATCHDOG_RUN=$r2_clean_run" <<<"$r2_env"; then r2_clean_survivor=1; break 2; fi
+  done
+  sleep 0.05
+done
+if [ "$r2_clean_rc" -eq 0 ] && [ "$r2_clean_ends" -eq 1 ] \
+  && [ "$(cat "$R2C/state/$r2_clean_run.done" 2>/dev/null)" = 0 ] \
+  && [ "$r2_clean_survivor" -eq 0 ]; then
+  echo "  PASS  clean dispatch has one end per attempt and no watchdog survivor"; pass=$((pass+1))
+else
+  echo "  FAIL  clean dispatch must reap its watchdog and log one end (rc=$r2_clean_rc, ends=$r2_clean_ends, survivor=$r2_clean_survivor)"; fail=$((fail+1))
+fi
+
+# A clean fallback must log one end for each of its two attempts and reap the watchdog.
+R2F="$R2/clean-fallback"; mkdir -p "$R2F/bin" "$R2F/home/.claude/skills/codex-deepseek/scripts" "$R2F/repo"
+printf '#!/usr/bin/env bash\ncase " $* " in *" -p luna "*) exit 1;; esac\nexit 0\n' > "$R2F/bin/codex"
+chmod +x "$R2F/bin/codex"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R2F/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$R2F/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+HOME="$R2F/home" CHARLES_STATE_DIR="$R2F/state" PATH="$R2F/bin:$PATH" bash "$RUN_SH" \
+  --lane explore --dir "$R2F/repo" --timeout 5 "clean fallback" >/dev/null 2>&1
+r2_fallback_rc=$?
+r2_fallback_run="$(jq -r 'select(.event == "start") | .run' "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+r2_fallback_luna_ends="$(jq -r --arg r "$r2_fallback_run" 'select(.event == "end" and .run == $r and .engine == "luna") | .run' \
+  "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+r2_fallback_deepseek_ends="$(jq -r --arg r "$r2_fallback_run" 'select(.event == "end" and .run == $r and .engine == "deepseek") | .run' \
+  "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+r2_fallback_survivor=0
+for _ in $(seq 1 30); do
+  for r2_proc in /proc/[0-9]*; do
+    r2_pid="${r2_proc##*/}"
+    r2_env="$(tr '\0' '\n' < "$r2_proc/environ" 2>/dev/null || true)"
+    if grep -qF "CHARLES_WATCHDOG_RUN=$r2_fallback_run" <<<"$r2_env"; then r2_fallback_survivor=1; break 2; fi
+  done
+  sleep 0.05
+done
+r2_fallback_ends=$((r2_fallback_luna_ends + r2_fallback_deepseek_ends))
+if [ "$r2_fallback_rc" -eq 0 ] && [ "$r2_fallback_luna_ends" -eq 1 ] \
+  && [ "$r2_fallback_deepseek_ends" -eq 1 ] && [ "$r2_fallback_ends" -eq 2 ] \
+  && [ "$r2_fallback_survivor" -eq 0 ]; then
+  echo "  PASS  clean fallback logs one end per attempt and leaves no watchdog survivor"; pass=$((pass+1))
+else
+  echo "  FAIL  clean fallback must log two ends and reap its watchdog (rc=$r2_fallback_rc, luna=$r2_fallback_luna_ends, deepseek=$r2_fallback_deepseek_ends, survivor=$r2_fallback_survivor)"; fail=$((fail+1))
 fi
 
 # A missing start-event write is fatal for implement, but read-only lanes warn
@@ -2764,18 +3089,18 @@ else
   echo "  FAIL  CHARLES_ENGINE must beat the engine file"; fail=$((fail+1))
 fi
 printf 'deepseek\n' > "$ED/engine"
-# DeepSeek peak window: borrow luna on Codex quota, and without fast_mode —
-# the swap buys cost, so spend the quota on deliberation rather than latency.
-PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_PEAK_HOUR=07 bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+# DeepSeek peak window: borrow luna on Codex quota; R8 applies luna's fast-mode
+# selection to the substitution too.
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/empty" CHARLES_PEAK_HOUR=07 bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
 if grep -q -- '-p luna' "$ED/args.txt" 2>/dev/null; then
   echo "  PASS  deepseek engine swaps to luna in a peak window"; pass=$((pass+1))
 else
   echo "  FAIL  peak window must swap deepseek to luna"; fail=$((fail+1))
 fi
-if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
-  echo "  PASS  the peak swap runs luna without fast_mode"; pass=$((pass+1))
+if grep -q -- '--enable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  the peak swap runs luna with fast_mode enabled"; pass=$((pass+1))
 else
-  echo "  FAIL  peak-swapped luna must not use fast_mode"; fail=$((fail+1))
+  echo "  FAIL  peak-swapped luna must use fast_mode by default"; fail=$((fail+1))
 fi
 
 # The deepseek lane runs codex-ds.sh, not codex, so it needs its own HOME —

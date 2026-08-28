@@ -32,6 +32,95 @@
 
 set -euo pipefail
 
+if [ "${CHARLES_WATCHDOG:-0}" = "1" ]; then
+  watchdog_parent="${CHARLES_WATCHDOG_PARENT:-}"
+  watchdog_state_file="${CHARLES_WATCHDOG_STATE_FILE:-}"
+  watchdog_stop_file="${CHARLES_WATCHDOG_STOP_FILE:-}"
+  watchdog_run="${CHARLES_WATCHDOG_RUN:-}"
+  watchdog_done="${CHARLES_WATCHDOG_DONE:-}"
+  watchdog_log="${CHARLES_WATCHDOG_LOG:-}"
+  watchdog_lane="${CHARLES_WATCHDOG_LANE:-}"
+  watchdog_dir="${CHARLES_WATCHDOG_DIR:-}"
+  watchdog_task="${CHARLES_WATCHDOG_TASK:-}"
+  watchdog_req="${CHARLES_WATCHDOG_REQ:-}"
+  watchdog_allow_main_tree="${CHARLES_WATCHDOG_ALLOW_MAIN_TREE:-0}"
+  [ -n "$watchdog_parent" ] && [ -n "$watchdog_state_file" ] && [ -n "$watchdog_stop_file" ] \
+    && [ -n "$watchdog_run" ] && [ -n "$watchdog_done" ] && [ -n "$watchdog_log" ] || exit 2
+
+  watchdog_parent_pid() {
+    ps -o ppid= -p "$$" 2>/dev/null | tr -d '[:space:]'
+  }
+
+  watchdog_alive() {
+    local pid="$1"
+    kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null
+  }
+
+  watchdog_kill_group() {
+    local active="${1:-0}" pid_file="${2:-}" child_pid=""
+    [ "$active" = "1" ] || return 0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -s "$pid_file" ] && break
+      sleep 1
+    done
+    [ -s "$pid_file" ] || return 0
+    child_pid="$(head -1 "$pid_file" 2>/dev/null || true)"
+    [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] && [ "$child_pid" -gt 1 ] || return 0
+    kill -TERM -- "-$child_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      watchdog_alive "$child_pid" || return 0
+      sleep 1
+    done
+    kill -KILL -- "-$child_pid" 2>/dev/null || true
+  }
+
+  watchdog_active=0
+  watchdog_engine=""
+  watchdog_model=""
+  watchdog_fallback_from=""
+  watchdog_primary_rc=""
+  watchdog_pid_file=""
+  while :; do
+    [ -e "$watchdog_stop_file" ] && exit 0
+    watchdog_current_parent="$(watchdog_parent_pid || true)"
+    if [ -n "$watchdog_current_parent" ] && [ "$watchdog_current_parent" != "$watchdog_parent" ]; then
+      break
+    fi
+    sleep 1
+  done
+
+  # Give a dying wrapper time to finish its EXIT trap and append its end event.
+  sleep 2
+  [ -e "$watchdog_stop_file" ] && exit 0
+  if [ -s "$watchdog_state_file" ]; then
+    IFS='|' read -r watchdog_active watchdog_engine watchdog_model \
+      watchdog_fallback_from watchdog_primary_rc watchdog_pid_file < "$watchdog_state_file" || true
+  fi
+  watchdog_kill_group "$watchdog_active" "$watchdog_pid_file"
+
+  watchdog_end_rc=""
+  if [ -r "$watchdog_log" ]; then
+    watchdog_end_rc="$(jq -r --arg r "$watchdog_run" --arg e "$watchdog_engine" \
+      'select(.event == "end" and .run == $r and .engine == $e and .rc != null) | .rc' \
+      "$watchdog_log" 2>/dev/null | tail -1 || true)"
+  fi
+  if [[ "$watchdog_end_rc" =~ ^[0-9]+$ ]]; then
+    [ -e "$watchdog_done" ] || printf '%s\n' "$watchdog_end_rc" > "$watchdog_done" 2>/dev/null || true
+  else
+    jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$watchdog_lane" \
+      --arg engine "$watchdog_engine" --arg model "$watchdog_model" --arg run "$watchdog_run" \
+      --arg dir "$watchdog_dir" --arg task "$(printf '%.200s' "$watchdog_task")" \
+      --arg fallback_from "$watchdog_fallback_from" --arg primary_rc "$watchdog_primary_rc" \
+      --arg req "$watchdog_req" --arg allow_main_tree "$watchdog_allow_main_tree" \
+      '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:143,run:$run,dir:$dir,task:$task,wrapper_death:true}
+       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end
+       | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
+      >> "$watchdog_log" 2>/dev/null || true
+    [ -e "$watchdog_done" ] || printf '143\n' > "$watchdog_done" 2>/dev/null || true
+  fi
+  exit 0
+fi
+
 # readlink -f first: this script is reached through a PATH symlink, and an
 # unresolved dirname points at the symlink's directory, where run-common.sh
 # does not exist. Confirmed live: sourcing died with exit 1 on every wrapper
@@ -115,8 +204,8 @@ if [ "$ENGINE_SET" -eq 0 ]; then
       ENGINE=deepseek; ENGINE_SET=1
       # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
       # In those windows luna on Codex quota is the cheaper lane, so borrow it —
-      # without fast_mode, since we are here for cost, not latency. An explicit
-      # --engine deepseek is never swapped: that is the failure fallback path.
+      # with luna's normal fast_mode selection. An explicit --engine deepseek is
+      # never swapped: that is the failure fallback path.
       # ponytail: hour arithmetic, no date library. CHARLES_PEAK_HOUR pins it for tests.
       case "${CHARLES_PEAK_HOUR:-$(date -u +%H)}" in
         01|02|03|06|07|08|09) ENGINE=luna; PEAK_SUB=1
@@ -130,6 +219,14 @@ RUN_DIR="$(charles_run_root "$DIR")"
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
 RUN_ID="${RUN##*/}"
+WATCHDOG_STATE_FILE="$RUN.watchdog.state"
+WATCHDOG_STOP_FILE="$RUN.watchdog.stop"
+WATCHDOG_PID=""
+CHILD_PID=""
+CHILD_PID_FILE=""
+ATTEMPT_NO=0
+ATTEMPT_FALLBACK_FROM=""
+ATTEMPT_PRIMARY_RC=""
 
 open_run_dirs() {
   local include_closed=0
@@ -371,9 +468,25 @@ validate_main_tree() {
 # engines that had already exited. This marker appears on EVERY exit path,
 # including SIGTERM from a harness timeout, so a waiter can always tell
 # "finished" from "still running".
+kill_child_group() {
+  local child_pid="${CHILD_PID:-}" candidate
+  if [ -n "${CHILD_PID_FILE:-}" ] && [ -s "$CHILD_PID_FILE" ]; then
+    candidate="$(head -1 "$CHILD_PID_FILE" 2>/dev/null || true)"
+    [[ "$candidate" =~ ^[0-9]+$ ]] && child_pid="$candidate"
+  fi
+  [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] && [ "$child_pid" -gt 1 ] || return 0
+  kill -TERM -- "-$child_pid" 2>/dev/null || true
+}
+
+terminate_dispatch() {
+  local rc="$1"
+  kill_child_group
+  exit "$rc"
+}
+
 trap 'rc=$?; printf "%s\n" "$rc" > "$RUN.done" 2>/dev/null || true' EXIT
-trap 'exit 143' TERM
-trap 'exit 130' INT
+trap 'terminate_dispatch 143' TERM HUP
+trap 'terminate_dispatch 130' INT
 
 GUARD='Work ONLY inside the working directory. Git is READ-ONLY for you: status, diff,
 log, show are fine; NEVER run any git command that mutates repository state — no reset
@@ -429,19 +542,21 @@ log_start() {
      >> "$f" 2>/dev/null
 }
 
-log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
+log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
   local f="$DIR/.charles/dispatches.jsonl"
   mkdir -p "$DIR/.charles" 2>/dev/null || return 0
-  local model fallback_from="${3:-}" primary_rc="${4:-}"
-  case "$1" in
-    luna)     model="gpt-5.6-luna" ;;
-    terra)    model="gpt-5.6-terra" ;;
-    deepseek) model="deepseek-v4-flash" ;;
-    review)   if [ "$ENGINE_SET" -eq 1 ]; then
-                case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; *) model="gpt-5.6-sol" ;; esac
-              else model="gpt-5.6-sol"; fi ;;
-    *)        model="$1" ;;
-  esac
+  local model="${5:-}" fallback_from="${3:-}" primary_rc="${4:-}"
+  if [ -z "$model" ]; then
+    case "$1" in
+      luna)     model="gpt-5.6-luna" ;;
+      terra)    model="gpt-5.6-terra" ;;
+      deepseek) model="deepseek-v4-flash" ;;
+      review)   if [ "$ENGINE_SET" -eq 1 ]; then
+                  case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; *) model="gpt-5.6-sol" ;; esac
+                else model="gpt-5.6-sol"; fi ;;
+      *)        model="$1" ;;
+    esac
+  fi
   jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$LANE" \
      --arg engine "$1" --arg model "$model" --arg rc "$2" --arg run "$RUN_ID" \
      --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
@@ -453,6 +568,71 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC]
      >> "$f" 2>/dev/null || true
 }
 
+write_watchdog_state() { # write_watchdog_state ACTIVE ENGINE MODEL FALLBACK_FROM PRIMARY_RC PID_FILE
+  printf '%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "${4:-}" "${5:-}" "$6" > "$WATCHDOG_STATE_FILE.tmp" 2>/dev/null \
+    && mv -f -- "$WATCHDOG_STATE_FILE.tmp" "$WATCHDOG_STATE_FILE" 2>/dev/null || true
+}
+
+start_watchdog() {
+  [ -n "$WATCHDOG_PID" ] && return 0
+  CHARLES_WATCHDOG=1 \
+  CHARLES_WATCHDOG_PARENT="$$" \
+  CHARLES_WATCHDOG_STATE_FILE="$WATCHDOG_STATE_FILE" \
+  CHARLES_WATCHDOG_STOP_FILE="$WATCHDOG_STOP_FILE" \
+  CHARLES_WATCHDOG_RUN="$RUN_ID" \
+  CHARLES_WATCHDOG_DONE="$RUN.done" \
+  CHARLES_WATCHDOG_LOG="$DIR/.charles/dispatches.jsonl" \
+  CHARLES_WATCHDOG_LANE="$LANE" \
+  CHARLES_WATCHDOG_DIR="$DIR" \
+  CHARLES_WATCHDOG_TASK="$TASK" \
+  CHARLES_WATCHDOG_REQ="$REQ" \
+  CHARLES_WATCHDOG_ALLOW_MAIN_TREE="$ALLOW_MAIN_TREE" \
+  setsid bash "$SCRIPT_DIR/codex-run.sh" 9>&- &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  [ -n "$WATCHDOG_PID" ] || return 0
+  : > "$WATCHDOG_STOP_FILE" 2>/dev/null || true
+  kill -TERM -- "-$WATCHDOG_PID" 2>/dev/null || kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  WATCHDOG_PID=""
+  rm -f "$WATCHDOG_STATE_FILE" "$WATCHDOG_STOP_FILE" "$CHILD_PID_FILE" 2>/dev/null || true
+}
+
+run_attempt() { # run_attempt ENGINE MODEL CWD STDOUT STDERR COMMAND...
+  local attempt_engine="$1" attempt_model="$2" cwd="$3" output="$4" error="$5"
+  shift 5
+  ATTEMPT_NO=$((ATTEMPT_NO + 1))
+  CHILD_PID_FILE="$RUN.child.$ATTEMPT_NO"
+  start_watchdog || return $?
+  write_watchdog_state 1 "$attempt_engine" "$attempt_model" \
+    "${ATTEMPT_FALLBACK_FROM:-}" "${ATTEMPT_PRIMARY_RC:-}" "$CHILD_PID_FILE"
+
+  # The launcher writes its own PID before exec so the watchdog always has the
+  # session's process-group leader, even if the wrapper is killed immediately.
+  setsid bash -c 'printf "%s\n" "$$" > "$1"; cwd="$2"; shift 2; cd -- "$cwd" && exec "$@"' \
+    _ "$CHILD_PID_FILE" "$cwd" "$@" > "$output" 2> "$error" &
+  CHILD_PID=$!
+  local rc=0
+  wait "$CHILD_PID" || rc=$?
+  log_dispatch "$attempt_engine" "$rc" "${ATTEMPT_FALLBACK_FROM:-}" \
+    "${ATTEMPT_PRIMARY_RC:-}" "$attempt_model"
+  write_watchdog_state 0 "$attempt_engine" "$attempt_model" \
+    "${ATTEMPT_FALLBACK_FROM:-}" "${ATTEMPT_PRIMARY_RC:-}" "$CHILD_PID_FILE"
+  CHILD_PID=""
+  return "$rc"
+}
+
+dispatch_timed_out() {
+  [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || return 1
+  local now_us="${EPOCHREALTIME/./}" elapsed_us timeout_us
+  elapsed_us=$((now_us - DISPATCH_STARTED_US))
+  timeout_us=$((10#$TIMEOUT * 1000000))
+  # Allow a quarter-second of scheduler/receipt slack without treating an early 124 as a timeout.
+  [ "$elapsed_us" -ge "$((timeout_us - 250000))" ]
+}
+
 # --- clear the hook'"'"'s touched-files counter on a successful dispatch --------------
 clear_touched() {
   local root="$1"
@@ -462,14 +642,78 @@ clear_touched() {
   return 0
 }
 
+# --- local weekly quota probe for luna fast_mode ------------------------------
+weekly_quota_fast_mode() {
+  # R8 operator directive: less than 20% of weekly quota remaining disables fast_mode.
+  local weekly_remaining=20
+  local sessions_dir="${CHARLES_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
+  local day file record decision result="--enable" found=0 day_index file_index scanned=0
+  local nullglob_was_set=0
+  local -a days=() rollout_files=()
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -s nullglob
+  days=("$sessions_dir"/????/??/??)
+
+  # Date-sharded directories and timestamped rollout names keep this newest-first
+  # without recursively scanning the whole sessions tree; cap the probe at 20 files.
+  for ((day_index=${#days[@]} - 1; day_index >= 0 && found == 0 && scanned < 20; day_index--)); do
+    day="${days[$day_index]}"
+    [ -r "$day" ] || { found=1; break; }
+    rollout_files=("$day"/rollout-*.jsonl)
+    for ((file_index=${#rollout_files[@]} - 1; file_index >= 0 && found == 0 && scanned < 20; file_index--)); do
+      file="${rollout_files[$file_index]}"
+      [ -r "$file" ] || { found=1; break; }
+      scanned=$((scanned + 1))
+      if ! record="$(jq -c -s '
+        [ .[] | .. | objects | select(
+          try (
+            (.rate_limits | type) == "object"
+            and ([.rate_limits.primary, .rate_limits.secondary]
+              | any(.[]; type == "object" and .window_minutes == 10080))
+          ) catch false
+        ) ] | last // empty
+      ' "$file" 2>/dev/null)"; then
+        found=1
+        break
+      fi
+      [ -n "$record" ] || continue
+      found=1
+      if ! decision="$(jq -r --argjson cutoff "$((100 - weekly_remaining))" '
+        .rate_limits as $limits
+        | if ($limits | type) != "object" then "unknown"
+          else
+            ([ $limits.primary ]
+              | map(select(type == "object" and .window_minutes == 10080
+                and ((.used_percent | type) == "number")))
+              | .[0].used_percent) as $primary
+            | ([ $limits.secondary ]
+              | map(select(type == "object" and .window_minutes == 10080
+                and ((.used_percent | type) == "number")))
+              | .[0].used_percent) as $secondary
+            | ($primary // $secondary) as $used
+            | if ($used | type) != "number" then "unknown"
+              elif $used >= $cutoff then "disable"
+              else "enable"
+              end
+          end
+      ' <<<"$record" 2>/dev/null)"; then
+        result="--enable"
+      else
+        case "$decision" in
+          disable|enable) result="--$decision" ;;
+          *) result="--enable" ;;
+        esac
+      fi
+    done
+  done
+  [ "$nullglob_was_set" -eq 1 ] || shopt -u nullglob
+  printf '%s\n' "$result"
+}
+
 # --- engines: luna (primary) and terra (escalation), both gpt-5.6 @ max -------
 run_gpt() { # run_gpt PROFILE
   local profile="$1" args fast
-  # fast_mode on luna only, and not when luna is standing in for deepseek during
-  # a peak window — that swap is a cost move, so take the full deliberation the
-  # quota already paid for. terra is the escalation engine, reached after two
-  # failures, which is exactly when you want deliberation over a faster answer.
-  if [ "$profile" = "terra" ] || [ "$PEAK_SUB" -eq 1 ]; then fast="--disable"; else fast="--enable"; fi
+  if [ "$profile" = "terra" ]; then fast="--disable"; else fast="$(weekly_quota_fast_mode)"; fi
   if [ "$RESUME" -eq 1 ]; then
     args=(-p "$profile" exec resume --last --skip-git-repo-check "$fast" fast_mode --json -o "$RUN.last")
   else
@@ -487,10 +731,11 @@ run_gpt() { # run_gpt PROFILE
 $LADDER"
   # -k: GNU timeout sends only TERM. A child that ignores it would hang forever,
   # holding the writer lock and never falling back.
-  ( cd "$DIR" && timeout -k 30s "$TIMEOUT" codex "${args[@]}" "$TASK
+  local rc=0
+  run_attempt "$profile" "gpt-5.6-$profile" "$DIR" "$RUN.jsonl" "$RUN.err" \
+    timeout -k 30s "$TIMEOUT" codex "${args[@]}" "$TASK
 
-$GUARD$extra" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
-  local rc=$?
+$GUARD$extra" < /dev/null || rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
   echo "— codex/gpt-5.6-$profile · effort=$EFFORT · fast_mode=${fast#--}d · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
   return $rc
@@ -505,7 +750,8 @@ run_deepseek() {
   [ "$RESUME" -eq 1 ] && args+=(--resume)
   : > "$RUN.last"
   local rc=0
-  "$DS_SCRIPT" "${args[@]}" "$TASK" > "$RUN.last" || rc=$?
+  run_attempt deepseek deepseek-v4-flash "$DIR" "$RUN.last" "$RUN.err" \
+    "$DS_SCRIPT" "${args[@]}" "$TASK" || rc=$?
   if [ "$rc" -eq 0 ]; then
     [ -s "$RUN.last" ] && cat "$RUN.last"
   else
@@ -619,6 +865,9 @@ run_review() {
     esac
   fi
 
+  local review_fast="--disable"
+  [ "$rmodel" = "gpt-5.6-luna" ] && review_fast="$(weekly_quota_fast_mode)"
+
   local prompt="You are an adversarial reviewer. You can see exactly two files: plan.md
 (what was supposed to be built) and changes.diff (what was actually built). You cannot
 see the repository, the implementer's reasoning, or any test output — by design.
@@ -638,18 +887,17 @@ Report, in this order:
 4. A one-line verdict: SATISFIES PLAN | GAPS FOUND | CANNOT TELL (and why).
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
-  set +e
-  ( cd "$box" && timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
+  local rc=0
+  run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \
+    timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
       -s read-only -C "$box" -m "$rmodel" -c model_reasoning_effort="$EFFORT" \
-      --disable fast_mode \
-      --json -o "$RUN.last" "$prompt" < /dev/null ) > "$RUN.jsonl" 2> "$RUN.err"
-  rc=$?
-  set -e
+      "$review_fast" fast_mode \
+      --json -o "$RUN.last" "$prompt" < /dev/null || rc=$?
   cp "$box/changes.diff" "$RUN.diff" 2>/dev/null || true
   rm -rf "$box"
   [ -s "$RUN.last" ] && cat "$RUN.last"
   echo "" >&2
-  echo "— codex/$rmodel · effort=$EFFORT · isolated · raw: $RUN.jsonl" >&2
+  echo "— codex/$rmodel · effort=$EFFORT · fast_mode=${review_fast#--}d · isolated · raw: $RUN.jsonl" >&2
   return $rc
 }
 
@@ -708,6 +956,7 @@ if ! log_start; then
   fi
   echo "codex-run.sh: WARNING — failed to write $LANE start event; continuing without receipt" >&2
 fi
+DISPATCH_STARTED_US="${EPOCHREALTIME/./}"
 
 dispatch() { # dispatch ENGINE
   case "$1" in
@@ -720,10 +969,8 @@ dispatch() { # dispatch ENGINE
 
 if [ "$LANE" = "review" ]; then
   set +e; run_review; RC=$?; set -e
-  log_dispatch review "$RC"
 else
   set +e; dispatch "$ENGINE"; RC=$?; set -e
-  log_dispatch "$ENGINE" "$RC"
 
   # Engine fallback: luna is primary, deepseek catches a broken luna profile or
   # a transient failure. Same role, same sandbox — only the model changes.
@@ -731,19 +978,27 @@ else
   # entire point of routing this work out in the first place.
   if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && { [ "$ENGINE" = "luna" ] || [ "$ENGINE" = "terra" ]; }; then
     primary_rc="$RC"
-    echo "codex-run.sh: $ENGINE failed (exit $primary_rc) — falling back to deepseek for this $LANE" >&2
-    set +e; dispatch deepseek; RC=$?; set -e
-    if [ "$RC" -eq 0 ]; then
-      if [ -s "$RUN.last" ]; then
-        printf '\nfallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" >> "$RUN.last"
-      else
-        printf 'fallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" > "$RUN.last"
+    if [ "$primary_rc" -eq 124 ] && dispatch_timed_out; then
+      echo "codex-run.sh: fallback was skipped because the task timed out" >&2
+    else
+      ATTEMPT_FALLBACK_FROM="$ENGINE"
+      ATTEMPT_PRIMARY_RC="$primary_rc"
+      echo "codex-run.sh: $ENGINE failed (exit $primary_rc) — falling back to deepseek for this $LANE" >&2
+      set +e; dispatch deepseek; RC=$?; set -e
+      if [ "$RC" -eq 0 ]; then
+        if [ -s "$RUN.last" ]; then
+          printf '\nfallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" >> "$RUN.last"
+        else
+          printf 'fallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" > "$RUN.last"
+        fi
       fi
+      echo "codex-run.sh: fallback receipt fallback_from:$ENGINE primary_rc:$primary_rc" >&2
     fi
-    echo "codex-run.sh: fallback receipt fallback_from:$ENGINE primary_rc:$primary_rc" >&2
-    log_dispatch deepseek "$RC" "$ENGINE" "$primary_rc"
   fi
 fi
+
+printf '%s\n' "$RC" > "$RUN.done" 2>/dev/null || true
+stop_watchdog
 
 if [ $RC -ne 0 ]; then
   echo "codex-run.sh: dispatch failed (exit $RC)" >&2

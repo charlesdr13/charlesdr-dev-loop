@@ -243,7 +243,10 @@ with `codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"` as separate 
 calls with `run_in_background: true`.
 The harness re-invokes the orchestrator when each process exits. `lane-status.sh`
 is only the recovery probe when a session restart or harness death loses that
-completion signal; review runs in the foreground.
+completion signal. Reviews expected to exceed roughly 9 minutes (heavy diff, big
+repo, or terra at max) run in the background with `--timeout 2700` and bounded
+`lane-status.sh` checks; shorter reviews may use the foreground `--timeout 540`
+path.
 
 Raising the cap does not fix the underlying cause of the 30-minute cluster, which is oversized dispatches; chunking the requirement list is the real remedy and the cap is the backstop.
 
@@ -259,8 +262,11 @@ benchmark.
 # Each explore/serial-implement command is a separate Bash call with run_in_background: true.
 codex-run --lane explore   --dir REPO --timeout 2700 "why does the refresh path 401?"
 codex-run --lane implement --dir REPO --req R1,A3 --timeout 2700 "add the RangeError guard from the plan"
-# Review stays foreground and isolated.
-codex-run --lane review    --dir REPO --plan docs/specs/x.md "check every requirement"
+# Short review: foreground and isolated; longer reviews use the background path below.
+codex-run --lane review    --dir REPO --plan docs/specs/x.md --timeout 540 "check every requirement"
+# Long review: use --timeout 2700, then check lane-status.sh at most three times.
+nohup codex-run --lane review --dir REPO --plan docs/specs/x.md --timeout 2700 \
+  "check every requirement" >/tmp/charles-review-$$.log 2>&1 &
 # Review committed work, including any uncommitted changes on top.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md --base REF "check every requirement"
 ```
@@ -522,7 +528,7 @@ enough, because one coherent slice can still carry a long list.
 
 Chunks are counted in **plan requirements**, not files or lines: 1-5 is usually
 one slice, 6-10 is two, and 11+ means three or more and probably means this is
-two plans wearing one name. When the settled plan yields 2+ disjoint file
+two plans wearing one name. When the settled plan yields 2+ parallel-compatible file
 slices, write or rewrite `docs/specs/YYYY-MM-DD-<topic>.chunks.json` beside it
 after the grill settles, never during the initial plan phase. Read
 `docs/specs/<plan>.chunks.json` and resolve the script directory as
@@ -530,16 +536,21 @@ after the grill settles, never during the initial plan phase. Read
 
 Parallel is the default when the valid manifest holds `parallel_min_chunks` or
 more entries, using the value from `.charles.toml` (default `2`), its file
-declarations are disjoint, and `treehouse` is available:
+declarations are disjoint or overlap only on paths every overlapping chunk lists
+in `shared` (at most two chunks per path), and `treehouse` is available. Shared
+paths must be existing ordinary text files modified in place by both chunks;
+adds, deletes, renames, mode changes, symlinks, and binary content are refused:
 
 ```bash
 "$SCRIPTS/parallel-chunks.sh" "$(pwd)" docs/specs/<plan>.chunks.json
 # [{"name":"api","files":["src/a.ts"],"req":["R1"],"task":"..."}, ...]
+# Shared paths must also be in files and listed in shared by both chunks.
 ```
 
-Use serial for one chunk, below a raised threshold, overlapping declarations,
-an invalid manifest, or missing `treehouse`; serial chunks still run `green.sh`
-between them. A batch whose chunks modify `parallel-chunks.sh`, `codex-run.sh`,
+Use serial for one chunk, below a raised threshold, overlap not declared shared
+or declared asymmetrically, an invalid manifest, or missing `treehouse`; shared
+manifests refuse `--no-green` and require the combined `green.sh` run. A batch
+whose chunks modify `parallel-chunks.sh`, `codex-run.sh`,
 or anything the dispatcher executes MUST also run serially: children execute
 the dispatcher from the runner's script directory while the post-merge green
 check runs the merged root scripts, and Bash reads a script lazily by byte

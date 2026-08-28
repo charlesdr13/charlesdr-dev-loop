@@ -136,6 +136,21 @@ and semantic-independence checking beyond the combined green run.
 - **R5** — All three version fields become `2.34.0`:
   `.claude-plugin/plugin.json`, both `version` fields in
   `.claude-plugin/marketplace.json`.
+- **R8** (operator directive, 2026-08-28, added post-grill) — Every LUNA
+  attempt passes `--enable fast_mode` — including review-on-luna and the
+  peak-window deepseek substitution, which today force `--disable`
+  (`codex-run.sh:472`, `:644`) — UNLESS the weekly codex quota has less than
+  20% remaining, in which case luna attempts pass `--disable fast_mode`.
+  Weekly usage is read locally, no network: the newest
+  `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (the date-sharded layout
+  codex writes; a bounded number of newest files scanned, any other layout is
+  simply unknown→enable) containing a `rate_limits` record;
+  take its LAST such record's entry with `window_minutes` 10080 (primary or
+  secondary) and use `used_percent` (≥80 → disable). Unknown (no file, no
+  record, unparsable) → enable, the directive's default. The sessions dir is
+  overridable via an env var for tests. Terra keeps `--disable` always;
+  sol review is untouched. The receipt line continues to state the actual
+  fast_mode. Threshold hardcoded at 20 with a comment naming the directive.
 - **R6** — `scripts/selftest.sh` proves, beyond the existing synthetic
   receipts, with real processes where stated:
   - R1: rc=124 at deadline skips fallback; rc=1 still falls back; early
@@ -150,6 +165,9 @@ and semantic-independence checking beyond the combined green run.
     3-sharer refused; shared+`--no-green` refused.
   - R7: a lease at a stale commit refuses before dispatch; a target HEAD
     moved mid-batch refuses before merge.
+  - R8: with a fixture sessions dir — used_percent 85 on the 10080 window →
+    luna gets `--disable fast_mode`; 28 → `--enable`; no rollout file →
+    `--enable`; terra `--disable` in all three.
   Reuse `parallel_fixture`/`parallel_swap_fixture` (`selftest.sh:287-343`),
   fake `treehouse` (`:392-434`), fake `codex` (`:455-498`); live-process
   precedent at `:1722-1746`. Suite stays green:
@@ -215,6 +233,23 @@ Preserve all-or-nothing acceptance (`parallel-chunks.sh:299-405`) and the
   machine (8); (c) a human editing the target tree mid-batch can still be
   overwritten, unchanged from `2026-08-21-parallel-first-implement.md:208-211`
   (20).
+- Post-review additions (dual isolated review, sol + terra, 2026-08-28):
+  confirmed fixes folded in — watchdog jq guard, `.done` written before
+  watchdog stop, watchdog started before its state write, atomic state write,
+  group-only kills (no single-pid fallback), quota probe weekly-entry
+  selection + bounded newest-N file scan, deterministic peak test,
+  clean-fallback reap test, 10s PID-file wait, SKILL.md shared⊆files line.
+  Refuted from source: "set -e breaks the rc=1 merge paths" (both reviewers —
+  `parallel-chunks.sh:22` has no `-e`, and the conflict tests pass), setsid
+  double-fork rc corruption (a background child is never a group leader),
+  merge-copy non-atomicity as a NEW defect (pre-existing, documented in
+  `2026-08-21-parallel-first-implement.md:203-207`).
+- Additional accepted risks: wall-clock (`EPOCHREALTIME`) elapsed measurement
+  for the R1 deadline test — a clock step during a dispatch can misclassify,
+  bash has no monotonic clock, 250ms slack retained; a SIGKILL landing before
+  the first attempt's watchdog+child exist leaves an unmarked start event with
+  no rogue writer — identical to today's behaviour, repaired by the next
+  flow-status census.
 - Unresolved: none.
 
 ## Sign-off
@@ -226,3 +261,4 @@ Preserve all-or-nothing acceptance (`parallel-chunks.sh:299-405`) and the
 - [ ] R5 —
 - [ ] R6 —
 - [ ] R7 —
+- [ ] R8 —

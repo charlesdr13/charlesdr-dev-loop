@@ -46,8 +46,10 @@ the orchestrator invokes the Bash tool with `run_in_background: true` to run
 `codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"`. The harness
 re-invokes the orchestrator when the process exits — that callback is the
 completion signal. Do not add polling loops or periodic `lane-status.sh` polling
-as the primary wait. Review runs in the foreground: its p90 is 3.2 min and none
-has ever exceeded 540s.
+as the primary wait. Reviews expected to finish within roughly 9 minutes may
+run in the foreground with `--timeout 540`; a review expected to exceed that
+(heavy diff, big repo, or terra at max) runs in the background with
+`--timeout 2700` and the bounded completion protocol below.
 
 Never shorten a task to fit the cap, and never re-dispatch on top of a RUNNING
 lane. `--fast` is for wanting a shallower answer, not for beating the clock.
@@ -68,7 +70,7 @@ cents-per-task exercise the deepseek lane was, so size fleets to the question
 rather than to the cap.
 
 Fleet sizes: 3 explorers / 1 reviewer by default, 5 explorers at the very most.
-Implementer count follows the plan: one for a serial slice, one per disjoint
+Implementer count follows the plan: one for a serial slice, one per valid
 chunk for the parallel path. Nothing enforces the explorer ceiling — it is
 judgment, and at luna-at-max prices a 5-wide sweep is not free. Each parallel
 implementer gets a `treehouse` worktree.
@@ -99,8 +101,9 @@ codex-run --lane explore --dir "$(pwd)" --timeout 2700 "<task 2>"
 ```
 
 When you dispatch directly, you see the receipt yourself and nothing between
-you and the lane can misreport what happened. Review remains foreground and
-isolated; `codex-reviewer` is allowed for that lane.
+you and the lane can misreport what happened. Short reviews remain foreground
+and isolated; reviews expected to exceed roughly 9 minutes use the background
+path below with `--timeout 2700`. `codex-reviewer` is allowed for that lane.
 
 The old wrapper layer bought context isolation but introduced a supervision
 failure surface. Measured over one day: every supervision failure happened in
@@ -131,7 +134,7 @@ is being paid for its planning judgment, and handing it your ordered steps both
 wastes that and tends to make the result worse, because it follows your sequence
 instead of finding a better one.
 
-When a plan yields 2+ disjoint file slices, write or rewrite
+When a plan yields 2+ parallel-compatible file slices, write or rewrite
 `docs/specs/YYYY-MM-DD-<topic>.chunks.json` only after the plan is settled; in
 flows with `grill-rounds`, that means after the grill settles, never during the
 initial plan phase. Commit it alongside the plan. The manifest schema is one
@@ -153,9 +156,9 @@ What a dispatch actually needs is a **brief**, which the plan already contains:
 - what must keep working (the green command)
 - a nearby file to copy conventions from — point, do not describe
 
-The one exception is parallel implementers: disjoint file slices are a genuine
-implementation plan and the worktree path cannot work without the companion
-manifest. A single implementer never needs one.
+The one exception is parallel implementers: parallel-compatible file slices are
+a genuine implementation plan and the worktree path cannot work without the
+companion manifest. A single implementer never needs one.
 
 The same plan is consumed twice — by the grill before the work, and by the
 isolated reviewer after it. That is why it must be requirements rather than
@@ -236,7 +239,7 @@ Measured, per lane:
 - **implement** — the canonical measurement (full figures in `README.md`) covers
   successful dispatches only (`rc=0`): n=233 across all opted-in repos. Timeouts
   are counted separately: 25 of 258 ends (about 10%) hit the old 1800s cap.
-  Parallel chunks are the default for disjoint slices.
+  Parallel chunks are the default for disjoint or explicitly shared slices.
 - **review** — median 1.7 min, read-only, no shared state. The cheapest lane,
   and the one place a second run is nearly free.
 
@@ -268,12 +271,13 @@ still carry a long requirement list.
 - **1-5** — usually one slice; split when the plan has a natural disjoint seam.
 - **6-10** — two chunks, split on a natural seam (a layer, a module, a
   user-visible behaviour); disjoint chunks run concurrently and `green.sh`
-  runs once on the combined result. If they overlap, run them serially with
-  `green.sh` between them.
+  runs once on the combined result. A shared overlap is parallel-safe only
+  when every overlapping chunk lists that path in `shared`, with no more than
+  two sharers; otherwise run the chunks serially with `green.sh` between them.
 - **11+** — three or more, and reconsider whether this is one plan. A plan with
   fifteen requirements is usually two features that have not been separated yet.
 
-**Parallel is the default at 2+ disjoint chunks.** Three chunks at the canonical
+**Parallel is the default at 2+ valid chunks.** Three chunks at the canonical
 successful-dispatch p90 of 19.1 min cost about 57 min serially against 19.1 min
 in parallel, before any extra setup. Read `parallel_min_chunks` from
 `.charles.toml`; it defaults to `2` and may be raised when a repo's measurements
@@ -281,23 +285,32 @@ justify a higher threshold.
 
 For a settled plan at `docs/specs/<plan>.md`, read
 `docs/specs/<plan>.chunks.json`. Use parallel when that valid manifest holds
-`parallel_min_chunks` or more entries, its file declarations are disjoint, and
-`treehouse` is available. Use serial when there is one chunk, the count is
-below a raised threshold, declarations overlap, the manifest is invalid, or
-`treehouse` is absent. Serial runs still use `green.sh` between chunks.
+`parallel_min_chunks` or more entries, its file declarations are disjoint or
+overlap only on paths every overlapping chunk lists in `shared` (at most two
+chunks per path), and `treehouse` is available. Shared manifests require the
+combined green check, so `--no-green` is refused. Use serial when there is one
+chunk, the count is below a raised threshold, overlap is not declared shared or
+is asymmetric, the manifest is invalid, or `treehouse` is absent. Serial runs
+still use `green.sh` between chunks.
 
 ```bash
 SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 CHUNKS="docs/specs/<plan>.chunks.json"
 "$SCRIPTS/parallel-chunks.sh" "$(pwd)" "$CHUNKS"
 # chunks.json: [{"name":"api","files":["src/a.ts"],"req":["R1"],"task":"..."}, ...]
+# shared overlap: add "shared":["src/shared.ts"] to every overlapping chunk.
 ```
 
 Each chunk gets its own `treehouse` worktree and **declares the files it may
-touch**. The declaration is what makes this safe, not the worktree: overlapping
-declarations are refused before anything is dispatched, and a chunk that writes
-outside its own declaration is rejected and never merged. So a lane that
-quietly widens its scope gets caught, which the serial path does not do.
+touch**. Every `shared` path must also appear in that chunk's own `files`
+declaration. The declaration is what makes this safe, not the worktree: overlap is
+accepted only when every overlapping chunk declares the path in `shared`, no
+path has more than two sharers, and the shared files are existing ordinary text
+files modified in place by both chunks. Adds, deletes, renames, mode changes,
+symlinks, and binary content are refused. Other overlapping declarations are
+refused before anything is dispatched, and a chunk that writes outside its own
+declaration is rejected and never merged. So a lane that quietly widens its
+scope gets caught, which the serial path does not do.
 When a run is open, every chunk declares its `req` identifiers; the runner
 validates them against the plan and passes them to the child implement
 dispatches.
@@ -387,7 +400,7 @@ from inside a report, which is why the check reads that instead.
    look like. Give each call its own `.charles/` log and synthesise the reports
    yourself; do not hand the raw reports to the user.
 3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
-   not after. If it yields 2+ disjoint file slices, record that a companion
+   not after. If it yields 2+ parallel-compatible file slices, record that a companion
    `.chunks.json` manifest will be needed, but do not write it yet.
    `grill-rounds` needs a file to attack and the review lane needs one to judge
    against; a plan that exists only in conversation can be neither. Write
@@ -400,7 +413,7 @@ from inside a report, which is why the check reads that instead.
    proceeds to implementation while one is unanswered. Three rounds is the
    ceiling — a fourth means the plan is wrong at a level grilling cannot fix.
    After the grill settles, write or rewrite the companion `.chunks.json`
-   manifest beside the settled plan if it still yields 2+ disjoint slices. Never
+   manifest beside the settled plan if it still yields 2+ parallel-compatible slices. Never
    dispatch a manifest written before the grill settled.
 5. **Ground to truth.** The hard gate below. Do not proceed until all four pass.
 6. **Implement.** Read `docs/specs/<plan>.chunks.json`, resolve
@@ -408,8 +421,8 @@ from inside a report, which is why the check reads that instead.
    `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
    docs/specs/<plan>.chunks.json` when the valid manifest holds
    `parallel_min_chunks` or more entries. Otherwise dispatch serially with
-   `codex-run --lane implement --req <requirement IDs>`; one chunk, overlapping
-   declarations, an invalid manifest, missing `treehouse`, and any batch that
+   `codex-run --lane implement --req <requirement IDs>`; one chunk, overlap not
+   declared shared, an invalid manifest, missing `treehouse`, and any batch that
    edits the flow machinery are documented serial fallbacks.
 7. **Review.** `codex-reviewer` against the plan. Isolated — never feed it the
    implementer's output.
@@ -429,7 +442,7 @@ from inside a report, which is why the check reads that instead.
 3. Ground to truth: confirm the cause yourself against source before fixing.
 4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
    the intended fix scope, and the green command. Three short sections. If it
-   yields 2+ disjoint file slices, write or rewrite the companion `.chunks.json`
+   yields 2+ parallel-compatible file slices, write or rewrite the companion `.chunks.json`
    manifest only after the plan is settled. This is what makes step 6 possible
    at all — the review lane needs a plan, and without one a debug fix ships
    unreviewed.
@@ -439,7 +452,7 @@ from inside a report, which is why the check reads that instead.
    docs/specs/<plan>.chunks.json` when the valid manifest holds
    `parallel_min_chunks` or more entries. Otherwise dispatch the fix serially
    with `codex-run --lane implement --req <requirement IDs>`; use serial for
-   one chunk, overlapping declarations, an invalid manifest, missing
+   one chunk, overlap not declared shared, an invalid manifest, missing
    `treehouse`, or a batch that edits the flow machinery.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
@@ -457,14 +470,14 @@ from inside a report, which is why the check reads that instead.
 2. Brainstorm the shortlist with the user.
 3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. After the
    grill settles, write or rewrite the companion `.chunks.json` manifest beside
-   it if it yields 2+ disjoint file slices.
+   it if it yields 2+ parallel-compatible file slices.
 4. **Implement.** Read `docs/specs/<plan>.chunks.json`, resolve
    `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"` as in
    `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
    docs/specs/<plan>.chunks.json` when the valid manifest holds
    `parallel_min_chunks` or more entries. Otherwise dispatch serially with a
    background `codex-run --lane implement --req <requirement IDs>` call; use
-   serial for one chunk, overlapping declarations, an invalid manifest,
+   serial for one chunk, overlap not declared shared, an invalid manifest,
    missing `treehouse`, or a batch that edits the flow machinery.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
@@ -548,7 +561,7 @@ Report the failure and let the user decide.
 
 - Plan and grill verdict → `docs/specs/YYYY-MM-DD-<topic>.md`, committed.
   **Every flow writes one** — debug and polish included, or their fix cannot be
-  reviewed. A settled plan with 2+ disjoint file slices also commits the
+  reviewed. A settled plan with 2+ parallel-compatible file slices also commits the
   adjacent `.chunks.json` manifest, written or rewritten after the grill
   settles.
 - Run state, dispatch log, transcripts, hook state → `.charles/`, gitignored.
