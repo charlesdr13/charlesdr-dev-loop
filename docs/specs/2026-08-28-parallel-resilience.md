@@ -263,3 +263,7 @@ Preserve all-or-nothing acceptance (`parallel-chunks.sh:299-405`) and the
 - [x] R7 — `PASS stale lease refuses before dispatch` · `PASS target HEAD move refuses before merge`
 - [x] R8 — `PASS R8 luna 85% used_percent selects --disable fast_mode` · `PASS R8 luna 28% → --enable` · `PASS R8 luna empty → --enable` · `PASS R8 terra keeps --disable` (all three cases); live weekly window at dispatch time: 28% used
 
+
+## Run outcome — 2026-08-28
+
+Shipped 2.34.0 as 031752e: rc=124-at-deadline skips the futile deepseek rescue; every dispatch attempt runs setsid with a detached watchdog so a killed wrapper can no longer leave a rogue writer or an unmarked orphan; parallel-chunks accepts 2-sharer shared-file manifests with pre-copy 3-way merges and refuses diverged leases via a batch HEAD snapshot; docs stop mandating serial for declared-shared overlap and stop promising reviews fit the foreground cap; luna runs fast_mode everywhere unless the locally-read weekly codex quota is under 20% remaining (operator directive). Dual isolated review (sol+terra) found 24, 13 confirmed+fixed, 3 refuted from source, suite 271 to 293. Rollback: git revert 5c24cfb 031752e 5917579.
