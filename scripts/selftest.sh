@@ -2829,19 +2829,92 @@ for _ in $(seq 1 150); do
 done
 r2_end_count="$(jq -r --arg r "$r2_run" 'select(.event == "end" and .run == $r) | .run' \
   "$R2/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+r2_identity_omitted=0
+if jq -e --arg r "$r2_run" \
+  'select(.event == "end" and .run == $r and .wrapper_death == true
+    and (has("flow_run_id") | not) and (has("spec_path") | not))' \
+  "$R2/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  r2_identity_omitted=1
+fi
 r2_status_out="$(CHARLES_STATE_DIR="$R2/state" bash "$LS" --dir "$R2/repo" "$r2_run" 2>&1)"; r2_status_rc=$?
 if [ "$r2_group_dead" -eq 1 ] && [ "$r2_receipt_ready" -eq 1 ] && [ "$r2_end_count" -eq 1 ] \
+  && [ "$r2_identity_omitted" -eq 1 ] \
   && [ "$(cat "$R2/state/$r2_run.done" 2>/dev/null)" = 143 ] \
   && [ "$r2_status_rc" -eq 2 ] && grep -qF "DEAD: $r2_run" <<<"$r2_status_out" \
   && ! grep -qF "RUNNING: $r2_run" <<<"$r2_status_out"; then
   echo "  PASS  SIGKILLed wrapper leaves no child group and completes one end marker"; pass=$((pass+1))
 else
-  echo "  FAIL  SIGKILLed wrapper must clean its child group and receipt (group=$r2_group_dead, receipt=$r2_receipt_ready, ends=$r2_end_count, status=$r2_status_rc)"; fail=$((fail+1))
+  echo "  FAIL  SIGKILLed wrapper must clean its child group and receipt (group=$r2_group_dead, receipt=$r2_receipt_ready, identity_omitted=$r2_identity_omitted, ends=$r2_end_count, status=$r2_status_rc)"; fail=$((fail+1))
 fi
 if [ "$r2_cmdline_ok" -eq 1 ]; then
   echo "  PASS  watchdog is detached and its command line omits the run id"; pass=$((pass+1))
 else
   echo "  FAIL  watchdog must be detached and omit the run id from its command line"; fail=$((fail+1))
+fi
+
+# R2I: kill a live wrapper with flow identity and prove the watchdog preserves it.
+R2I="$BOX/r2i-watchdog-identity"; mkdir -p "$R2I/bin" "$R2I/repo/docs/specs"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'trap "" TERM INT HUP' \
+  'printf "%s\n" "$$" > "$CHARLES_R2I_READY"' \
+  'while :; do sleep 1; done' > "$R2I/bin/codex"
+chmod +x "$R2I/bin/codex"
+( cd "$R2I/repo" && git init -q )
+printf 'green = "true"\n' > "$R2I/repo/.charles.toml"
+r2i_spec_path="$R2I/repo/docs/specs/identity.md"
+printf '%s\n' '# Plan' '' '- [ ] **R1. watchdog identity**' '' '## Grill verdict' '' '- Rounds: 1' \
+  > "$r2i_spec_path"
+r2i_flow_run_id="$(bash "$RS" init "$R2I/repo" polish "watchdog identity" --spec docs/specs/identity.md 2>/dev/null)"
+( \
+  CHARLES_STATE_DIR="$R2I/state" CHARLES_R2I_READY="$R2I/ready" PATH="$R2I/bin:$PATH" \
+  exec bash "$RUN_SH" --lane explore --dir "$R2I/repo" --no-fallback --timeout 30 "watchdog identity" ) \
+  >"$R2I/wrapper.out" 2>&1 &
+r2i_wrapper_pid=$!
+r2i_run=""
+for _ in $(seq 1 100); do
+  r2i_run="$(jq -r 'select(.event == "start") | .run' "$R2I/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+  [ -n "$r2i_run" ] && [ -s "$R2I/ready" ] && break
+  sleep 0.05
+done
+r2i_watchdog_pid=""
+if [[ "$r2i_wrapper_pid" =~ ^[0-9]+$ ]] && [ -n "$r2i_run" ]; then
+  for _ in $(seq 1 100); do
+    for r2i_proc in /proc/[0-9]*; do
+      r2i_pid="$(basename "$r2i_proc")"
+      [ "$r2i_pid" = "$r2i_wrapper_pid" ] && continue
+      r2i_env="$(tr '\0' '\n' < "$r2i_proc/environ" 2>/dev/null || true)"
+      if grep -qF "CHARLES_WATCHDOG_RUN=$r2i_run" <<<"$r2i_env"; then
+        r2i_watchdog_pid="$r2i_pid"
+        break 2
+      fi
+    done
+    sleep 0.05
+  done
+fi
+if [[ "$r2i_wrapper_pid" =~ ^[0-9]+$ ]]; then
+  kill -KILL "$r2i_wrapper_pid" 2>/dev/null || true
+  for _ in $(seq 1 100); do
+    kill -0 "$r2i_wrapper_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  wait "$r2i_wrapper_pid" 2>/dev/null || true
+fi
+r2i_identity_ok=0
+for _ in $(seq 1 150); do
+  if [ -n "$r2i_run" ] && jq -e --arg r "$r2i_run" \
+    --arg f "$r2i_flow_run_id" --arg s "$r2i_spec_path" \
+    'select(.event == "end" and .run == $r and .wrapper_death == true
+      and .flow_run_id == $f and .spec_path == $s)' \
+    "$R2I/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+    r2i_identity_ok=1
+    break
+  fi
+  sleep 0.1
+done
+if [ -n "$r2i_watchdog_pid" ] && [ "$r2i_identity_ok" -eq 1 ]; then
+  echo "  PASS  watchdog wrapper-death receipt preserves flow_run_id and spec_path"; pass=$((pass+1))
+else
+  echo "  FAIL  watchdog wrapper-death receipt must preserve identity (watchdog=$r2i_watchdog_pid, identity=$r2i_identity_ok)"; fail=$((fail+1))
 fi
 
 # R3: a real TERM reaches the wrapper and leaves its own terminal receipt.

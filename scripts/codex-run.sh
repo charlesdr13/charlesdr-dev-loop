@@ -44,6 +44,8 @@ if [ "${CHARLES_WATCHDOG:-0}" = "1" ]; then
   watchdog_task="${CHARLES_WATCHDOG_TASK:-}"
   watchdog_req="${CHARLES_WATCHDOG_REQ:-}"
   watchdog_allow_main_tree="${CHARLES_WATCHDOG_ALLOW_MAIN_TREE:-0}"
+  watchdog_flow_run_id="${CHARLES_WATCHDOG_FLOW_RUN_ID:-}"
+  watchdog_spec_path="${CHARLES_WATCHDOG_SPEC_PATH:-}"
   [ -n "$watchdog_parent" ] && [ -n "$watchdog_state_file" ] && [ -n "$watchdog_stop_file" ] \
     && [ -n "$watchdog_run" ] && [ -n "$watchdog_done" ] && [ -n "$watchdog_log" ] || exit 2
 
@@ -114,7 +116,10 @@ if [ "${CHARLES_WATCHDOG:-0}" = "1" ]; then
       --arg dir "$watchdog_dir" --arg task "$(printf '%.200s' "$watchdog_task")" \
       --arg fallback_from "$watchdog_fallback_from" --arg primary_rc "$watchdog_primary_rc" \
       --arg req "$watchdog_req" --arg allow_main_tree "$watchdog_allow_main_tree" \
+      --arg flow_run_id "$watchdog_flow_run_id" --arg spec_path "$watchdog_spec_path" \
       '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:143,run:$run,dir:$dir,task:$task,wrapper_death:true}
+       | if $flow_run_id == "" then . else . + {flow_run_id:$flow_run_id} end
+       | if $spec_path == "" then . else . + {spec_path:$spec_path} end
        | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end
        | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
       >> "$watchdog_log" 2>/dev/null || true
@@ -637,6 +642,8 @@ start_watchdog() {
   CHARLES_WATCHDOG_TASK="$TASK" \
   CHARLES_WATCHDOG_REQ="$REQ" \
   CHARLES_WATCHDOG_ALLOW_MAIN_TREE="$ALLOW_MAIN_TREE" \
+  CHARLES_WATCHDOG_FLOW_RUN_ID="${FLOW_RUN_ID:-}" \
+  CHARLES_WATCHDOG_SPEC_PATH="${SPEC_PATH:-}" \
   setsid bash "$SCRIPT_DIR/codex-run.sh" 9>&- &
   WATCHDOG_PID=$!
 }
