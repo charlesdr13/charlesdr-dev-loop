@@ -99,6 +99,7 @@ if [ "${CHARLES_WATCHDOG:-0}" = "1" ]; then
   watchdog_kill_group "$watchdog_active" "$watchdog_pid_file"
 
   watchdog_end_rc=""
+  watchdog_end_claim="${watchdog_done%.done}.${watchdog_engine}.end"
   if [ -r "$watchdog_log" ]; then
     watchdog_end_rc="$(jq -r --arg r "$watchdog_run" --arg e "$watchdog_engine" \
       'select(.event == "end" and .run == $r and .engine == $e and .rc != null) | .rc' \
@@ -106,7 +107,8 @@ if [ "${CHARLES_WATCHDOG:-0}" = "1" ]; then
   fi
   if [[ "$watchdog_end_rc" =~ ^[0-9]+$ ]]; then
     [ -e "$watchdog_done" ] || printf '%s\n' "$watchdog_end_rc" > "$watchdog_done" 2>/dev/null || true
-  else
+  elif mkdir "$watchdog_end_claim" 2>/dev/null \
+    || { rmdir "$watchdog_end_claim" 2>/dev/null && mkdir "$watchdog_end_claim" 2>/dev/null; }; then
     jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg lane "$watchdog_lane" \
       --arg engine "$watchdog_engine" --arg model "$watchdog_model" --arg run "$watchdog_run" \
       --arg dir "$watchdog_dir" --arg task "$(printf '%.200s' "$watchdog_task")" \
@@ -494,8 +496,10 @@ kill_child_group() {
 }
 
 terminate_dispatch() {
-  local rc="$1"
+  local rc="$1" engine="${attempt_engine:-$ENGINE}" model="${attempt_model:-}"
   kill_child_group
+  log_dispatch "$engine" "$rc" "${ATTEMPT_FALLBACK_FROM:-}" \
+    "${ATTEMPT_PRIMARY_RC:-}" "$model"
   exit "$rc"
 }
 
@@ -563,6 +567,13 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
   local f="$DIR/.charles/dispatches.jsonl"
   mkdir -p "$DIR/.charles" 2>/dev/null || return 0
   local model="${5:-}" fallback_from="${3:-}" primary_rc="${4:-}"
+  local end_claim="$RUN.$1.end"
+  if jq -e --arg r "$RUN_ID" --arg e "$1" \
+       'select(.event == "end" and .run == $r and .engine == $e)' \
+       "$f" >/dev/null 2>&1; then
+    return 0
+  fi
+  mkdir "$end_claim" 2>/dev/null || return 0
   if [ -z "$model" ]; then
     case "$1" in
       luna)     model="gpt-5.6-luna" ;;

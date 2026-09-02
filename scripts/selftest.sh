@@ -2685,6 +2685,85 @@ else
   echo "  FAIL  watchdog must be detached and omit the run id from its command line"; fail=$((fail+1))
 fi
 
+# R3: a real TERM reaches the wrapper and leaves its own terminal receipt.
+R3="$BOX/r3-term-handler"; mkdir -p "$R3/bin" "$R3/repo"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'trap "exit 0" TERM INT HUP' \
+  'printf "%s\n" "$$" > "$CHARLES_R3_READY"' \
+  'while :; do sleep 1; done' > "$R3/bin/codex"
+chmod +x "$R3/bin/codex"
+( CHARLES_STATE_DIR="$R3/state" CHARLES_R3_READY="$R3/ready" PATH="$R3/bin:$PATH" \
+  exec bash "$RUN_SH" --lane explore --dir "$R3/repo" --no-fallback --timeout 30 "term handler" ) \
+  >"$R3/wrapper.out" 2>&1 &
+r3_wrapper_pid=$!
+r3_run=""
+for _ in $(seq 1 100); do
+  r3_run="$(jq -r 'select(.event == "start") | .run' "$R3/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
+  [ -n "$r3_run" ] && [ -s "$R3/ready" ] && break
+  sleep 0.05
+done
+r3_fake_pid="$(cat "$R3/ready" 2>/dev/null || true)"
+r3_pgid="$(ps -o pgid= -p "$r3_fake_pid" 2>/dev/null | tr -d '[:space:]')"
+r3_watchdog_pid=""
+if [[ "$r3_wrapper_pid" =~ ^[0-9]+$ ]] && [ -n "$r3_run" ]; then
+  for _ in $(seq 1 100); do
+    for r3_proc in /proc/[0-9]*; do
+      r3_pid="${r3_proc##*/}"
+      [ "$r3_pid" = "$r3_wrapper_pid" ] && continue
+      r3_env="$(tr '\0' '\n' < "$r3_proc/environ" 2>/dev/null || true)"
+      if grep -qF "CHARLES_WATCHDOG_RUN=$r3_run" <<<"$r3_env"; then
+        r3_watchdog_pid="$r3_pid"
+        break 2
+      fi
+    done
+    sleep 0.05
+  done
+fi
+r3_watchdog_killed=0
+if [[ "$r3_watchdog_pid" =~ ^[1-9][0-9]*$ ]] && [ "$r3_watchdog_pid" -gt 1 ]; then
+  kill -KILL "$r3_watchdog_pid" 2>/dev/null || true
+  r3_watchdog_killed=1
+fi
+r3_term_sent=0
+if [[ "$r3_wrapper_pid" =~ ^[1-9][0-9]*$ ]]; then
+  kill -TERM "$r3_wrapper_pid" 2>/dev/null && r3_term_sent=1
+fi
+r3_wrapper_gone=0
+for _ in $(seq 1 100); do
+  if ! kill -0 "$r3_wrapper_pid" 2>/dev/null; then r3_wrapper_gone=1; break; fi
+  sleep 0.05
+done
+if [ "$r3_wrapper_gone" -eq 0 ] && [[ "$r3_wrapper_pid" =~ ^[1-9][0-9]*$ ]]; then
+  kill -KILL "$r3_wrapper_pid" 2>/dev/null || true
+fi
+wait "$r3_wrapper_pid" 2>/dev/null || true
+r3_done_seen=0
+r3_end_count=0
+r3_nonzero_end=0
+for _ in $(seq 1 100); do
+  [ -e "$R3/state/$r3_run.done" ] && r3_done_seen=1
+  r3_end_count="$(jq -r --arg r "$r3_run" 'select(.event == "end" and .run == $r) | .run' \
+    "$R3/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+  if jq -e --arg r "$r3_run" \
+      'select(.event == "end" and .run == $r and (.rc | type) == "number" and .rc != 0)' \
+      "$R3/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+    r3_nonzero_end=1
+  fi
+  [ "$r3_done_seen" -eq 1 ] && [ "$r3_end_count" -eq 1 ] && [ "$r3_nonzero_end" -eq 1 ] && break
+  sleep 0.05
+done
+r3_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]')"
+if [[ "$r3_pgid" =~ ^[1-9][0-9]*$ ]] && [ "$r3_pgid" -gt 1 ] && [ "$r3_pgid" != "$r3_self_pgid" ]; then
+  kill -KILL -- "-$r3_pgid" 2>/dev/null || true
+fi
+if [ "$r3_term_sent" -eq 1 ] && [ "$r3_wrapper_gone" -eq 1 ] \
+  && [ "$r3_watchdog_killed" -eq 1 ] && [ "$r3_done_seen" -eq 1 ] \
+  && [ "$r3_end_count" -eq 1 ] && [ "$r3_nonzero_end" -eq 1 ]; then
+  echo "  PASS  real SIGTERM leaves one non-zero end record and .done"; pass=$((pass+1))
+else
+  echo "  FAIL  real SIGTERM must leave one non-zero end record and .done (sent=$r3_term_sent, gone=$r3_wrapper_gone, watchdog=$r3_watchdog_killed, done=$r3_done_seen, ends=$r3_end_count, nonzero=$r3_nonzero_end)"; fail=$((fail+1))
+fi
+
 # A clean one-attempt dispatch must reap its watchdog and log exactly one end.
 R2C="$R2/clean"; mkdir -p "$R2C/bin" "$R2C/repo"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$R2C/bin/codex"
