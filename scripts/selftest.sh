@@ -3900,6 +3900,16 @@ else
   echo "  FAIL  R6 review coverage must stay within its run (rc=$r6_cross_rc, implement rc=$r6_impl_rc): $r6_cross_out"; fail=$((fail+1))
 fi
 
+r6_legacy_review_ts="$(date -u -d "${r6_impl_ts:-1970-01-01T00:00:00Z} + 3 seconds" +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"end","lane":"review","engine":"review","model":"m","rc":0,"run":"dispatch-legacy","dir":"%s","task":"legacy review"}\n' \
+  "$r6_legacy_review_ts" "$R6DIR" >> "$R6DIR/.charles/dispatches.jsonl"
+r6_legacy_out="$(CHARLES_STATE_DIR="$R6DIR/state" bash "$FS" "$R6DIR" 2>&1)"; r6_legacy_rc=$?
+if [ "$r6_legacy_rc" -eq 0 ] && ! grep -q 'never reviewed' <<<"$r6_legacy_out"; then
+  echo "  PASS  R6 legacy review clears an identity-bearing implement"; pass=$((pass+1))
+else
+  echo "  FAIL  R6 legacy review must clear an identity-bearing implement (rc=$r6_legacy_rc): $r6_legacy_out"; fail=$((fail+1))
+fi
+
 r6_review_a_ts="$(date -u -d "${r6_impl_ts:-1970-01-01T00:00:00Z} + 2 seconds" +%Y-%m-%dT%H:%M:%SZ)"
 printf '{"ts":"%s","event":"end","lane":"review","engine":"review","model":"m","rc":0,"run":"dispatch-c","dir":"%s","task":"same run","flow_run_id":"run-a","spec_path":"%s"}\n' \
   "$r6_review_a_ts" "$R6DIR" "$r6_spec_path" >> "$R6DIR/.charles/dispatches.jsonl"
@@ -3923,7 +3933,7 @@ printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m",
 r6_old_out="$(CHARLES_STATE_DIR="$R6DIR/state" bash "$FS" "$R6DIR" 2>&1)"; r6_old_rc=$?
 if [ "$r6_old_rc" -eq 1 ] && grep -q 'ISSUE.*1 implement dispatch(es) never reviewed' <<<"$r6_old_out" \
   && grep -q 'repo total: 2 implements, 1 reviews' <<<"$r6_old_out" \
-  && ! jq -e 'any(.[]; has("flow_run_id") or has("spec_path"))' "$R6DIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  && jq -e -s 'all(.[]; (has("flow_run_id") | not) and (has("spec_path") | not))' "$R6DIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
   echo "  PASS  R6 old-format records retain global review behavior"; pass=$((pass+1))
 else
   echo "  FAIL  R6 old-format records must match the prior global result (rc=$r6_old_rc): $r6_old_out"; fail=$((fail+1))
@@ -4032,6 +4042,39 @@ if [ "$ops_init_rc" -eq 0 ] && [ "$ops_phase_rc" -eq 0 ] \
   echo "  PASS  ops run opens, records phases, and closes normally"; pass=$((pass+1))
 else
   echo "  FAIL  ops run must use init, phase, and normal close (init rc=$ops_init_rc, phase rc=$ops_phase_rc, close rc=$ops_close_rc): $ops_close_out"; fail=$((fail+1))
+fi
+
+OPS_SWEEP_ROOT="$BOX/ops-sweep-root"
+OPS_SWEEP_REPO="$OPS_SWEEP_ROOT/fixture-repo"
+OPS_SWEEP_RUN="$OPS_SWEEP_REPO/.charles/runs/open-run/RUN.md"
+mkdir -p "$(dirname "$OPS_SWEEP_RUN")"
+printf 'green = "true"\n' > "$OPS_SWEEP_REPO/.charles.toml"
+printf '# Run open-run\n\n- flow: feature\n- goal: read-only sweep\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$OPS_SWEEP_RUN"
+ops_sweep_paths_before="$(find "$OPS_SWEEP_ROOT" -print | sort)"
+ops_sweep_content_before="$(sha256sum "$OPS_SWEEP_RUN")"
+ops_sweep_out="$(bash "$SWEEP" "$OPS_SWEEP_ROOT" 2>&1)"; ops_sweep_rc=$?
+ops_sweep_paths_after="$(find "$OPS_SWEEP_ROOT" -print | sort)"
+ops_sweep_content_after="$(sha256sum "$OPS_SWEEP_RUN")"
+if [ "$ops_sweep_rc" -eq 0 ] \
+  && grep -qF 'fixture-repo · open-run' <<<"$ops_sweep_out" \
+  && [ -f "$OPS_SWEEP_RUN" ] \
+  && ! grep -q '^## Outcome$' "$OPS_SWEEP_RUN" \
+  && ! grep -q '^## Abandoned$' "$OPS_SWEEP_RUN" \
+  && [ "$ops_sweep_paths_before" = "$ops_sweep_paths_after" ] \
+  && [ "$ops_sweep_content_before" = "$ops_sweep_content_after" ]; then
+  echo "  PASS  ops sweep leaves a temporary open run untouched"; pass=$((pass+1))
+else
+  echo "  FAIL  ops sweep must leave its temporary open run open and unchanged (rc=$ops_sweep_rc): $ops_sweep_out"; fail=$((fail+1))
+fi
+
+# Documentation assertion only; this does not exercise recovery behavior.
+if grep -qF "HARD RULE: NEVER close, abandon, or delete another repository's run without" \
+  "$REPO_ROOT/commands/ops.md" \
+  && grep -qF 'EXPLICIT human confirmation' "$REPO_ROOT/commands/ops.md"; then
+  echo "  PASS  ops docs require explicit confirmation before cross-repo recovery"; pass=$((pass+1))
+else
+  echo "  FAIL  ops docs must require explicit human confirmation before cross-repo recovery"; fail=$((fail+1))
 fi
 
 echo

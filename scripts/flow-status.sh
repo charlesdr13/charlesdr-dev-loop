@@ -243,12 +243,15 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     | . as $implement
     | select(
         if (($implement.flow_run_id // "") != "" or ($implement.spec_path // "") != "") then
+          # Fallback runs one way: an identity-less later review clears an identity-bearing implement because older or ambiguous dispatches are global; identity-bearing reviews still need a precise match.
           ([ $reviews[]
              | select((.ts // "") > ($implement.ts // ""))
              | select(
                  ((.flow_run_id // "") != "" and ($implement.flow_run_id // "") != "" and .flow_run_id == $implement.flow_run_id)
                  or
                  ((.spec_path // "") != "" and ($implement.spec_path // "") != "" and .spec_path == $implement.spec_path)
+                 or
+                 ((.flow_run_id // "") == "" and (.spec_path // "") == "")
                )
            ] | length) == 0
         else
