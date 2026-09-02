@@ -376,6 +376,15 @@ As listed in the slice table, plus `.claude-plugin/plugin.json` and both
 `version` fields in `.claude-plugin/marketplace.json`. Out of scope for edits:
 every other file in the repo.
 
+**Scope amended mid-run, 2026-09-02.** `scripts/unsourced.sh` and
+`scripts/verify-receipt.sh` were listed out of scope but had to be edited.
+R4 introduced `lane-status.sh` exit 3 (UNKNOWN), and both scripts branch on
+that exit code; leaving them unchanged would have made them report an
+indeterminate lane as killed — shipping a known regression to satisfy a scope
+boundary. Two lines each. Recorded here because the final review correctly
+flagged it as unauthorised, and a scope decision taken silently is
+indistinguishable from scope creep.
+
 ## Green
 
 `bash scripts/selftest.sh && bash scripts/doctor.sh`
@@ -449,10 +458,41 @@ Any behaviour change bumps the version in `.claude-plugin/plugin.json` and both
     not to accept the diff.
   - **~350 historical ungrilled plans stay ungrilled**, and historical orphans
     stay visible until R4 reclassifies the live ones. Accepted as out of scope.
+  - **R3's idempotence is race-tolerant, not race-free.** The watchdog may
+    `rmdir` and re-claim a stale claim directory left by a wrapper that died
+    mid-write (`scripts/codex-run.sh:110-111`), so a wrapper killed in the
+    narrow window between claiming and appending can yield two terminal records
+    rather than one. This was a deliberate trade recorded by the implementing
+    lane: a benign duplicate is preferable to a lock that could deadlock the
+    wrapper against its own watchdog inside a signal handler. The final review
+    flagged it; it is accepted, not fixed. A duplicate end record is visible and
+    harmless to the consumers, which reduce to the last terminal record per
+    dispatch id. Closing it properly needs a supervisor outside the killed
+    process group.
+  - **R11's four release phases are recorded after the fact.** `release.sh` is
+    monolithic, so `commands/release.md` records `guard`, `green`, `version` and
+    `ship` once it returns, each carrying the same output as proof. The flow
+    graph becomes usable and the run closes through the normal path, but those
+    four phases are bookkeeping rather than four independently evidenced steps.
+    Splitting `release.sh` was out of scope.
 - Unresolved: none blocking. Settling the residual R3 case would need a
   supervisor outside the killed process group (a systemd unit or a cgroup
   watcher), which is a larger change than this plan.
 
 ## Sign-off
 
-_(pending)_
+Green at close: `selftest 338 passed, 0 failed` · `doctor 22 ok, 0 failing`.
+Baseline at open was `293 passed, 0 failed`. Ten commits, `10c1ff4..HEAD`.
+
+- [x] **R1** — the skill selects a flow — `af3affb`. Work-kind table in `skills/charles-flow/SKILL.md` covering all six destinations; UI preserved as a router, not promoted. Asserted by `flow selector table keeps UI as a router`.
+- [x] **R2** — the background rule has one shape — `af3affb`. No instructional passage backgrounds a lane with `&`/`nohup`; executable `&` untouched. `agents/codex-reviewer.md` states the outer timeout, the 600s ceiling and the 120s default. Regex verified by hand against `codex-run X && echo done` (passes) and a trailing `&` (flags).
+- [x] **R3** — a killed dispatch always leaves a terminal record — `c37809c` + `3d21b69`. `terminate_dispatch` logs before exit under an atomic `mkdir` claim shared with the watchdog; parallel cleanup waits 5s per receipt and retains the worktree on expiry. Asserted by `real SIGTERM leaves one non-zero end record and .done`. **Proved in production**: this run's own killed dispatch `20260902-222101-2184925` recorded `{"event":"end","rc":143,"wrapper_death":null}` instead of becoming a phantom orphan.
+- [x] **R4** — RUNNING is distinguishable from ORPHANED — `5f79ace`. Liveness from `.watchdog.state` plus the recorded child PID, not `pgrep -f`; exit 3 UNKNOWN never reported as dead; propagated to `unsourced.sh` and `verify-receipt.sh`. Live check: the two 2026-08-21 orphans now report `liveness UNKNOWN` rather than a confident SIGKILL verdict.
+- [x] **R5** — no implement lane runs against an ungrilled plan — `8499de0`. Requires a `- Rounds:` line or a non-empty `Grill waived:`; exit 5, before any logging or lane start. First verdict section wins deterministically. Reality check run over all 11 specs: 4 pass, 7 refuse with the older waiver wording.
+- [x] **R6** — review coverage correlated per run — `6cbff8b` + `d38ff0b`. `flow_run_id` and `spec_path` recorded; identity refines matching and never turns a reviewed implement unreviewed. **Backward compatibility proved on real history**: identical output on leadgrow-nexus, leadgrow-dashboard, landing-factory and olympus-modular, 209 legacy implements.
+- [x] **R7** — release is a step the flow can reach — `a058867` + `d38ff0b`. `commands/release.md` passes one semver through, reimplements none of `release.sh`'s checks, records a `FAILED` item on failure without closing.
+- [x] **R8** — a run can be reopened and abandoned — `5af61a7`. Exit codes verified live: 7 unknown run, 8 reopen an open run, 9 abandon a closed run; reopen preserves the prior outcome as a superseded heading. All six `^## Outcome` consumers distinguish ABANDONED. No regression across six repos holding 22 open runs.
+- [x] **R9** — commands/ui.md agrees with the skill — `af3affb`. Baseline green before init (asserted by line-number comparison), spec bound via the existing `run-state.sh spec` verb, `FAILED` on receipt exit 1, sign-off before close; `commands/status.md` names unsourced changes.
+- [x] **R10** — the dispatcher symlink never points at a checkout — `2373fe7`. **Proved live**: run against this worktree the hook prints `refusing to link codex-run into a git working tree` and leaves the existing link untouched. Also rejects a cache target that resolves into a checkout.
+- [x] **R11** — Flow 5, release — `a058867` + `d38ff0b`. `flow.json` gains `guard → green → version → ship`; both hard-coded validator lists (`flow-status.sh:101`, `runs-sweep.sh:26`) updated; the command owns its run and closes through the normal path. Phases are recorded after `release.sh` returns — accepted risk above.
+- [x] **R12** — Flow 6, ops — `46316d5` + `d38ff0b`. `flow.json` gains `survey → select → recover → report`; `commands/ops.md` composes `runs-sweep.sh` with the R8 verbs. `runs-sweep.sh` proved read-only against a temporary root; the confirmation rule asserted as the documentation check it is.
