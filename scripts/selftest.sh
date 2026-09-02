@@ -2764,6 +2764,123 @@ else
   echo "  FAIL  real SIGTERM must leave one non-zero end record and .done (sent=$r3_term_sent, gone=$r3_wrapper_gone, watchdog=$r3_watchdog_killed, done=$r3_done_seen, ends=$r3_end_count, nonzero=$r3_nonzero_end)"; fail=$((fail+1))
 fi
 
+# R3 second half: cleanup waits for a late terminal receipt and retains a
+# worktree when no terminal receipt can ever arrive. Replace both dispatcher
+# calls in a temporary copy so this uses stub children, not a real Codex lane.
+R3P="$BOX/r3-parallel-cleanup"; mkdir -p "$R3P/bin"
+PARALLEL_SCRIPTS="$(cd -- "$(dirname -- "$PARALLEL")" && pwd -P)"
+cp "$PARALLEL" "$R3P/parallel-chunks.sh"
+sed -i \
+  -e "s|^SCRIPT_DIR=.*|SCRIPT_DIR=\"$PARALLEL_SCRIPTS\"|" \
+  -e 's|"\$SCRIPTS/codex-run\.sh"|"\$CHARLES_TEST_CHILD"|g' \
+  "$R3P/parallel-chunks.sh"
+
+parallel_fixture "$R3P/late-repo" "$R3P/late-alpha" true
+git -C "$R3P/late-repo" worktree add -q "$R3P/late-beta" HEAD
+parallel_fixture "$R3P/expiry-repo" "$R3P/expiry-alpha" true
+git -C "$R3P/expiry-repo" worktree add -q "$R3P/expiry-beta" HEAD
+printf '[{"name":"alpha","files":["alpha"],"task":"late"},{"name":"beta","files":["beta"],"task":"fast"}]\n' \
+  > "$R3P/late.chunks.json"
+printf '[{"name":"alpha","files":["alpha"],"task":"never"},{"name":"beta","files":["beta"],"task":"fast"}]\n' \
+  > "$R3P/expiry.chunks.json"
+cat > "$R3P/bin/treehouse" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  get)
+    case "\${PWD##*/}:\${4:-}" in
+      late-repo:chunk-alpha) printf '%s\n' "$R3P/late-alpha" ;;
+      late-repo:chunk-beta) printf '%s\n' "$R3P/late-beta" ;;
+      expiry-repo:chunk-alpha) printf '%s\n' "$R3P/expiry-alpha" ;;
+      expiry-repo:chunk-beta) printf '%s\n' "$R3P/expiry-beta" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  return)
+    path="\${2:-}"
+    printf '%s\n' "\$path" >> "\${CHARLES_RETURN_RECORD:?}"
+    [ -z "\$path" ] || rm -rf -- "\$path"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$R3P/bin/treehouse"
+cat > "$R3P/bin/child" <<'EOF'
+#!/usr/bin/env bash
+child_dir=""
+while [ "$#" -gt 0 ]; do
+  case "${1:-}" in
+    --dir) child_dir="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$child_dir" ] || exit 2
+case "$child_dir" in
+  */late-alpha)
+    mkdir -p "$child_dir/.charles"
+    receipt="$child_dir/.charles/dispatches.jsonl"
+    printf '%s\n' '{"event":"start","run":"late-alpha"}' > "$receipt"
+    printf 'late alpha\n' > "$child_dir/alpha"
+    ( sleep 1; printf '%s\n' '{"event":"end","run":"late-alpha","rc":0}' >> "$receipt" ) &
+    ;;
+  */late-beta)
+    mkdir -p "$child_dir/.charles"
+    receipt="$child_dir/.charles/dispatches.jsonl"
+    printf '%s\n' '{"event":"start","run":"late-beta"}' > "$receipt"
+    printf '%s\n' '{"event":"end","run":"late-beta","rc":0}' >> "$receipt"
+    printf 'late beta\n' > "$child_dir/beta"
+    ;;
+  */expiry-alpha)
+    mkdir -p "$child_dir/.charles"
+    printf '%s\n' '{"event":"end","run":"previous-lease","rc":0}' \
+      '{"event":"start","run":"expiry-alpha"}' > "$child_dir/.charles/dispatches.jsonl"
+    printf 'expiry alpha\n' > "$child_dir/alpha"
+    ;;
+  */expiry-beta)
+    mkdir -p "$child_dir/.charles"
+    receipt="$child_dir/.charles/dispatches.jsonl"
+    printf '%s\n' '{"event":"start","run":"expiry-beta"}' > "$receipt"
+    printf '%s\n' '{"event":"end","run":"expiry-beta","rc":0}' >> "$receipt"
+    printf 'expiry beta\n' > "$child_dir/beta"
+    ;;
+  *)
+    # Scope validation targets the parent repo and needs no fixture receipt.
+    ;;
+esac
+exit 0
+EOF
+chmod +x "$R3P/bin/child"
+
+: > "$R3P/late-returns"
+late_cleanup_out="$(PATH="$R3P/bin:$PATH" CHARLES_TEST_CHILD="$R3P/bin/child" \
+  CHARLES_PARALLEL_MIN_CHUNKS=2 CHARLES_RETURN_RECORD="$R3P/late-returns" \
+  timeout 8s bash "$R3P/parallel-chunks.sh" "$R3P/late-repo" "$R3P/late.chunks.json" --no-green 2>&1)"; late_cleanup_rc=$?
+if [ "$late_cleanup_rc" -eq 0 ] \
+  && jq -e 'select(.run == "late-alpha" and .event == "end")' \
+       "$R3P/late-repo/.charles/dispatches.jsonl" >/dev/null 2>&1 \
+  && grep -Fxq "$R3P/late-alpha" "$R3P/late-returns" \
+  && grep -Fxq "$R3P/late-beta" "$R3P/late-returns" \
+  && [ ! -d "$R3P/late-alpha" ] && [ ! -d "$R3P/late-beta" ]; then
+  echo "  PASS  cleanup waits for a late terminal receipt before aggregating and returning"; pass=$((pass+1))
+else
+  echo "  FAIL  cleanup must wait for a late terminal receipt (rc=$late_cleanup_rc): $late_cleanup_out"; fail=$((fail+1))
+fi
+
+: > "$R3P/expiry-returns"
+expiry_cleanup_out="$(PATH="$R3P/bin:$PATH" CHARLES_TEST_CHILD="$R3P/bin/child" \
+  CHARLES_PARALLEL_MIN_CHUNKS=2 CHARLES_RETURN_RECORD="$R3P/expiry-returns" \
+  timeout 8s bash "$R3P/parallel-chunks.sh" "$R3P/expiry-repo" "$R3P/expiry.chunks.json" --no-green 2>&1)"; expiry_cleanup_rc=$?
+if [ "$expiry_cleanup_rc" -eq 3 ] \
+  && grep -qF 'no terminal record after bounded wait' <<<"$expiry_cleanup_out" \
+  && grep -qF "$R3P/expiry-alpha" <<<"$expiry_cleanup_out" \
+  && grep -qF 'unaggregated receipt' <<<"$expiry_cleanup_out" \
+  && [ -d "$R3P/expiry-alpha" ] \
+  && ! grep -Fxq "$R3P/expiry-alpha" "$R3P/expiry-returns" \
+  && grep -Fxq "$R3P/expiry-beta" "$R3P/expiry-returns"; then
+  echo "  PASS  cleanup expiry marks failure and retains the unaggregated receipt"; pass=$((pass+1))
+else
+  echo "  FAIL  cleanup expiry must retain and report its worktree (rc=$expiry_cleanup_rc): $expiry_cleanup_out"; fail=$((fail+1))
+fi
+
 # A clean one-attempt dispatch must reap its watchdog and log exactly one end.
 R2C="$R2/clean"; mkdir -p "$R2C/bin" "$R2C/repo"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$R2C/bin/codex"

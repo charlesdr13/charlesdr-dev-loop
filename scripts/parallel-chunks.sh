@@ -237,7 +237,7 @@ return_worktree() {
 }
 
 cleanup() {
-  local cleanup_rc="$1" pid i wt receipt run
+  local cleanup_rc="$1" pid i wt receipt run terminal wait_tick
   trap '' INT TERM
   trap - EXIT
 
@@ -252,14 +252,33 @@ cleanup() {
     wait "$pid" 2>/dev/null || true
   done
 
-  # All children have been waited on above, so receipts have no concurrent
-  # writer here and aggregation does not need a lock.
+  # A surviving watchdog can still append the terminal record after its child
+  # exits, so poll each receipt before copying it. The 5s bound is the
+  # watchdog's sleep 2 plus 3s margin; SIGKILL can still leave no record.
   for i in "${!CH_WT[@]}"; do
     wt="${CH_WT[$i]}"
     receipt="$wt/.charles/dispatches.jsonl"
     if [ "${CH_RC[$i]+set}" = set ] || [ -n "${CH_PID[$i]:-}" ]; then
       if [ -f "$receipt" ]; then
-        if ! mkdir -p -- "$REPO/.charles" || ! cat "$receipt" >> "$REPO/.charles/dispatches.jsonl"; then
+        terminal=0
+        for ((wait_tick=0; wait_tick<50; wait_tick++)); do
+          if jq -e -s \
+              '([.[] | select(.event == "start") |
+                ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $starts |
+               ([.[] | select((has("event") | not) or .event == "end") |
+                ((.run // "") | tostring | split("/") | last)] | map(select(length > 0)) | unique) as $ends |
+               (($starts - $ends) | length) == 0' \
+              "$receipt" >/dev/null 2>&1; then
+            terminal=1
+            break
+          fi
+          sleep 0.1
+        done
+        if [ "$terminal" -ne 1 ]; then
+          echo "  ${CH_NAME[$i]}: FAILED — no terminal record after bounded wait; retaining worktree $wt with unaggregated receipt $receipt" >&2
+          CH_KEEP[$i]=1
+          cleanup_rc=3
+        elif ! mkdir -p -- "$REPO/.charles" || ! cat "$receipt" >> "$REPO/.charles/dispatches.jsonl"; then
           echo "  ${CH_NAME[$i]}: FAILED — could not aggregate $receipt" >&2
           CH_KEEP[$i]=1
           cleanup_rc=3
