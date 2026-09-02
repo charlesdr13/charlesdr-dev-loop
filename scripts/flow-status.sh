@@ -226,15 +226,34 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
   revs="$(last_ends | jq -r 'select(.lane=="review") | .ts' | wc -l)"
   ungraded_close=0
   ungraded_repo=0
+  # ponytail: O(implements × reviews); index the log if its size makes this slow.
   while IFS= read -r dispatch_ts; do
     if dispatch_is_attributable "$dispatch_ts"; then
       ungraded_close=$((ungraded_close+1))
     else
       ungraded_repo=$((ungraded_repo+1))
     fi
-  done < <(last_ends | jq -r --arg t "$last_review" '
-    select(.lane == "implement" and .rc == 0 and ($t == "" or .ts > $t)) |
-    .ts // ""
+  done < <(last_ends | jq -r -s --arg t "$last_review" '
+    . as $all
+    | [ $all[] | select(.lane == "review" and .rc == 0) ] as $reviews
+    | $all[]
+    | select(.lane == "implement" and .rc == 0)
+    | . as $implement
+    | select(
+        if (($implement.flow_run_id // "") != "" or ($implement.spec_path // "") != "") then
+          ([ $reviews[]
+             | select((.ts // "") > ($implement.ts // ""))
+             | select(
+                 ((.flow_run_id // "") != "" and ($implement.flow_run_id // "") != "" and .flow_run_id == $implement.flow_run_id)
+                 or
+                 ((.spec_path // "") != "" and ($implement.spec_path // "") != "" and .spec_path == $implement.spec_path)
+               )
+           ] | length) == 0
+        else
+          ($t == "" or .ts > $t)
+        end
+      )
+    | .ts // ""
   ')
   ungraded=$((ungraded_close + ungraded_repo))
   if [ "${ungraded:-0}" -gt 0 ]; then

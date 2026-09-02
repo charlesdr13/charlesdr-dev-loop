@@ -291,8 +291,11 @@ validate_requirement_list() {
 
 validate_dispatch_scope() {
   # An implement receipt without a plan mapping cannot be audited later, so fail before taking a lane.
-  [ "$LANE" = "implement" ] || return 0
-  if [ "$REQ_SET" -eq 1 ]; then
+  FLOW_RUN_ID=""
+  SPEC_PATH=""
+  local validate_implement=0
+  [ "$LANE" = "implement" ] && validate_implement=1
+  if [ "$validate_implement" -eq 1 ] && [ "$REQ_SET" -eq 1 ]; then
     validate_requirement_list || return $?
   fi
 
@@ -339,16 +342,23 @@ validate_dispatch_scope() {
       run_dir="${substring_matches[0]}"
     fi
   elif [ "${#open_runs[@]}" -gt 1 ]; then
-    echo "codex-run.sh: REFUSING — multiple open runs; requirement scope is ambiguous:" >&2
-    printf '  %s\n' "${open_runs[@]##*/}" >&2
-    echo "codex-run.sh: pass --run <id> or CHARLES_RUN=<id> to select one" >&2
-    return 2
+    if [ "$validate_implement" -eq 1 ]; then
+      echo "codex-run.sh: REFUSING — multiple open runs; requirement scope is ambiguous:" >&2
+      printf '  %s\n' "${open_runs[@]##*/}" >&2
+      echo "codex-run.sh: pass --run <id> or CHARLES_RUN=<id> to select one" >&2
+      return 2
+    fi
   elif [ "${#open_runs[@]}" -eq 1 ]; then
     run_dir="${open_runs[0]}"
   else
-    [ "$REQ_SET" -eq 1 ] || return 0
-    [ -n "$PLAN" ] || return 0
+    if [ "$validate_implement" -eq 1 ]; then
+      [ "$REQ_SET" -eq 1 ] || return 0
+      [ -n "$PLAN" ] || return 0
+    else
+      [ -n "$PLAN" ] || return 0
+    fi
     plan_path="$(resolve_plan_path "$PLAN")" || {
+      [ "$validate_implement" -eq 0 ] && return 0
       echo "codex-run.sh: REFUSING — no readable plan file: $PLAN" >&2
       return 2
     }
@@ -385,14 +395,18 @@ validate_dispatch_scope() {
     esac
     plan_path="$resolved_spec"
     plan_label="$spec"
-    if [ "$REQ_SET" -eq 0 ]; then
+    if [ "$validate_implement" -eq 1 ] && [ "$REQ_SET" -eq 0 ]; then
       echo "codex-run.sh: REFUSING — implement dispatch must name requirements for open run $run_name ($spec)" >&2
       echo "codex-run.sh: pass --req R1,A3 (identifiers from that spec)" >&2
       return 2
     fi
+    FLOW_RUN_ID="$run_name"
+    SPEC_PATH="$resolved_spec"
   else
     plan_label="$PLAN"
+    SPEC_PATH="$plan_path"
   fi
+  [ "$validate_implement" -eq 1 ] || return 0
   local grill_section grill_basis=""
   grill_section="$(awk '
     !in_verdict && /^## Grill verdict([[:space:]]|$)/ { in_verdict=1; next }
@@ -556,8 +570,11 @@ log_start() {
      --arg engine "$event_engine" --arg run "$RUN_ID" --arg dir "$DIR" \
      --arg task "$(printf '%.200s' "$TASK")" --arg req "$REQ" \
      --arg allow_main_tree "$ALLOW_MAIN_TREE" \
+     --arg flow_run_id "${FLOW_RUN_ID:-}" --arg spec_path "${SPEC_PATH:-}" \
      --arg grill "${GRILL_BASIS:-}" \
      '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}
+      | if $flow_run_id == "" then . else . + {flow_run_id:$flow_run_id} end
+      | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
         + (if $grill == "" then {} else {grill:$grill} end) else . end' \
      >> "$f" 2>/dev/null
@@ -590,8 +607,11 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
      --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
      --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" --arg req "$REQ" \
      --arg allow_main_tree "$ALLOW_MAIN_TREE" \
+     --arg flow_run_id "${FLOW_RUN_ID:-}" --arg spec_path "${SPEC_PATH:-}" \
      --arg grill "${GRILL_BASIS:-}" \
      '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,dir:$dir,task:$task}
+      | if $flow_run_id == "" then . else . + {flow_run_id:$flow_run_id} end
+      | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
         + (if $grill == "" then {} else {grill:$grill} end) else . end
       | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \

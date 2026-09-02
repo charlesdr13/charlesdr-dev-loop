@@ -3707,6 +3707,69 @@ else
   echo "  FAIL  parallel preflight must refuse an ungrilled spec (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
 fi
 
+# --- R6 review coverage -------------------------------------------------------
+# Use the real dispatcher and status scripts with the existing fake codex lane;
+# reviews are receipt fixtures, never live model calls.
+R6DIR="$BOX/r6-review-scope"; mkdir -p "$R6DIR/bin" "$R6DIR/docs/specs" "$R6DIR/.charles/runs/run-a"
+cp "$REQDIR/bin/codex" "$R6DIR/bin/codex"
+printf 'green = "true"\n' > "$R6DIR/.charles.toml"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. review scope**\n' > "$R6DIR/docs/specs/plan.md"
+printf '# Run run-a\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$R6DIR/.charles/runs/run-a/RUN.md"
+( cd "$R6DIR" && git init -q && git config user.name tester && git config user.email tester@example.invalid && \
+  printf 'base\n' > tracked && git add .charles.toml docs/specs/plan.md tracked && git commit -qm init ) >/dev/null 2>&1
+r6_impl_out="$(PATH="$R6DIR/bin:$PATH" CHARLES_STATE_DIR="$R6DIR/state" \
+  bash "$RUN_SH" --lane implement --allow-main-tree --dir "$R6DIR" --req R1 --no-fallback --timeout 2 "r6 implement" 2>&1)"; r6_impl_rc=$?
+r6_spec_path="$(realpath "$R6DIR/docs/specs/plan.md")"
+r6_impl_ts="$(jq -r 'select(.event == "end" and .lane == "implement") | .ts' \
+  "$R6DIR/.charles/dispatches.jsonl" 2>/dev/null | tail -1)"
+r6_identity_ok=0
+if jq -e -s --arg f run-a --arg s "$r6_spec_path" \
+  'length > 0 and all(.[]; (.flow_run_id == $f and .spec_path == $s))' \
+  "$R6DIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  r6_identity_ok=1
+fi
+printf '\n## Outcome\n\nfixture closed\n' >> "$R6DIR/.charles/runs/run-a/RUN.md"
+r6_review_b_ts="$(date -u -d "${r6_impl_ts:-1970-01-01T00:00:00Z} + 1 second" +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"end","lane":"review","engine":"review","model":"m","rc":0,"run":"dispatch-b","dir":"%s","task":"run B","flow_run_id":"run-b","spec_path":"%s/other.md"}\n' \
+  "$r6_review_b_ts" "$R6DIR" "$R6DIR/docs/specs" >> "$R6DIR/.charles/dispatches.jsonl"
+r6_cross_out="$(CHARLES_STATE_DIR="$R6DIR/state" bash "$FS" "$R6DIR" 2>&1)"; r6_cross_rc=$?
+if [ "$r6_impl_rc" -eq 0 ] && [ "$r6_identity_ok" -eq 1 ] && [ "$r6_cross_rc" -eq 1 ] \
+  && grep -q 'ISSUE.*1 implement dispatch(es) never reviewed' <<<"$r6_cross_out"; then
+  echo "  PASS  R6 run B review does not clear run A implement (fields recorded)"; pass=$((pass+1))
+else
+  echo "  FAIL  R6 review coverage must stay within its run (rc=$r6_cross_rc, implement rc=$r6_impl_rc): $r6_cross_out"; fail=$((fail+1))
+fi
+
+r6_review_a_ts="$(date -u -d "${r6_impl_ts:-1970-01-01T00:00:00Z} + 2 seconds" +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"end","lane":"review","engine":"review","model":"m","rc":0,"run":"dispatch-c","dir":"%s","task":"same run","flow_run_id":"run-a","spec_path":"%s"}\n' \
+  "$r6_review_a_ts" "$R6DIR" "$r6_spec_path" >> "$R6DIR/.charles/dispatches.jsonl"
+r6_same_out="$(CHARLES_STATE_DIR="$R6DIR/state" bash "$FS" "$R6DIR" 2>&1)"; r6_same_rc=$?
+if [ "$r6_same_rc" -eq 0 ] && ! grep -q 'never reviewed' <<<"$r6_same_out"; then
+  echo "  PASS  R6 same-run review clears the implement"; pass=$((pass+1))
+else
+  echo "  FAIL  R6 same-run review must clear the implement (rc=$r6_same_rc): $r6_same_out"; fail=$((fail+1))
+fi
+
+: > "$R6DIR/.charles/dispatches.jsonl"
+r6_old_i1="$(date -u -d '3 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+r6_old_review="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+r6_old_i2="$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"old-implement-a","dir":"%s","task":"old A"}\n' \
+  "$r6_old_i1" "$R6DIR" > "$R6DIR/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"review","engine":"review","model":"m","rc":0,"run":"old-review-b","dir":"%s","task":"old B"}\n' \
+  "$r6_old_review" "$R6DIR" >> "$R6DIR/.charles/dispatches.jsonl"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"old-implement-c","dir":"%s","task":"old C"}\n' \
+  "$r6_old_i2" "$R6DIR" >> "$R6DIR/.charles/dispatches.jsonl"
+r6_old_out="$(CHARLES_STATE_DIR="$R6DIR/state" bash "$FS" "$R6DIR" 2>&1)"; r6_old_rc=$?
+if [ "$r6_old_rc" -eq 1 ] && grep -q 'ISSUE.*1 implement dispatch(es) never reviewed' <<<"$r6_old_out" \
+  && grep -q 'repo total: 2 implements, 1 reviews' <<<"$r6_old_out" \
+  && ! jq -e 'any(.[]; has("flow_run_id") or has("spec_path"))' "$R6DIR/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  R6 old-format records retain global review behavior"; pass=$((pass+1))
+else
+  echo "  FAIL  R6 old-format records must match the prior global result (rc=$r6_old_rc): $r6_old_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
