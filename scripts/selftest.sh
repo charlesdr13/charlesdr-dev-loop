@@ -3861,6 +3861,17 @@ if grep -qF '## Select by work-kind' "$flow_skill" \
 else
   echo "  FAIL  flow selector table must keep UI as a router"; fail=$((fail+1))
 fi
+if grep -qE 'top-level bullets.*optional.*\[ \].*\[x\].*\[X\]' "$flow_skill" \
+  && grep -qF '`**ID`' "$flow_skill" \
+  && grep -qE 'terminated by.*\*\*.*whitespace.*dot' "$flow_skill" \
+  && grep -qE 'non-digit.*end of line' "$flow_skill" \
+  && grep -qF -- 'Example: `- [ ] **R1**' "$flow_skill" \
+  && grep -qF 'IDs below `## Sign-off`' "$flow_skill" \
+  && grep -qF 'do not count for dispatch' "$flow_skill"; then
+  echo "  PASS  flow docs spell out dispatchable requirement bullets"; pass=$((pass+1))
+else
+  echo "  FAIL  flow docs must spell out dispatchable requirement bullets"; fail=$((fail+1))
+fi
 
 # --- R5 grill gate ------------------------------------------------------------
 R5DIR="$BOX/r5-grill"; mkdir -p "$R5DIR/bin" "$R5DIR/docs/specs" "$R5DIR/.charles/runs/open-run"

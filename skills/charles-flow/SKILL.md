@@ -421,6 +421,10 @@ from inside a report, which is why the check reads that instead.
    against; a plan that exists only in conversation can be neither. Write
    **checkable requirements**, not steps: what must be true when this is done,
    which files are in scope, what must keep working.
+   Requirement IDs are top-level bullets: `-`, optionally `[ ]`, `[x]`, or `[X]`,
+   then `**ID` terminated by `**`, whitespace, or a dot followed by a
+   non-digit or end of line. Example: `- [ ] **R1** — ...`. IDs below `## Sign-off`
+   do not count for dispatch.
 4. **Grill.** `grill-rounds`, 2-3 rounds, amending the plan in place. Round 1 is
    adversarial and unattended. **Everything it could not settle is then
    collected and surfaced to the user in one message**, each item recorded as a
