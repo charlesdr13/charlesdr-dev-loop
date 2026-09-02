@@ -86,7 +86,29 @@ states the 120s default, which is why R2 requires it to be written down.
   unset timeout silently fatal; and `selftest.sh` asserts this over documentation
   paths only.
 
-- **R3** — a killed parallel batch cannot destroy its own END records
+- **R3** — a killed dispatch always leaves a terminal record
+
+  **Amended 2026-09-02 mid-run, after measurement.** The original R3 named the
+  `parallel-chunks.sh` cleanup race as the cause. That race is real but rare.
+  The dominant cause is one layer down and needs no worktrees or chunks at all:
+
+  `scripts/codex-run.sh:481-489` traps TERM/HUP to `terminate_dispatch`, which
+  kills the child group and calls `exit`. The EXIT trap then writes `.done`.
+  **Neither path ever calls `log_dispatch`**, so a SIGTERMed wrapper records a
+  `.done` file and *no terminal record at all*. The watchdog is supposed to
+  cover this (`:101-119`), but when the harness stops a task it takes the
+  setsid'd watchdog with it, so nothing survives to write the record.
+
+  Reproduced three times in this run's own session — dispatches
+  `20260902-165706-3830875`, `20260902-171815-4036860` and
+  `20260902-173656-89546`. All three have `.done=143`, exactly one line in
+  `dispatches.jsonl` (the start), and no `wrapper_death:true` record. Two were
+  plain serial dispatches with no worktree involved. This is why 40 orphans
+  accumulated across 47 repos and why none of them can ever be cleared.
+
+  The fix belongs in the process guaranteed to still be alive: the wrapper's own
+  TERM handler, before it exits. The parallel-chunks race below remains the
+  second half of the requirement.
 
   `scripts/parallel-chunks.sh:246-249` kills its direct child PIDs, `:250-252`
   waits only for those, `:259-262` aggregates each worktree receipt into the
@@ -107,7 +129,14 @@ states the 120s default, which is why R2 requires it to be written down.
   unachievable. And if `parallel-chunks.sh` itself is SIGKILLed its `EXIT` trap
   (`:290`) never runs, so no cleanup happens at all.
 
-  Done when: cleanup waits a **bounded** interval (stated in the code, at least the
+  Done when, first half: `terminate_dispatch` writes the terminal record before
+  exiting, on every signal path it traps, and does so idempotently — the
+  watchdog must not append a second record when it also survives. A dispatch
+  SIGTERMed at any point leaves exactly one terminal record. `selftest.sh` sends
+  a real SIGTERM to a live wrapper and asserts exactly one terminal record with
+  a non-zero rc results.
+
+  Done when, second half: cleanup waits a **bounded** interval (stated in the code, at least the
   watchdog's own `sleep 2` plus margin) for each child's terminal record before
   aggregating; on expiry it **retains the worktree** rather than destroying it,
   marks the chunk failed, and says which worktree holds the unaggregated receipt;
@@ -391,6 +420,14 @@ Any behaviour change bumps the version in `.claude-plugin/plugin.json` and both
   - Added measurement provenance and a reproduction command.
 - Escalated to the operator and answered: R5 gate scope → every flow with a
   written waiver. R8 abandon semantics → distinct terminal state.
+- **Mid-run amendment, 2026-09-02, operator-approved:** R3 was rewritten after
+  three of this run's own dispatches were SIGTERMed and reproduced the defect
+  live. The original R3 blamed the `parallel-chunks.sh` cleanup race; the
+  dominant cause is `terminate_dispatch` exiting without a terminal record,
+  which needs no worktrees and explains the serial cases too. The chunks race is
+  retained as the second half. Recorded here rather than silently edited,
+  because a requirement that changes after sign-off is exactly the thing a
+  reviewer must be able to see.
 - Accepted risks:
   - **R3 cannot guarantee every START gets an END.** If the wrapper and its
     watchdog are both SIGKILLed, no process survives to write one. If
