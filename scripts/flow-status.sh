@@ -98,7 +98,7 @@ if ! command -v jq >/dev/null 2>&1 || [ ! -r "$FLOW_FILE" ] || ! jq -e '
   def strings: type == "array" and all(.[]; type == "string");
   . as $root |
   ($root | type == "object") and
-  all(["feature", "debug", "polish", "ui", "release"][];
+  all(["feature", "debug", "polish", "ui", "release", "ops"][];
     . as $flow |
     ($root[$flow] | type == "object") and
     ($root[$flow].phases | type == "object") and

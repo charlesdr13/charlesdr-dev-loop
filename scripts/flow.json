@@ -57,5 +57,15 @@
     },
     "first": "guard",
     "terminal": ["ship"]
+  },
+  "ops": {
+    "phases": {
+      "survey": {"next": ["select"], "proof": "read-only sweep of supplied or default roots"},
+      "select": {"next": ["recover"], "proof": "target repos and run ids recorded"},
+      "recover": {"next": ["report"], "proof": "confirmed reopen or abandon actions recorded"},
+      "report": {"next": ["close"], "proof": "roots, findings, and outcomes reported"}
+    },
+    "first": "survey",
+    "terminal": ["report"]
   }
 }

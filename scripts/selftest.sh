@@ -3985,6 +3985,55 @@ else
   echo "  FAIL  release run must use init, phase, and normal close (init rc=$release_init_rc, phase rc=$release_phase_rc, close rc=$release_close_rc): $release_close_out"; fail=$((fail+1))
 fi
 
+# --- ops flow coverage --------------------------------------------------------
+if jq -e '
+  def strings: type == "array" and all(.[]; type == "string");
+  . as $root |
+  ($root | type == "object") and
+  ($root.ops | type == "object") and
+  ($root.ops.phases | type == "object") and
+  ($root.ops.first == "survey") and
+  ($root.ops.terminal == ["report"]) and
+  ([$root.ops.phases[] | type == "object" and (.next | strings) and (.proof | type == "string")] | all) and
+  ($root.ops.phases.survey.next == ["select"]) and
+  ($root.ops.phases.select.next == ["recover"]) and
+  ($root.ops.phases.recover.next == ["report"]) and
+  ($root.ops.phases.report.next == ["close"])
+' "$FLOW_JSON" >/dev/null 2>&1; then
+  echo "  PASS  flow.json structurally validates the ops flow"; pass=$((pass+1))
+else
+  echo "  FAIL  flow.json must structurally validate the ops flow"; fail=$((fail+1))
+fi
+
+OPS_FLOW="$BOX/flow-ops"; mkdir -p "$OPS_FLOW"
+ops_init="$(bash "$RS" init "$OPS_FLOW" ops "ops fixture" 2>"$OPS_FLOW/init.err")"; ops_init_rc=$?
+ops_status="$(bash "$FS" "$OPS_FLOW" 2>&1)"; ops_status_rc=$?
+if [ "$ops_init_rc" -eq 0 ] && [ "$ops_status_rc" -eq 1 ] \
+  && grep -q 'expected next: survey' <<<"$ops_status" \
+  && ! grep -q "flow 'ops' is not in flow.json" <<<"$ops_status"; then
+  echo "  PASS  ops flow-status gives phase guidance"; pass=$((pass+1))
+else
+  echo "  FAIL  ops flow-status must guide the first phase (init rc=$ops_init_rc, status rc=$ops_status_rc): $ops_status"; fail=$((fail+1))
+fi
+
+ops_run="$OPS_FLOW/.charles/runs/$ops_init/RUN.md"
+ops_phase_rc=0
+for ops_phase in survey select recover report; do
+  bash "$RS" phase "$OPS_FLOW" "$ops_phase" "ops fixture $ops_phase" >/dev/null 2>"$OPS_FLOW/$ops_phase.err" || ops_phase_rc=1
+done
+ops_close_out="$(bash "$RS" close "$OPS_FLOW" "ops fixture complete" 2>&1)"; ops_close_rc=$?
+if [ "$ops_init_rc" -eq 0 ] && [ "$ops_phase_rc" -eq 0 ] \
+  && [ "$ops_close_rc" -eq 0 ] && [ -f "$ops_run" ] \
+  && grep -q ' survey$' "$ops_run" \
+  && grep -q ' select$' "$ops_run" \
+  && grep -q ' recover$' "$ops_run" \
+  && grep -q ' report$' "$ops_run" \
+  && grep -q '^## Outcome$' "$ops_run"; then
+  echo "  PASS  ops run opens, records phases, and closes normally"; pass=$((pass+1))
+else
+  echo "  FAIL  ops run must use init, phase, and normal close (init rc=$ops_init_rc, phase rc=$ops_phase_rc, close rc=$ops_close_rc): $ops_close_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

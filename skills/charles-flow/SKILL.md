@@ -539,6 +539,27 @@ Use `/charlesdr-dev-loop:release <semver>`. It wraps `scripts/release.sh`.
 5. **Close.** Use `run-state.sh close` after `ship`. On failure, record a
    `FAILED` item and leave the run open.
 
+## Flow 6 — ops
+
+Use `/charlesdr-dev-loop:ops`. The ops run itself opens in the repository where
+the command was invoked.
+
+1. **Survey.** Run `runs-sweep.sh` as the read-only survey. It covers the
+   supplied roots or its defaults, never the whole filesystem, and stays
+   read-only. Record the roots in the ops run.
+2. **Select.** Read the sweep and record the exact repository and run id for
+   every possible action.
+3. **Recover only after confirmation.** Use the existing
+   `run-state.sh reopen` and `run-state.sh abandon` verbs. **Never close,
+   abandon, or delete another repository's run without explicit human
+   confirmation** of the exact repository, run id, and action; without it,
+   leave that run alone.
+4. **Report.** Record the findings, roots, confirmations, recovery results,
+   and skipped targets in the ops run.
+5. **Close.** Close only the ops run opened in the command's repository, after
+   recording `report`. If its local close is refused, report the reason and
+   leave it open.
+
 ## The ground-truth gate
 
 A hard gate, not a checklist to wave at. All four, before any implementation:
