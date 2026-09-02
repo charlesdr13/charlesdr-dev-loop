@@ -51,12 +51,19 @@ if [ -n "$CLOSING" ]; then
   fi
 fi
 
+canonicalization_available=1
+if ! command -v realpath >/dev/null 2>&1; then
+  canonicalization_available=0
+  if [ -n "$CLOSING" ] && [ "$attribution_degraded" -eq 0 ]; then
+    attribution_degraded=1
+    attribution_reason="realpath is unavailable for non-identical path attribution"
+  fi
+fi
+
 paths_match() {
   local left="${1%/}" right="${2%/}" left_key right_key
   [ "$left" = "$right" ] && return 0
-  if ! command -v realpath >/dev/null 2>&1; then
-    attribution_degraded=1
-    attribution_reason="realpath is unavailable for non-identical path attribution"
+  if [ "$canonicalization_available" -eq 0 ]; then
     return 0
   fi
   case "$left" in /*) ;; *) left="$DIR/$left" ;; esac

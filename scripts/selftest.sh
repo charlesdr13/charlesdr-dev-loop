@@ -2167,6 +2167,8 @@ mkdir -p "$NO_REALPATH/.charles/runs/own-plan" "$NO_REALPATH/docs/specs" "$NO_RE
 printf '# Own ungrilled plan\n' > "$NO_REALPATH/docs/specs/own-ungrilled.md"
 printf '# Run own-plan\n\n- flow: feature\n- spec: docs/specs/../specs/own-ungrilled.md\n- started: %s\n\n## Phases\n\n- [12:00Z] implement-chunk-A\n\n## Open items\n\n## Rollback\n\n' \
   "$CS_CLOSE" > "$NO_REALPATH/.charles/runs/own-plan/RUN.md"
+printf '{"ts":"%s","event":"start","lane":"explore","run":"foreign-old","dir":"%s","task":"old"}\n' \
+  "$CS_OLD" "$NO_REALPATH" > "$NO_REALPATH/.charles/dispatches.jsonl"
 for tool in bash dirname sed head jq sort tail grep awk basename date git wc ls; do
   ln -s "$(command -v "$tool")" "$NO_REALPATH_BIN/$tool"
 done
@@ -2176,9 +2178,21 @@ if [ "$no_realpath_rc" -eq 1 ] && grep -q 'ISSUE.*grill verdict' <<<"$no_realpat
   && grep -q 'WARN.*realpath' <<<"$no_realpath_status" \
   && ! grep -q 'NOTE.*grill verdict' <<<"$no_realpath_status" \
   && ! grep -q 'NOTE.*died mid-flow' <<<"$no_realpath_status"; then
-  echo "  PASS  non-canonical own spec and run block without realpath"; pass=$((pass+1))
+  echo "  PASS  non-canonical early and late findings block without realpath"; pass=$((pass+1))
 else
   echo "  FAIL  unavailable realpath must fail closed for own paths (rc=$no_realpath_rc)"; fail=$((fail+1))
+fi
+if grep -q 'ISSUE.*orphan' <<<"$no_realpath_status" \
+  && ! grep -q 'NOTE.*orphan' <<<"$no_realpath_status"; then
+  echo "  PASS  early unavailable-realpath finding matches later classification"; pass=$((pass+1))
+else
+  echo "  FAIL  unavailable realpath must classify early findings consistently"; fail=$((fail+1))
+fi
+if [ "$no_realpath_rc" -ne 0 ] \
+  && grep -q 'WARN.*realpath is unavailable for non-identical path attribution' <<<"$no_realpath_status"; then
+  echo "  PASS  degraded attribution blocks the non-canonical close"; pass=$((pass+1))
+else
+  echo "  FAIL  degraded attribution must block the non-canonical close (rc=$no_realpath_rc)"; fail=$((fail+1))
 fi
 
 # --- flow graph lookup -------------------------------------------------------
