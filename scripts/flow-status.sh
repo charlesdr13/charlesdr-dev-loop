@@ -60,6 +60,9 @@ if ! command -v realpath >/dev/null 2>&1; then
   fi
 fi
 
+closing_flow_run_id="${CLOSING%/}"
+closing_flow_run_id="${closing_flow_run_id##*/}"
+
 paths_match() {
   local left="${1%/}" right="${2%/}" left_key right_key
   [ "$left" = "$right" ] && return 0
@@ -79,8 +82,20 @@ paths_match() {
 }
 
 dispatch_is_attributable() {
+  local dispatch_ts="${1:-}" flow_run_id="${2:-}" spec_path="${3:-}"
   [ -z "$CLOSING" ] || [ "$attribution_degraded" -eq 1 ] || {
-    [ -n "${1:-}" ] && { [ "$1" = "$closing_started" ] || [[ "$1" > "$closing_started" ]]; }
+    # identity decides whenever present; the timestamp window only fills gaps; an
+    # identified FOREIGN record is excluded even when it falls inside the window.
+    case "$flow_run_id" in
+      ""|*[[:space:]]*) flow_run_id="" ;;
+    esac
+    if [ -n "$flow_run_id" ]; then
+      [ "$flow_run_id" = "$closing_flow_run_id" ]
+    elif [ -n "$spec_path" ]; then
+      spec_is_attributable "$spec_path"
+    else
+      [ -n "$dispatch_ts" ] && { [ "$dispatch_ts" = "$closing_started" ] || [[ "$dispatch_ts" > "$closing_started" ]]; }
+    fi
   }
 }
 
@@ -194,6 +209,14 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     orphan_ts="$(jq -r --arg r "$orphan" -s '
       [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r)) | .ts] | last // ""
     ' "$log" 2>/dev/null)"
+    orphan_flow_run_id="$(jq -r --arg r "$orphan" -s '
+      [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r))] | last |
+      if (.flow_run_id | type) == "string" then .flow_run_id else "" end
+    ' "$log" 2>/dev/null)"
+    orphan_spec_path="$(jq -r --arg r "$orphan" -s '
+      [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r))] | last |
+      if (.spec_path | type) == "string" then .spec_path else "" end
+    ' "$log" 2>/dev/null)"
     status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$orphan" 2>&1)"; status_rc=$?
     # Keep RUNNING visible as an ISSUE because doctor.sh only forwards ISSUE
     # lines. UNKNOWN remains an unresolved orphan candidate, never a dead lane.
@@ -215,7 +238,7 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
         detail="lane liveness is unknown — consult lane-status.sh before concluding"
         ;;
     esac
-    if dispatch_is_attributable "$orphan_ts"; then
+    if dispatch_is_attributable "$orphan_ts" "$orphan_flow_run_id" "$orphan_spec_path"; then
       say_bad "$finding"
     else
       say_repo "$finding"
@@ -236,36 +259,42 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
   ungraded_close=0
   ungraded_repo=0
   # ponytail: O(implements × reviews); index the log if its size makes this slow.
-  while IFS= read -r dispatch_ts; do
-    if dispatch_is_attributable "$dispatch_ts"; then
+  while IFS=$'\t' read -r dispatch_ts dispatch_flow_run_id dispatch_spec_path; do
+    if dispatch_is_attributable "$dispatch_ts" "$dispatch_flow_run_id" "$dispatch_spec_path"; then
       ungraded_close=$((ungraded_close+1))
     else
       ungraded_repo=$((ungraded_repo+1))
     fi
   done < <(last_ends | jq -r -s --arg t "$last_review" '
+    def flow_id($value):
+      if ($value | type) != "string" then ""
+      elif ($value | test("^[^[:space:]]+$")) then $value
+      else ""
+      end;
+    def text($value): if ($value | type) == "string" then $value else "" end;
     . as $all
     | [ $all[] | select(.lane == "review" and .rc == 0) ] as $reviews
     | $all[]
     | select(.lane == "implement" and .rc == 0)
     | . as $implement
     | select(
-        if (($implement.flow_run_id // "") != "" or ($implement.spec_path // "") != "") then
+        if ((flow_id($implement.flow_run_id) != "" or text($implement.spec_path) != "")) then
           # Fallback runs one way: an identity-less later review clears an identity-bearing implement because older or ambiguous dispatches are global; identity-bearing reviews still need a precise match.
           ([ $reviews[]
              | select((.ts // "") > ($implement.ts // ""))
              | select(
-                 ((.flow_run_id // "") != "" and ($implement.flow_run_id // "") != "" and .flow_run_id == $implement.flow_run_id)
+                 (flow_id(.flow_run_id) != "" and flow_id($implement.flow_run_id) != "" and flow_id(.flow_run_id) == flow_id($implement.flow_run_id))
                  or
-                 ((.spec_path // "") != "" and ($implement.spec_path // "") != "" and .spec_path == $implement.spec_path)
+                 (text(.spec_path) != "" and text($implement.spec_path) != "" and .spec_path == $implement.spec_path)
                  or
-                 ((.flow_run_id // "") == "" and (.spec_path // "") == "")
+                 (flow_id(.flow_run_id) == "" and text(.spec_path) == "")
                )
            ] | length) == 0
         else
           ($t == "" or .ts > $t)
         end
       )
-    | .ts // ""
+    | [(.ts // ""), flow_id(.flow_run_id), text(.spec_path)] | @tsv
   ')
   ungraded=$((ungraded_close + ungraded_repo))
   if [ "${ungraded:-0}" -gt 0 ]; then

@@ -4284,6 +4284,53 @@ else
   echo "  FAIL  a run with no recorded spec must close as before (rc=$a5_none_rc): $a5_none_out"; fail=$((fail+1))
 fi
 
+# --- A1 close attribution ------------------------------------------------------
+# One close-time fixture covers foreign, closing-run, legacy, and watchdog end
+# records together; no real lane is needed for the receipt census.
+A1="$BOX/a1-close-attribution"; A1_STATE="$A1/state"; A1_SPEC="$A1/docs/specs/plan.md"
+mkdir -p "$A1/.charles/runs/a1-close" "$(dirname "$A1_SPEC")" "$A1_STATE"
+printf 'green = "true"\n' > "$A1/.charles.toml"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n' > "$A1_SPEC"
+printf '# Run a1-close\n\n- flow: feature\n- spec: docs/specs/plan.md\n- started: 2026-09-03T00:00:00Z\n\n## Phases\n\n- [00:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A1/.charles/runs/a1-close/RUN.md"
+printf '%s\n' \
+  "$(jq -nc --arg ts 2026-09-03T00:01:00Z --arg dir "$A1" --arg r a1-foreign-orphan --arg f foreign-flow \
+    '{ts:$ts,event:"start",lane:"explore",engine:"luna",run:$r,dir:$dir,task:"foreign orphan",flow_run_id:$f}')" \
+  "$(jq -nc --arg ts 2026-09-03T00:02:00Z --arg dir "$A1" --arg r a1-closing-orphan --arg f a1-close \
+    '{ts:$ts,event:"start",lane:"explore",engine:"luna",run:$r,dir:$dir,task:"closing orphan",flow_run_id:$f}')" \
+  "$(jq -nc --arg ts 2026-09-03T00:03:00Z --arg dir "$A1" --arg r a1-legacy-orphan \
+    '{ts:$ts,event:"start",lane:"explore",engine:"luna",run:$r,dir:$dir,task:"legacy orphan"}')" \
+  "$(jq -nc --arg ts 2026-09-03T00:04:00Z --arg dir "$A1" --arg r a1-watchdog-end --arg f a1-close --arg s "$A1_SPEC" \
+    '{ts:$ts,event:"start",lane:"implement",engine:"luna",run:$r,dir:$dir,task:"watchdog end",flow_run_id:$f,spec_path:$s}')" \
+  "$(jq -nc --arg ts 2026-09-03T00:05:00Z --arg dir "$A1" --arg r a1-watchdog-end --arg f a1-close --arg s "$A1_SPEC" \
+    '{ts:$ts,event:"end",lane:"implement",engine:"luna",model:"m",rc:143,run:$r,dir:$dir,task:"watchdog end",wrapper_death:true,flow_run_id:$f,spec_path:$s}')" \
+  "$(jq -nc --arg ts 2026-09-03T00:06:00Z --arg dir "$A1" --arg r a1-foreign-implement --arg f foreign-flow \
+    '{ts:$ts,event:"end",lane:"implement",engine:"luna",model:"m",rc:0,run:$r,dir:$dir,task:"foreign implement",flow_run_id:$f}')" \
+  > "$A1/.charles/dispatches.jsonl"
+a1_status_out="$(CHARLES_STATE_DIR="$A1_STATE" bash "$FS" "$A1" --closing "$A1/.charles/runs/a1-close" 2>&1)"; a1_status_rc=$?
+if [ "$a1_status_rc" -eq 1 ] \
+  && grep -qF 'NOTE   repo backlog (not this close): orphan dispatch a1-foreign-orphan' <<<"$a1_status_out" \
+  && grep -qF 'ISSUE  orphan dispatch a1-closing-orphan' <<<"$a1_status_out" \
+  && grep -qF 'ISSUE  orphan dispatch a1-legacy-orphan' <<<"$a1_status_out" \
+  && grep -qF 'NOTE   repo backlog (not this close): 1 implement dispatch(es) never reviewed' <<<"$a1_status_out" \
+  && ! grep -qF 'ISSUE  orphan dispatch a1-foreign-orphan' <<<"$a1_status_out" \
+  && ! grep -qF 'NOTE   repo backlog (not this close): orphan dispatch a1-closing-orphan' <<<"$a1_status_out" \
+  && ! grep -qF 'orphan dispatch a1-watchdog-end' <<<"$a1_status_out" \
+  && [ "$(grep -cF 'orphan dispatch' <<<"$a1_status_out")" -eq 3 ]; then
+  echo "  PASS  A1 close attribution keeps foreign, closing, legacy, and watchdog records distinct"; pass=$((pass+1))
+else
+  echo "  FAIL  A1 close attribution must classify all four records (rc=$a1_status_rc): $a1_status_out"; fail=$((fail+1))
+fi
+if [ "$a1_status_rc" -eq 1 ] \
+  && jq -e --arg f a1-close --arg s "$A1_SPEC" \
+    'select(.event == "end" and .run == "a1-watchdog-end" and .wrapper_death == true
+      and .flow_run_id == $f and .spec_path == $s)' \
+    "$A1/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  A1 watchdog end keeps identity while the close stays blocked"; pass=$((pass+1))
+else
+  echo "  FAIL  A1 watchdog end must keep identity and the blocking exit (rc=$a1_status_rc)"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
