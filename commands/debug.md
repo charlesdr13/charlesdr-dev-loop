@@ -40,4 +40,9 @@ while a run is open, every implement dispatch must name its requirements. Open
 the run with `run-state.sh init ... --spec docs/specs/<plan>.md`, and defer
 mid-flow discoveries with `run-state.sh defer <dir> "<text>"`.
 
+Flow 2 has no grill step by design. Before implementing, put this non-empty
+waiver under the plan's `## Grill verdict` section:
+`Grill waived: Flow 2 has no grill step by design.` R5 otherwise refuses the
+implement dispatch.
+
 If this repo has no `.charles.toml`, stop and offer `/charlesdr-dev-loop:init` first.

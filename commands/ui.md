@@ -100,6 +100,11 @@ Record anything you are not doing as a run item, typed:
 Taste disagreements belong in `BLOCKED-HUMAN`. Do not resolve them by guessing
 what the user would prefer.
 
+The UI router has no grill step by design. Before any implement dispatch, put
+this non-empty waiver under the plan's `## Grill verdict` section:
+`Grill waived: UI router has no grill step by design.` R5 otherwise refuses the
+dispatch.
+
 ## 5. Verify — four checks, none optional
 
 1. **Green** — `"$SCRIPTS/green.sh" "$(pwd)"`, paste the output.

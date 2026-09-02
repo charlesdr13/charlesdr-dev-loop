@@ -391,6 +391,21 @@ validate_dispatch_scope() {
   else
     plan_label="$PLAN"
   fi
+  local grill_section grill_basis=""
+  grill_section="$(awk '
+    !in_verdict && /^## Grill verdict([[:space:]]|$)/ { in_verdict=1; next }
+    in_verdict && /^## / { exit }
+    in_verdict { print }
+  ' "$plan_path")"
+  if grep -qE '^- Rounds:' <<<"$grill_section"; then
+    grill_basis="rounds"
+  elif grep -qE '^Grill waived:[[:space:]]*[^[:space:]].*$' <<<"$grill_section"; then
+    grill_basis="waived"
+  else
+    echo "codex-run.sh: REFUSING — spec $plan_label is missing '- Rounds:' or 'Grill waived: <reason>' in its Grill verdict section" >&2
+    return 5
+  fi
+  GRILL_BASIS="$grill_basis"
   # Sign-off is proof, not scope: ranged bullets there must not satisfy --req.
   for id in "${req_ids[@]}"; do
     pattern_id="${id//./[.]}"
@@ -537,8 +552,10 @@ log_start() {
      --arg engine "$event_engine" --arg run "$RUN_ID" --arg dir "$DIR" \
      --arg task "$(printf '%.200s' "$TASK")" --arg req "$REQ" \
      --arg allow_main_tree "$ALLOW_MAIN_TREE" \
+     --arg grill "${GRILL_BASIS:-}" \
      '{ts:$ts,event:"start",lane:$lane,engine:$engine,run:$run,dir:$dir,task:$task}
-      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end' \
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
+        + (if $grill == "" then {} else {grill:$grill} end) else . end' \
      >> "$f" 2>/dev/null
 }
 
@@ -562,8 +579,10 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
      --arg dir "$DIR" --arg task "$(printf '%.200s' "$TASK")" \
      --arg fallback_from "$fallback_from" --arg primary_rc "$primary_rc" --arg req "$REQ" \
      --arg allow_main_tree "$ALLOW_MAIN_TREE" \
+     --arg grill "${GRILL_BASIS:-}" \
      '{ts:$ts,event:"end",lane:$lane,engine:$engine,model:$model,rc:($rc|tonumber),run:$run,dir:$dir,task:$task}
-      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")} else . end
+      | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
+        + (if $grill == "" then {} else {grill:$grill} end) else . end
       | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
      >> "$f" 2>/dev/null || true
 }

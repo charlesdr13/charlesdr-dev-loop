@@ -570,7 +570,7 @@ EOF
 chmod +x "$PD/bin/git"
 
 mkdir -p "$PD/r10-repo/docs/specs"
-printf '# Plan\n\n- [ ] **R1.2. alpha work**\n- [ ] **R2.3b. beta work**\n' \
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1.2. alpha work**\n- [ ] **R2.3b. beta work**\n' \
   > "$PD/r10-repo/docs/specs/plan.md"
 printf '[{"name":"alpha","files":["alpha"],"task":"x","req":["R1.2"]},{"name":"beta","files":["beta"],"task":"x","req":["R2.3b"]}]\n' \
   > "$PD/r10-repo/docs/specs/plan.chunks.json"
@@ -1145,8 +1145,8 @@ fi
 SPECBIND="$BOX/spec-bind"; mkdir -p "$SPECBIND/bin" "$SPECBIND/docs/specs" \
   "$SPECBIND/.charles/runs/legacy-run"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SPECBIND/bin/codex"; chmod +x "$SPECBIND/bin/codex"
-printf '# Old plan\n\n- [ ] **R1. old requirement**\n' > "$SPECBIND/docs/specs/old.md"
-printf '# New plan\n\n- [ ] **R1. replacement requirement**\n' > "$SPECBIND/docs/specs/new.md"
+printf '# Old plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. old requirement**\n' > "$SPECBIND/docs/specs/old.md"
+printf '# New plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. replacement requirement**\n' > "$SPECBIND/docs/specs/new.md"
 printf '# Run legacy-run\n\n- flow: feature\n- started: now\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$SPECBIND/.charles/runs/legacy-run/RUN.md"
 printf '# Outside plan\n\n- [ ] **R1. outside requirement**\n' > "$BOX/outside-plan.md"
@@ -1379,7 +1379,7 @@ fi
 REQDIR="$BOX/req-scope"; mkdir -p "$REQDIR/bin" "$REQDIR/docs/specs" "$REQDIR/.charles/runs/open-run"
 printf '#!/usr/bin/env bash\n[ -z "${CHARLES_LANE_MARKER:-}" ] || : > "$CHARLES_LANE_MARKER"\nexit 0\n' \
   > "$REQDIR/bin/codex"; chmod +x "$REQDIR/bin/codex"
-printf '# Plan\n\n- [ ] **R1. first requirement**\n- [ ] **A3. second requirement**\n' \
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. first requirement**\n- [ ] **A3. second requirement**\n' \
   > "$REQDIR/docs/specs/plan.md"
 printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$REQDIR/.charles/runs/open-run/RUN.md"
@@ -1414,7 +1414,7 @@ fi
 
 REQMATCH="$BOX/req-matcher"; mkdir -p "$REQMATCH/bin" "$REQMATCH/docs/specs" "$REQMATCH/.charles/runs/open-run"
 cp "$REQDIR/bin/codex" "$REQMATCH/bin/codex"
-printf '# Plan\n\n- [ ] **R1. own convention**\n- **A1** alternate convention\n- [X] **R1.1. dotted identifier**\n- **R2.3b** suffixed identifier\n- [x] **X2c. suffixed identifier**\n\n## Sign-off\n\n- [x] **R9. sign-off only**\n- [x] **R1.1-R1.3** ranged sign-off\n' \
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. own convention**\n- **A1** alternate convention\n- [X] **R1.1. dotted identifier**\n- **R2.3b** suffixed identifier\n- [x] **X2c. suffixed identifier**\n\n## Sign-off\n\n- [x] **R9. sign-off only**\n- [x] **R1.1-R1.3** ranged sign-off\n' \
   > "$REQMATCH/docs/specs/matcher.md"
 printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/matcher.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$REQMATCH/.charles/runs/open-run/RUN.md"
@@ -1486,7 +1486,7 @@ REQWT="$BOX/req-worktree"; mkdir -p "$REQWT/bin" "$REQWT/main/docs/specs"
 (
   cd "$REQWT/main" && git init -q && git config user.name tester \
     && git config user.email tester@example.invalid \
-    && printf '# Plan\n\n- [ ] **R1. worktree requirement**\n' > docs/specs/plan.md \
+    && printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. worktree requirement**\n' > docs/specs/plan.md \
     && git add . && git commit -qm init
 )
 git -C "$REQWT/main" worktree add -q "$REQWT/worktree" HEAD
@@ -1511,8 +1511,8 @@ fi
 REQAMB="$BOX/req-ambiguous"; mkdir -p "$REQAMB/bin" "$REQAMB/docs/specs" \
   "$REQAMB/.charles/runs/run-alpha-20260821" "$REQAMB/.charles/runs/run-beta-20260821"
 cp "$REQDIR/bin/codex" "$REQAMB/bin/codex"
-printf '# Plan alpha\n\n- [ ] **R1. alpha requirement**\n' > "$REQAMB/docs/specs/plan-alpha.md"
-printf '# Plan beta\n\n- [ ] **A3. beta requirement**\n' > "$REQAMB/docs/specs/plan-beta.md"
+printf '# Plan alpha\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. alpha requirement**\n' > "$REQAMB/docs/specs/plan-alpha.md"
+printf '# Plan beta\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **A3. beta requirement**\n' > "$REQAMB/docs/specs/plan-beta.md"
 printf '# Run run-alpha-20260821\n\n- flow: feature\n- spec: docs/specs/plan-alpha.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$REQAMB/.charles/runs/run-alpha-20260821/RUN.md"
 printf '# Run run-beta-20260821\n\n- flow: feature\n- spec: docs/specs/plan-beta.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
@@ -1607,7 +1607,7 @@ fi
 REQEXACT="$BOX/req-exact"; mkdir -p "$REQEXACT/bin" "$REQEXACT/docs/specs" \
   "$REQEXACT/.charles/runs/run-target" "$REQEXACT/.charles/runs/prefix-run-target-suffix"
 cp "$REQDIR/bin/codex" "$REQEXACT/bin/codex"
-printf '# Target plan\n\n- [ ] **R1. target requirement**\n' > "$REQEXACT/docs/specs/target.md"
+printf '# Target plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. target requirement**\n' > "$REQEXACT/docs/specs/target.md"
 printf '# Other plan\n\n- [ ] **A3. other requirement**\n' > "$REQEXACT/docs/specs/other.md"
 printf '# Run run-target\n\n- flow: feature\n- spec: docs/specs/target.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$REQEXACT/.charles/runs/run-target/RUN.md"
@@ -3418,6 +3418,97 @@ if grep -qF '## Select by work-kind' "$flow_skill" \
   echo "  PASS  flow selector table keeps UI as a router"; pass=$((pass+1))
 else
   echo "  FAIL  flow selector table must keep UI as a router"; fail=$((fail+1))
+fi
+
+# --- R5 grill gate ------------------------------------------------------------
+R5DIR="$BOX/r5-grill"; mkdir -p "$R5DIR/bin" "$R5DIR/docs/specs" "$R5DIR/.charles/runs/open-run"
+cp "$REQDIR/bin/codex" "$R5DIR/bin/codex"
+r5_run_md="$R5DIR/.charles/runs/open-run/RUN.md"
+r5_log="$R5DIR/.charles/dispatches.jsonl"
+
+printf '# Plan\n\n- [ ] **R1. ungrilled**\n' > "$R5DIR/docs/specs/ungrilled.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/ungrilled.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
+r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
+  CHARLES_LANE_MARKER="$R5DIR/lane-ran" \
+  bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --no-fallback --timeout 2 "r5 ungrilled" 2>&1)"; r5_rc=$?
+if [ "$r5_rc" -eq 5 ] \
+  && grep -qF 'docs/specs/ungrilled.md' <<<"$r5_out" \
+  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_out"; then
+  echo "  PASS  R5 refuses an ungrilled spec with the missing marker"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 must refuse an ungrilled spec (rc=$r5_rc): $r5_out"; fail=$((fail+1))
+fi
+if [ ! -s "$r5_log" ] && [ ! -e "$R5DIR/lane-ran" ]; then
+  echo "  PASS  R5 refusal writes no dispatch event or lane marker"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 refusal must write no dispatch event or lane marker"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n- Reviewer note: first section has no marker.\n\n## Grill verdict\n\n- Rounds: 2\n\n- [ ] **R1. duplicate heading**\n' > "$R5DIR/docs/specs/duplicate.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/duplicate.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
+r5_duplicate_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --validate-only --no-fallback --timeout 2 \
+  "r5 duplicate verdict" 2>&1)"; r5_duplicate_rc=$?
+if [ "$r5_duplicate_rc" -eq 5 ] \
+  && grep -qF 'docs/specs/duplicate.md' <<<"$r5_duplicate_out" \
+  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_duplicate_out"; then
+  echo "  PASS  R5 uses only the first duplicate Grill verdict section"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 must refuse a marker found only in a duplicate verdict section (rc=$r5_duplicate_rc): $r5_duplicate_out"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n- [ ] **R1. rounds acceptance**\n' > "$R5DIR/docs/specs/rounds.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/rounds.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
+r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --no-fallback --timeout 2 "r5 rounds" 2>&1)"; r5_rc=$?
+if [ "$r5_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .grill == "rounds")' "$r5_log" >/dev/null 2>&1 \
+  && jq -e 'select(.event == "end" and .grill == "rounds")' "$r5_log" >/dev/null 2>&1; then
+  echo "  PASS  R5 accepts a Rounds verdict and records it on both events"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 must accept and record a Rounds verdict (rc=$r5_rc): $r5_out"; fail=$((fail+1))
+fi
+
+: > "$r5_log"
+printf '# Plan\n\n## Grill verdict\n\nGrill waived: UI router has no grill step by design.\n\n- [ ] **R1. waiver acceptance**\n' > "$R5DIR/docs/specs/waiver.md"
+printf '# Run open-run\n\n- flow: ui\n- spec: docs/specs/waiver.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
+r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --no-fallback --timeout 2 "r5 waiver" 2>&1)"; r5_rc=$?
+if [ "$r5_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .grill == "waived")' "$r5_log" >/dev/null 2>&1 \
+  && jq -e 'select(.event == "end" and .grill == "waived")' "$r5_log" >/dev/null 2>&1; then
+  echo "  PASS  R5 accepts a non-empty waiver and records it on both events"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 must accept and record a waiver (rc=$r5_rc): $r5_out"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n## Grill verdict\n\n_(pending)_\n\n- [ ] **R1. pending verdict**\n' > "$R5DIR/docs/specs/pending.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/pending.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
+r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
+  bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --validate-only --no-fallback --timeout 2 "r5 pending" 2>&1)"; r5_rc=$?
+if [ "$r5_rc" -eq 5 ] \
+  && grep -qF 'docs/specs/pending.md' <<<"$r5_out" \
+  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_out"; then
+  echo "  PASS  R5 refuses a placeholder pending verdict"; pass=$((pass+1))
+else
+  echo "  FAIL  R5 must refuse a placeholder pending verdict (rc=$r5_rc): $r5_out"; fail=$((fail+1))
+fi
+
+printf '# Plan\n\n- [ ] **R1. parallel ungrilled**\n' > "$PD/r10-repo/docs/specs/parallel-ungrilled.md"
+printf '[{"name":"alpha","files":["r5-parallel-alpha"],"task":"x","req":["R1"]},{"name":"beta","files":["r5-parallel-beta"],"task":"x","req":["R1"]}]\n' \
+  > "$PD/r10-repo/docs/specs/parallel-ungrilled.chunks.json"
+mkdir -p "$PD/r10-repo/.charles/runs/r5-parallel"
+printf '# Run r5-parallel\n\n- flow: feature\n- spec: docs/specs/parallel-ungrilled.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$PD/r10-repo/.charles/runs/r5-parallel/RUN.md"
+r5_parallel_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/parallel-ungrilled.chunks.json" \
+  --run r5-parallel --no-green 2>&1)"; r5_parallel_rc=$?
+if [ "$r5_parallel_rc" -eq 1 ] \
+  && grep -qF 'invalid manifest: chunk alpha requirement scope was refused' <<<"$r5_parallel_out" \
+  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_parallel_out"; then
+  echo "  PASS  parallel preflight refuses an ungrilled spec"; pass=$((pass+1))
+else
+  echo "  FAIL  parallel preflight must refuse an ungrilled spec (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
 fi
 
 echo
