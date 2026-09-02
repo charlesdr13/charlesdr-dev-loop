@@ -4422,6 +4422,49 @@ else
   echo "  FAIL  untracked plain text must remain an added line (hits=$a7_plain_hits rc=$a7_rc): $a7_out"; fail=$((fail+1))
 fi
 
+# --- A10 provider errors fail fast; quiet work still reaches normal completion -
+A10="$BOX/a10-provider"; A10_UNREACHABLE="$A10/unreachable"; A10_SLOW="$A10/slow"
+mkdir -p "$A10_UNREACHABLE/bin" "$A10_SLOW/bin"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'for _ in 1 2 3 4; do' \
+  '  printf "%s\n" "failed to lookup address information: Try again" >&2' \
+  '  sleep 0.1' \
+  'done' \
+  'while :; do sleep 1; done' > "$A10_UNREACHABLE/bin/codex"
+chmod +x "$A10_UNREACHABLE/bin/codex"
+a10_unreachable_out="$(CHARLES_STATE_DIR="$A10_UNREACHABLE/state" PATH="$A10_UNREACHABLE/bin:$PATH" \
+  timeout 5 bash "$RUN_SH" --lane explore --dir "$A10_UNREACHABLE" \
+  --no-fallback --timeout 3 "provider unavailable" 2>&1)"; a10_unreachable_rc=$?
+a10_unreachable_ends="$(jq -r 'select(.event == "end") | .rc' \
+  "$A10_UNREACHABLE/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
+if [ "$a10_unreachable_rc" -eq 125 ] \
+  && grep -qF 'provider unreachable' <<<"$a10_unreachable_out" \
+  && [ "$a10_unreachable_ends" -eq 1 ] \
+  && jq -e 'select(.event == "end" and .rc == 125)' \
+    "$A10_UNREACHABLE/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  A10 repeated provider errors fail fast with one terminal record"; pass=$((pass+1))
+else
+  echo "  FAIL  A10 repeated provider errors must fail fast once (rc=$a10_unreachable_rc, ends=$a10_unreachable_ends): $a10_unreachable_out"; fail=$((fail+1))
+fi
+
+printf '%s\n' '#!/usr/bin/env bash' \
+  'sleep 1' \
+  'touch "${CHARLES_A10_SLOW_DONE:?}"' > "$A10_SLOW/bin/codex"
+chmod +x "$A10_SLOW/bin/codex"
+a10_slow_out="$(CHARLES_A10_SLOW_DONE="$A10_SLOW/finished" \
+  CHARLES_STATE_DIR="$A10_SLOW/state" PATH="$A10_SLOW/bin:$PATH" \
+  timeout 5 bash "$RUN_SH" --lane explore --dir "$A10_SLOW" \
+  --no-fallback --timeout 3 "slow quiet" 2>&1)"; a10_slow_rc=$?
+if [ "$a10_slow_rc" -eq 0 ] \
+  && [ -e "$A10_SLOW/finished" ] \
+  && jq -e 'select(.event == "end" and .rc == 0)' \
+    "$A10_SLOW/.charles/dispatches.jsonl" >/dev/null 2>&1 \
+  && ! grep -qF 'provider unreachable' <<<"$a10_slow_out"; then
+  echo "  PASS  A10 quiet slow lane reaches normal completion"; pass=$((pass+1))
+else
+  echo "  FAIL  A10 quiet slow lane must not be terminated early (rc=$a10_slow_rc): $a10_slow_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

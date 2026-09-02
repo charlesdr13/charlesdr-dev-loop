@@ -660,6 +660,51 @@ stop_watchdog() {
   rm -f "$WATCHDOG_STATE_FILE" "$WATCHDOG_STOP_FILE" "$CHILD_PID_FILE" 2>/dev/null || true
 }
 
+watch_provider_errors() { # watch_provider_errors ERROR PID START_OFFSET
+  local error="$1" child_pid="$2" offset="${3:-0}" size chunk matches now stamp
+  local recent="" pruned="" recent_count=0 i
+  # Conservative threshold: 3 matching lines within 10 seconds. Missing a
+  # stall is safer than killing healthy work; a stable provider error schema is
+  # the upgrade path if codex exposes one.
+  local threshold=3 window=10
+  local provider_signal='failed to lookup address information|temporary failure in name resolution|name or service not known|could not resolve host|unable to resolve host'
+
+  offset="${offset//[[:space:]]/}"
+  [ -n "$offset" ] || offset=0
+  while kill -0 "$child_pid" 2>/dev/null; do
+    if [ -r "$error" ]; then
+      size="$(wc -c < "$error" 2>/dev/null || true)"
+      size="${size//[[:space:]]/}"
+      [ -n "$size" ] || size=0
+      [ "$size" -lt "$offset" ] 2>/dev/null && offset=0
+      if [ "$size" -gt "$offset" ] 2>/dev/null; then
+        chunk="$(tail -c +$((offset + 1)) "$error" 2>/dev/null || true)"
+        offset="$size"
+        matches="$(grep -Eic "$provider_signal" <<<"$chunk" 2>/dev/null || true)"
+        [ -n "$matches" ] || matches=0
+        now="$(date +%s)"
+        pruned=""; recent_count=0
+        for stamp in $recent; do
+          if [ "$((now - stamp))" -le "$window" ]; then
+            pruned+=" $stamp"; recent_count=$((recent_count + 1))
+          fi
+        done
+        recent="$pruned"
+        for ((i = 0; i < matches; i++)); do
+          recent+=" $now"; recent_count=$((recent_count + 1))
+        done
+        if [ "$recent_count" -ge "$threshold" ]; then
+          kill -TERM -- "-$child_pid" 2>/dev/null || kill -TERM "$child_pid" 2>/dev/null || true
+          sleep 0.1
+          kill -KILL -- "-$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+          return 125
+        fi
+      fi
+    fi
+    sleep 0.2
+  done
+}
+
 run_attempt() { # run_attempt ENGINE MODEL CWD STDOUT STDERR COMMAND...
   local attempt_engine="$1" attempt_model="$2" cwd="$3" output="$4" error="$5"
   shift 5
@@ -674,8 +719,17 @@ run_attempt() { # run_attempt ENGINE MODEL CWD STDOUT STDERR COMMAND...
   setsid bash -c 'printf "%s\n" "$$" > "$1"; cwd="$2"; shift 2; cd -- "$cwd" && exec "$@"' \
     _ "$CHILD_PID_FILE" "$cwd" "$@" > "$output" 2> "$error" &
   CHILD_PID=$!
+  local provider_watch_pid provider_watch_rc=0 provider_error_offset
+  provider_error_offset="$(wc -c < "$error" 2>/dev/null || printf 0)"
+  watch_provider_errors "$error" "$CHILD_PID" "$provider_error_offset" &
+  provider_watch_pid=$!
   local rc=0
   wait "$CHILD_PID" || rc=$?
+  wait "$provider_watch_pid" || provider_watch_rc=$?
+  if [ "$provider_watch_rc" -eq 125 ]; then
+    rc=125
+    echo "codex-run.sh: provider unreachable — terminated after repeated errors" >&2
+  fi
   log_dispatch "$attempt_engine" "$rc" "${ATTEMPT_FALLBACK_FROM:-}" \
     "${ATTEMPT_PRIMARY_RC:-}" "$attempt_model"
   write_watchdog_state 0 "$attempt_engine" "$attempt_model" \
