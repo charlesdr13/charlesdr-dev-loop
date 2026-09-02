@@ -272,4 +272,15 @@ A2 warrants one. Out of scope for edits: every other file in the repo.
 
 ## Sign-off
 
-_(pending)_
+Green at close: `selftest 362 passed, 0 failed` · `doctor 22 ok, 0 failing`.
+Baseline at open was `338 passed, 0 failed`. Version 2.36.0.
+
+- [x] **A1** — close attribution uses the flow-run id, not a timestamp window — `f11d86b`, `2d0d52a`, `ebc5117`. The watchdog record now carries identity; attribution matches on `flow_run_id` when present and falls back to the window otherwise; identity outranks degradation. A parsing hole found in final review is fixed: `IFS=$'\t'` collapsed an empty middle field, so a record with `spec_path` and no `flow_run_id` had its spec parsed as the run id and was excluded as foreign — letting a close pass that should have blocked. Verified identical output on seven real repos.
+- [x] **A3** — a run item can be resolved without hand-editing — `9fce6dc`. `run-state.sh resolve` ticks one item and appends a note; proved live: ambiguous selector names both candidates, unique selector resolves, no match refuses.
+- [x] **A4** — an ambiguous open run is refused, not guessed — `9fce6dc`. Proved live with two open runs: `phase`, `resolve` and `close` all refuse with rc=2 and no `--run`. The final review called this unimplemented from the diff alone; running the code disproved that.
+- [x] **A5** — close without `--spec` still checks the run's recorded plan — `9fce6dc`. Proved live: a bare close of a run whose recorded spec has a pending sign-off is refused with rc=6. Missing or unreadable recorded spec is refused by name; `--force` still overrides.
+- [x] **A6** — `--req` validation does not depend on a filename convention — `d5e1daa`. The narrowed hole (no open run and no resolvable plan) is refused with exit 2; the single-open-run and `--run` paths are asserted unchanged.
+- [x] **A7** — the review diff shows the real change — `5c04342`. Replaced hand-rolled synthesis with `git diff --no-index`. Proved on real files: `100755` for an executable, `120000` for a symlink with its target untraversed, binary reported as binary, plain text unchanged.
+- [x] **A8** — attribution degradation is decided once, before any check runs — `a66033c`. Also caught and reverted a safety regression in the first implementation, where per-path canonicalisation failure would have turned a blocking ISSUE into a NOTE and let a close through.
+- [x] **A9** — the plan requirement format is documented where plans are written — `23344b3`. The skill states the bullet grammar, including that identifiers below `## Sign-off` do not count, and a selftest keeps contract and documentation together.
+- [x] **A10** — **implemented, measured, reverted** — `dae0f70`, reverted in `58b3151`. Not shipped, deliberately. Measured against all eight recorded occurrences: cadence is at most two errors per ten seconds against a three-in-ten threshold, so it would never have fired; and five of the eight signalling lanes recovered, one with seven occurrences — the same count as two that died. No threshold both fires and is safe. The measurement is on the backlog item so the next attempt starts from evidence.
