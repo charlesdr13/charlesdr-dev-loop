@@ -64,6 +64,8 @@ if [ -n "$orphan_runs" ]; then
     if [ "$status_rc" -eq 0 ]; then
       in_flight=1
       echo "ORPHAN: $run — lane in flight; do not classify tree changes yet." >&2
+    elif [ "$status_rc" -eq 3 ]; then
+      echo "ORPHAN: $run — lane liveness is unknown; do not classify tree changes yet." >&2
     else
       echo "ORPHAN: $run — killed lane may own these changes — census before discarding" >&2
     fi

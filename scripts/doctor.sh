@@ -127,6 +127,8 @@ if [ -f "$PWD/.charles.toml" ]; then
       while IFS= read -r line; do
         case "$line" in
           *ISSUE*)
+            # flow-status keeps RUNNING and UNKNOWN visible as ISSUE lines;
+            # doctor surfaces active or indeterminate work as WARN, not FAIL.
             if [ "$open_n" -gt 0 ] && [[ "$line" == *"implement dispatch(es) never reviewed"* ]]; then
               # A live run still has a plan and diff for the reviewer; block green until it is graded.
               say FAIL "${line#*ISSUE  }"

@@ -491,7 +491,7 @@ on success, so a killed lane leaves nothing and a waiter cannot tell "still
 working" from "died twelve minutes ago".
 
 ```bash
-scripts/lane-status.sh        # 0 RUNNING · 1 DONE · 2 DEAD
+scripts/lane-status.sh        # 0 RUNNING · 1 DONE · 2 DEAD · 3 UNKNOWN
 ```
 
 Every dispatch now also writes a `.done` marker with its exit code on every

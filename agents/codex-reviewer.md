@@ -107,8 +107,9 @@ tool call with `run_in_background: true` and the real timeout:
 
 The harness callback is the completion signal. If it is lost, use
 `lane-status.sh` for at most three checks; exit 1 means `DONE`, exit 2 means
-`DEAD` and must be reported as `FAILED`, and still running after the third check
-is also `FAILED`. Never re-dispatch it.
+`DEAD` and must be reported as `FAILED`, exit 3 means `UNKNOWN`: liveness could
+not be determined; do not conclude the lane is dead, and still running after the
+third check is also `FAILED`. Never re-dispatch it.
 
 ## If you end up waiting
 

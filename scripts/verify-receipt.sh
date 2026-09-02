@@ -62,6 +62,8 @@ lane_status() {
   out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$run_id" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then
     echo "ORPHAN: $run_id — lane in flight; consult lane-status.sh before concluding." >&2
+  elif [ "$rc" -eq 3 ]; then
+    echo "ORPHAN: $run_id — lane liveness is unknown; consult lane-status.sh before concluding." >&2
   else
     echo "ORPHAN: $run_id — lane killed mid-write; consult lane-status.sh before concluding." >&2
   fi

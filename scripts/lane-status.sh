@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lane-status.sh — is a dispatch still alive, finished, or dead?
+# lane-status.sh — is a dispatch still alive, finished, dead, or unknown?
 #
 #   lane-status.sh              status of the newest dispatch in repo context
 #   lane-status.sh <run-id>     status of a specific one
@@ -8,6 +8,7 @@
 # exit 0  RUNNING   — genuinely still working, keep waiting (within your cap)
 # exit 1  DONE      — finished; the result is on stdout's named file
 # exit 2  DEAD/NONE — no process and no result, or no scoped dispatch exists
+# exit 3  UNKNOWN   — artifacts are insufficient to determine liveness
 set -uo pipefail
 
 STATE="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
@@ -106,17 +107,50 @@ fi
 base="$STATE/$run"
 [ -f "$base.jsonl" ] && [ ! -s "$base.jsonl" ] && state_pending=1
 
-# pgrep -f matches this script too, since the run id is our own argument.
-# Skip ourselves, our parent, and any other status check.
+# The watchdog deliberately keeps the run id out of its command line. Its state
+# file and recorded child PID are the durable liveness evidence; PID reuse is an
+# accepted stale-warning risk for this probe.
 alive=0
-for pid in $(pgrep -f "$run" 2>/dev/null); do
-  [ "$pid" = "$$" ] && continue
-  [ "$pid" = "${PPID:-0}" ] && continue
-  cmd="$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ')"
-  case "$cmd" in *lane-status*) continue ;; esac
-  [ -n "$cmd" ] || continue
-  alive=1; break
-done
+unknown_reason=""
+if [ ! -e "$base.done" ] && [ ! -s "$base.last" ]; then
+  watchdog_state="$base.watchdog.state"
+  if [ ! -f "$watchdog_state" ] || [ ! -r "$watchdog_state" ] || [ ! -s "$watchdog_state" ]; then
+    unknown_reason="watchdog state is missing or unreadable"
+  else
+    active=""; engine=""; model=""; fallback_from=""; primary_rc=""; pid_file=""
+    IFS='|' read -r active engine model fallback_from primary_rc pid_file < "$watchdog_state" || true
+    case "$active" in
+      0) ;; # the wrapper recorded that no attempt is active
+      1)
+        case "$pid_file" in
+          "") unknown_reason="watchdog state has no child PID file" ;;
+          /*) ;;
+          *) pid_file="$STATE/$pid_file" ;;
+        esac
+        if [ -z "$unknown_reason" ]; then
+          if [ ! -f "$pid_file" ] || [ ! -r "$pid_file" ] || [ ! -s "$pid_file" ]; then
+            unknown_reason="child PID file is missing or unreadable"
+          else
+            child_pid="$(head -1 "$pid_file" 2>/dev/null || true)"
+            if [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] && [ "$child_pid" -gt 1 ]; then
+              kill -0 "$child_pid" 2>/dev/null && alive=1
+            else
+              unknown_reason="child PID file is invalid"
+            fi
+          fi
+        fi
+        ;;
+      *) unknown_reason="watchdog state has an invalid active flag" ;;
+    esac
+  fi
+fi
+
+if [ -n "$unknown_reason" ]; then
+  echo "UNKNOWN: $run — $unknown_reason"
+  [ "$state_pending" -eq 1 ] && echo "  state pending — start recorded, transcript not written yet"
+  echo "  Do not classify this dispatch as dead until its artifacts can be inspected."
+  exit 3
+fi
 
 if [ "$alive" -eq 1 ]; then
   echo "RUNNING: $run"

@@ -1801,7 +1801,7 @@ fi
 
 # --- lane liveness ------------------------------------------------------------
 # Waiting on .last cannot distinguish "not finished yet" from "killed"; agents
-# sat stuck 27 minutes on dead engines. lane-status asks the process instead.
+# sat stuck 27 minutes on dead engines. lane-status asks the watchdog artifacts.
 LS="$(cd "$(dirname "$0")/.." && pwd)/scripts/lane-status.sh"
 LD="$BOX/lanes"; mkdir -p "$LD"
 
@@ -1819,9 +1819,13 @@ CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-111111-explore >/dev/null 2>&
              || { echo "  FAIL  timed-out dispatch should be DEAD"; fail=$((fail+1)); }
 
 touch "$LD/20260101-000000-222222-explore.jsonl"
-CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-222222-explore >/dev/null 2>&1
-[ $? -eq 2 ] && { echo "  PASS  SIGKILLed dispatch (no marker) reports DEAD"; pass=$((pass+1)); } \
-             || { echo "  FAIL  unmarked dispatch should be DEAD"; fail=$((fail+1)); }
+unknown_lane_out="$(CHARLES_STATE_DIR="$LD" bash "$LS" 20260101-000000-222222-explore 2>&1)"; unknown_lane_rc=$?
+if [ "$unknown_lane_rc" -eq 3 ] && grep -q 'UNKNOWN: 20260101-000000-222222-explore' <<<"$unknown_lane_out" \
+  && ! grep -q 'DEAD:' <<<"$unknown_lane_out"; then
+  echo "  PASS  dispatch with no liveness artifacts reports UNKNOWN, not DEAD"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch with no liveness artifacts should report UNKNOWN (rc=$unknown_lane_rc)"; fail=$((fail+1))
+fi
 
 touch "$LD/20260101-000000-333333-explore.jsonl"
 printf 'result\n' > "$LD/20260101-000000-333333-explore.last"
@@ -1862,7 +1866,12 @@ for _ in $(seq 1 40); do
   [ -n "$pending_run" ] && break
   sleep 0.05
 done
-pending_out="$(CHARLES_STATE_DIR="$PENDING/state" bash "$LS" --dir "$PENDING" "$pending_run" 2>&1)"; pending_rc=$?
+pending_out=""; pending_rc=3
+for _ in $(seq 1 40); do
+  pending_out="$(CHARLES_STATE_DIR="$PENDING/state" bash "$LS" --dir "$PENDING" "$pending_run" 2>&1)"; pending_rc=$?
+  [ "$pending_rc" -eq 0 ] && break
+  sleep 0.05
+done
 if [ "$pending_rc" -eq 0 ] && grep -q 'RUNNING: ' <<<"$pending_out" \
   && grep -q 'state pending' <<<"$pending_out" \
   && [ -f "$PENDING/state/$pending_run.jsonl" ] && [ ! -s "$PENDING/state/$pending_run.jsonl" ]; then
@@ -1877,6 +1886,38 @@ wait "$pending_pid" 2>/dev/null
 # A dispatch succeeding is not a flow finishing. The audit that motivated this
 # found 19% review coverage and 1 grill verdict across 13 plans.
 FS="$(cd "$(dirname "$0")/.." && pwd)/scripts/flow-status.sh"
+
+# R4: a live start with no end is RUNNING, not an orphan. The PID is this
+# selftest process; no Codex lane is launched for this synthetic artifact check.
+R4="$BOX/r4-liveness"; R4_STATE="$R4/state"; R4_RUN="live-r4"
+mkdir -p "$R4/.charles" "$R4_STATE"
+R4_PID_FILE="$R4_STATE/$R4_RUN.child.1"
+printf '{"ts":"%s","event":"start","lane":"explore","engine":"luna","run":"%s","dir":"%s","task":"live"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$R4_RUN" "$R4" > "$R4/.charles/dispatches.jsonl"
+printf '1|luna|m|||%s\n' "$R4_PID_FILE" > "$R4_STATE/$R4_RUN.watchdog.state"
+printf '%s\n' "$$" > "$R4_PID_FILE"
+r4_flow_out="$(CHARLES_STATE_DIR="$R4_STATE" bash "$FS" "$R4" 2>&1)"; r4_flow_rc=$?
+if [ "$r4_flow_rc" -eq 1 ] && grep -q 'ISSUE.*RUNNING dispatch live-r4' <<<"$r4_flow_out" \
+  && ! grep -q 'orphan dispatch live-r4' <<<"$r4_flow_out"; then
+  echo "  PASS  live dispatch is RUNNING and not counted as an orphan"; pass=$((pass+1))
+else
+  echo "  FAIL  live dispatch must be RUNNING, not orphan (rc=$r4_flow_rc)"; fail=$((fail+1))
+fi
+
+R4_DONE="$BOX/r4-done"; R4_DONE_STATE="$R4_DONE/state"; R4_DONE_RUN="done-r4"
+mkdir -p "$R4_DONE/.charles" "$R4_DONE_STATE"
+printf '{"ts":"%s","event":"start","lane":"explore","engine":"luna","run":"%s","dir":"%s","task":"done"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$R4_DONE_RUN" "$R4_DONE" > "$R4_DONE/.charles/dispatches.jsonl"
+printf 'result\n' > "$R4_DONE_STATE/$R4_DONE_RUN.last"
+r4_done_flow_out="$(CHARLES_STATE_DIR="$R4_DONE_STATE" bash "$FS" "$R4_DONE" 2>&1)"; r4_done_flow_rc=$?
+if [ "$r4_done_flow_rc" -eq 1 ] \
+  && grep -q 'lane completed but its terminal dispatch record is missing' <<<"$r4_done_flow_out" \
+  && ! grep -q 'killed mid-write' <<<"$r4_done_flow_out"; then
+  echo "  PASS  completed dispatch without terminal record is not called killed"; pass=$((pass+1))
+else
+  echo "  FAIL  completed dispatch without terminal record must not be called killed (rc=$r4_done_flow_rc)"; fail=$((fail+1))
+fi
+
 FD="$BOX/flowrepo"; mkdir -p "$FD/.charles" "$FD/docs/specs"
 printf 'green = "true"\n' > "$FD/.charles.toml"
 FNOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -2391,6 +2432,10 @@ printf '{"ts":"%s","event":"start","lane":"implement","run":"inflight-orphan","d
   "$US_OLD" "$US_FLIGHT" > "$US_FLIGHT/.charles/dispatches.jsonl"
 bash -c 'while sleep 1; do :; done' inflight-orphan & flight_pid=$!
 sleep 0.1
+US_FLIGHT_STATE="$US_FLIGHT/state"; US_FLIGHT_PID_FILE="$US_FLIGHT_STATE/inflight-orphan.child.1"
+mkdir -p "$US_FLIGHT_STATE"
+printf '1|luna|m|||%s\n' "$US_FLIGHT_PID_FILE" > "$US_FLIGHT_STATE/inflight-orphan.watchdog.state"
+printf '%s\n' "$flight_pid" > "$US_FLIGHT_PID_FILE"
 flight_out="$(CHARLES_STATE_DIR="$US_FLIGHT/state" bash "$US" "$US_FLIGHT" 2>&1)"; flight_rc=$?
 kill "$flight_pid" 2>/dev/null || true; wait "$flight_pid" 2>/dev/null || true
 if [ "$flight_rc" -eq 3 ] && grep -q 'ORPHAN: inflight-orphan — lane in flight' <<<"$flight_out"; then
@@ -2412,12 +2457,18 @@ fi
 
 US_TOCTOU="$BOX/unsourced-toctou"; make_unsourced_repo "$US_TOCTOU"
 TOCTOU_BIN="$BOX/unsourced-toctou-bin"; mkdir -p "$TOCTOU_BIN"
-TOCTOU_REAL_PGREP="$(command -v pgrep)"
-printf '#!/usr/bin/env bash\nprintf "changed\\n" > "$TOCTOU_REPO/tracked"\nexec "$TOCTOU_REAL_PGREP" "$@"\n' > "$TOCTOU_BIN/pgrep"
-chmod +x "$TOCTOU_BIN/pgrep"
+TOCTOU_REAL_GIT="$(command -v git)"; TOCTOU_COUNT="$US_TOCTOU/.charles/status-count"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ "${1:-}" = "-C" ] && [ "${3:-}" = "status" ]; then' \
+  '  n="$(cat "$TOCTOU_COUNT" 2>/dev/null || echo 0)"' \
+  '  n=$((n + 1)); printf "%s\\n" "$n" > "$TOCTOU_COUNT"' \
+  '  [ "$n" -eq 2 ] && printf "changed\\n" > "$TOCTOU_REPO/tracked"' \
+  'fi' \
+  'exec "$TOCTOU_REAL_GIT" "$@"' > "$TOCTOU_BIN/git"
+chmod +x "$TOCTOU_BIN/git"
 printf '{"ts":"%s","event":"start","lane":"implement","run":"dead-toctou","dir":"%s","task":"t"}\n' \
   "$US_OLD" "$US_TOCTOU" > "$US_TOCTOU/.charles/dispatches.jsonl"
-toctou_out="$(TOCTOU_REPO="$US_TOCTOU" TOCTOU_REAL_PGREP="$TOCTOU_REAL_PGREP" \
+toctou_out="$(TOCTOU_REPO="$US_TOCTOU" TOCTOU_COUNT="$TOCTOU_COUNT" TOCTOU_REAL_GIT="$TOCTOU_REAL_GIT" \
   PATH="$TOCTOU_BIN:$PATH" CHARLES_STATE_DIR="$US_TOCTOU/state" bash "$US" "$US_TOCTOU" 2>&1)"; toctou_rc=$?
 if [ "$toctou_rc" -eq 3 ] && [ "$(cat "$US_TOCTOU/tracked")" = "changed" ] \
   && grep -q 'ORPHAN: dead-toctou' <<<"$toctou_out"; then

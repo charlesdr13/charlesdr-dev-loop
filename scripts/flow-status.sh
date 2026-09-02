@@ -185,17 +185,33 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     orphan_ts="$(jq -r --arg r "$orphan" -s '
       [.[] | select(.event == "start" and ((.run // "" | tostring | split("/") | last) == $r)) | .ts] | last // ""
     ' "$log" 2>/dev/null)"
-    if dispatch_is_attributable "$orphan_ts"; then
-      say_bad "orphan dispatch $orphan ($orphan_lane lane)"
-    else
-      say_repo "orphan dispatch $orphan ($orphan_lane lane)"
-    fi
     status_out="$(bash "$(dirname "$0")/lane-status.sh" --dir "$DIR" "$orphan" 2>&1)"; status_rc=$?
-    if [ "$status_rc" -eq 0 ]; then
-      echo "         lane in flight — consult lane-status.sh before concluding"
+    # Keep RUNNING visible as an ISSUE because doctor.sh only forwards ISSUE
+    # lines. UNKNOWN remains an unresolved orphan candidate, never a dead lane.
+    case "$status_rc" in
+      0)
+        finding="RUNNING dispatch $orphan ($orphan_lane lane)"
+        detail="lane in flight — consult lane-status.sh before concluding"
+        ;;
+      1)
+        finding="completed dispatch $orphan ($orphan_lane lane; terminal dispatch record missing)"
+        detail="lane completed but its terminal dispatch record is missing — consult lane-status.sh before concluding"
+        ;;
+      2)
+        finding="orphan dispatch $orphan ($orphan_lane lane)"
+        detail="lane killed mid-write — consult lane-status.sh before concluding"
+        ;;
+      3|*)
+        finding="orphan dispatch $orphan ($orphan_lane lane; liveness UNKNOWN)"
+        detail="lane liveness is unknown — consult lane-status.sh before concluding"
+        ;;
+    esac
+    if dispatch_is_attributable "$orphan_ts"; then
+      say_bad "$finding"
     else
-      echo "         lane killed mid-write — consult lane-status.sh before concluding"
+      say_repo "$finding"
     fi
+    echo "         $detail"
     echo "$status_out" | sed 's/^/         /'
   done <<<"$orphan_runs"
 fi
