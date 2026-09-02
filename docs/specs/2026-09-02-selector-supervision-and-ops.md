@@ -496,3 +496,7 @@ Baseline at open was `293 passed, 0 failed`. Ten commits, `10c1ff4..HEAD`.
 - [x] **R10** — the dispatcher symlink never points at a checkout — `2373fe7`. **Proved live**: run against this worktree the hook prints `refusing to link codex-run into a git working tree` and leaves the existing link untouched. Also rejects a cache target that resolves into a checkout.
 - [x] **R11** — Flow 5, release — `a058867` + `d38ff0b`. `flow.json` gains `guard → green → version → ship`; both hard-coded validator lists (`flow-status.sh:101`, `runs-sweep.sh:26`) updated; the command owns its run and closes through the normal path. Phases are recorded after `release.sh` returns — accepted risk above.
 - [x] **R12** — Flow 6, ops — `46316d5` + `d38ff0b`. `flow.json` gains `survey → select → recover → report`; `commands/ops.md` composes `runs-sweep.sh` with the R8 verbs. `runs-sweep.sh` proved read-only against a temporary root; the confirmation rule asserted as the documentation check it is.
+
+## Run outcome — 2026-09-02
+
+Flow selector, dispatch supervision and the release/ops flows. Twelve requirements, ten commits, selftest 293 -> 338, version 2.35.0. The orphan backlog's dominant cause is closed: terminate_dispatch now writes its own terminal record, proved in production on this run's own killed dispatch.
