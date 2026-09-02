@@ -2005,8 +2005,8 @@ CS_IMPL="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 CS_PLAN="$(date -u -d '4 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 CS_MID="$(date -u -d '3 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 CS_UNSOURCED="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
-printf '# Close plan\n\n## Grill verdict\n\n- Rounds: 1\n' > "$CS/docs/specs/close-plan.md"
-printf '# Own ungrilled plan\n' > "$CS/docs/specs/own-ungrilled.md"
+printf '# Close plan\n\n## Grill verdict\n\n- Rounds: 1\n\n## Sign-off\n\n- [x] close-scope fixture\n' > "$CS/docs/specs/close-plan.md"
+printf '# Own ungrilled plan\n\n## Sign-off\n\n- [x] close-scope fixture\n' > "$CS/docs/specs/own-ungrilled.md"
 printf '# Run close-run\n\n- flow: feature\n- spec: docs/specs/close-plan.md\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
   "$CS_CLOSE" "$CS" > "$CS/.charles/runs/close-run/RUN.md"
 printf '# Run stale-run\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
@@ -4075,6 +4075,115 @@ if grep -qF "HARD RULE: NEVER close, abandon, or delete another repository's run
   echo "  PASS  ops docs require explicit confirmation before cross-repo recovery"; pass=$((pass+1))
 else
   echo "  FAIL  ops docs must require explicit human confirmation before cross-repo recovery"; fail=$((fail+1))
+fi
+
+# --- A3 resolve and A4 run selection -------------------------------------------
+A3="$BOX/a3-resolve"; A3_RUN="$A3/.charles/runs/a3-run"; mkdir -p "$A3_RUN"
+printf '# Run a3-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n- [ ] **PENDING-DECISION** — unique alpha\n- [ ] **DEFERRED** — duplicate alpha\n- [ ] **FAILED** — duplicate alpha\n\n## Rollback\n\n' \
+  > "$A3_RUN/RUN.md"
+a3_resolve_out="$(bash "$RS" resolve "$A3" "unique alpha" "closed by selftest" 2>&1)"; a3_resolve_rc=$?
+if [ "$a3_resolve_rc" -eq 0 ] \
+  && grep -qF -- '- [x] **PENDING-DECISION** — unique alpha — resolved: closed by selftest' "$A3_RUN/RUN.md" \
+  && grep -qF -- '- [ ] **DEFERRED** — duplicate alpha' "$A3_RUN/RUN.md" \
+  && grep -qF -- '- [ ] **FAILED** — duplicate alpha' "$A3_RUN/RUN.md"; then
+  echo "  PASS  resolve ticks one item and appends its note"; pass=$((pass+1))
+else
+  echo "  FAIL  resolve must tick one item and append its note (rc=$a3_resolve_rc): $a3_resolve_out"; fail=$((fail+1))
+fi
+a3_ambig_out="$(bash "$RS" resolve "$A3" "duplicate alpha" "should not apply" 2>&1)"; a3_ambig_rc=$?
+if [ "$a3_ambig_rc" -eq 2 ] \
+  && grep -qF "selector 'duplicate alpha' is ambiguous" <<<"$a3_ambig_out" \
+  && grep -qF -- '- [ ] **DEFERRED** — duplicate alpha' <<<"$a3_ambig_out" \
+  && grep -qF -- '- [ ] **FAILED** — duplicate alpha' <<<"$a3_ambig_out"; then
+  echo "  PASS  resolve refuses an ambiguous selector and names every candidate"; pass=$((pass+1))
+else
+  echo "  FAIL  ambiguous resolve must name every candidate (rc=$a3_ambig_rc): $a3_ambig_out"; fail=$((fail+1))
+fi
+a3_missing_out="$(bash "$RS" resolve "$A3" "not present" "should not apply" 2>&1)"; a3_missing_rc=$?
+if [ "$a3_missing_rc" -eq 2 ] && grep -qF "selector 'not present' matches no open item" <<<"$a3_missing_out"; then
+  echo "  PASS  resolve refuses a selector with no match"; pass=$((pass+1))
+else
+  echo "  FAIL  resolve must refuse a selector with no match (rc=$a3_missing_rc): $a3_missing_out"; fail=$((fail+1))
+fi
+
+A4="$BOX/a4-run-selection"; mkdir -p "$A4/.charles/runs/run-a" "$A4/.charles/runs/run-b"
+for a4_run in run-a run-b; do
+  printf '# Run %s\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' "$a4_run" \
+    > "$A4/.charles/runs/$a4_run/RUN.md"
+done
+a4_multi_out="$(bash "$RS" phase "$A4" "ambiguous phase" 2>&1)"; a4_multi_rc=$?
+if [ "$a4_multi_rc" -eq 2 ] \
+  && grep -qF 'multiple open runs' <<<"$a4_multi_out" \
+  && grep -qF 'run-a' <<<"$a4_multi_out" && grep -qF 'run-b' <<<"$a4_multi_out"; then
+  echo "  PASS  mutating run-state verb refuses two open runs without --run"; pass=$((pass+1))
+else
+  echo "  FAIL  mutating run-state verb must name both ambiguous runs (rc=$a4_multi_rc): $a4_multi_out"; fail=$((fail+1))
+fi
+a4_selected_out="$(bash "$RS" phase "$A4" "selected phase" --run run-a 2>&1)"; a4_selected_rc=$?
+if [ "$a4_selected_rc" -eq 0 ] \
+  && grep -qF 'selected phase' "$A4/.charles/runs/run-a/RUN.md" \
+  && ! grep -qF 'selected phase' "$A4/.charles/runs/run-b/RUN.md"; then
+  echo "  PASS  mutating run-state verb succeeds with --run"; pass=$((pass+1))
+else
+  echo "  FAIL  --run must select only the requested run (rc=$a4_selected_rc): $a4_selected_out"; fail=$((fail+1))
+fi
+A4_SINGLE="$BOX/a4-single"; mkdir -p "$A4_SINGLE/.charles/runs/only-run"
+printf '# Run only-run\n\n- flow: feature\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A4_SINGLE/.charles/runs/only-run/RUN.md"
+a4_single_out="$(bash "$RS" phase "$A4_SINGLE" "single open phase" 2>&1)"; a4_single_rc=$?
+if [ "$a4_single_rc" -eq 0 ] && grep -qF 'single open phase' "$A4_SINGLE/.charles/runs/only-run/RUN.md"; then
+  echo "  PASS  mutating run-state verb keeps the single-open-run behavior"; pass=$((pass+1))
+else
+  echo "  FAIL  one open run must still accept the mutating verb (rc=$a4_single_rc): $a4_single_out"; fail=$((fail+1))
+fi
+
+# --- A5 recorded-spec close gates ----------------------------------------------
+A5_UNTICKED="$BOX/a5-unticked"; mkdir -p "$A5_UNTICKED/docs/specs" "$A5_UNTICKED/.charles/runs/unticked"
+printf '# Unticked plan\n\n## Grill verdict\n\n- Rounds: 1\n\n## Sign-off\n\n- [x] shipped\n- [ ] pending\n' \
+  > "$A5_UNTICKED/docs/specs/plan.md"
+printf '# Run unticked\n\n- flow: feature\n- spec: docs/specs/plan.md\n- started: 2026-09-03T00:00:00Z\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A5_UNTICKED/.charles/runs/unticked/RUN.md"
+a5_unticked_out="$(bash "$RS" close "$A5_UNTICKED" "unticked close" 2>&1)"; a5_unticked_rc=$?
+if [ "$a5_unticked_rc" -eq 6 ] \
+  && grep -qF 'unticked sign-off requirements' <<<"$a5_unticked_out" \
+  && grep -qF 'docs/specs/plan.md' <<<"$a5_unticked_out"; then
+  echo "  PASS  bare close applies the recorded spec sign-off gate"; pass=$((pass+1))
+else
+  echo "  FAIL  bare close must refuse an unticked recorded sign-off (rc=$a5_unticked_rc): $a5_unticked_out"; fail=$((fail+1))
+fi
+
+A5_EMPTY="$BOX/a5-empty-signoff"; mkdir -p "$A5_EMPTY/docs/specs" "$A5_EMPTY/.charles/runs/empty"
+printf '# Empty sign-off plan\n\n## Grill verdict\n\n- Rounds: 1\n\n## Sign-off\n\n_(pending)_\n' \
+  > "$A5_EMPTY/docs/specs/plan.md"
+printf '# Run empty\n\n- flow: feature\n- spec: docs/specs/plan.md\n- started: 2026-09-03T00:00:00Z\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A5_EMPTY/.charles/runs/empty/RUN.md"
+a5_empty_out="$(bash "$RS" close "$A5_EMPTY" "empty close" 2>&1)"; a5_empty_rc=$?
+if [ "$a5_empty_rc" -eq 6 ] \
+  && grep -qF 'has no ticked requirements' <<<"$a5_empty_out" \
+  && grep -qF 'docs/specs/plan.md' <<<"$a5_empty_out"; then
+  echo "  PASS  bare close refuses a sign-off section with no ticked line"; pass=$((pass+1))
+else
+  echo "  FAIL  bare close must refuse an empty recorded sign-off (rc=$a5_empty_rc): $a5_empty_out"; fail=$((fail+1))
+fi
+a5_force_out="$(bash "$RS" close "$A5_EMPTY" "forced empty close" --force 2>&1)"; a5_force_rc=$?
+if [ "$a5_force_rc" -eq 0 ] \
+  && grep -q '^## Outcome$' "$A5_EMPTY/.charles/runs/empty/RUN.md" \
+  && grep -qF 'forced empty close' "$A5_EMPTY/docs/specs/plan.md"; then
+  echo "  PASS  --force still overrides the recorded-spec close gate"; pass=$((pass+1))
+else
+  echo "  FAIL  --force must still close a gated recorded-spec run (rc=$a5_force_rc): $a5_force_out"; fail=$((fail+1))
+fi
+
+A5_NONE="$BOX/a5-no-spec"; mkdir -p "$A5_NONE/.charles/runs/no-spec"
+printf '# Run no-spec\n\n- flow: feature\n- started: 2026-09-03T00:00:00Z\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A5_NONE/.charles/runs/no-spec/RUN.md"
+a5_none_out="$(bash "$RS" close "$A5_NONE" "no recorded spec" 2>&1)"; a5_none_rc=$?
+if [ "$a5_none_rc" -eq 0 ] \
+  && grep -q '^## Outcome$' "$A5_NONE/.charles/runs/no-spec/RUN.md" \
+  && ! grep -qF 'Run outcome' "$A5_NONE/.charles/runs/no-spec/RUN.md"; then
+  echo "  PASS  bare close without a recorded spec keeps the old behavior"; pass=$((pass+1))
+else
+  echo "  FAIL  a run with no recorded spec must close as before (rc=$a5_none_rc): $a5_none_out"; fail=$((fail+1))
 fi
 
 echo

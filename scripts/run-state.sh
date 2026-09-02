@@ -13,6 +13,7 @@
 #   run-state.sh item  <dir> <TYPE> "<text>"          TYPE: BLOCKED-HUMAN |
 #                                                     PENDING-DECISION | DEFERRED | FAILED
 #   run-state.sh defer <dir> "<text>" [--run <id>]   -> item DEFERRED shorthand
+#   run-state.sh resolve <dir> [--run <id>] <selector> "<note>"
 #   run-state.sh rollback <dir> "<command>"
 #   run-state.sh close <dir> "<outcome>" [--spec docs/specs/x.md]
 #   run-state.sh reopen <dir> --run <id>
@@ -104,7 +105,7 @@ open_run_dirs() {
   done
 }
 
-newest_open() { # selected open run, or newest when called for show
+newest_open() { # refuse ambiguity for mutators; newest only when called for show
   local allow_multiple=0
   [ "${1:-}" = "--show" ] && allow_multiple=1
   local listing d candidate candidate_name
@@ -383,6 +384,56 @@ item)
   echo "recorded item: $type — $text$ref"
   ;;
 
+resolve)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  [ "$#" -eq 2 ] || { echo "run-state.sh: resolve requires <selector> <note>" >&2; exit 2; }
+  selector="$1"; note="$2"
+  [ -n "$selector" ] || { echo "run-state.sh: resolve requires a non-empty selector" >&2; exit 2; }
+  [ -n "$note" ] || { echo "run-state.sh: resolve requires a non-empty note" >&2; exit 2; }
+  lock_run_state || exit $?
+  d="$(newest_open)" || { rc=$?; [ "$rc" -eq 1 ] && echo "run-state.sh: no open run — call init first" >&2; exit "$rc"; }
+
+  # Resolve selectors are case-sensitive literal substrings of the complete open-item line.
+  candidates="$(mktemp)" || { echo "run-state.sh: FAILED to resolve item" >&2; exit 1; }
+  if ! awk -v selector="$selector" '/^- \[ \] / && index($0, selector) { print }' \
+    "$d/RUN.md" > "$candidates"; then
+    rm -f "$candidates"
+    echo "run-state.sh: FAILED to find open items" >&2
+    exit 1
+  fi
+  match_count="$(wc -l < "$candidates")"
+  if [ "$match_count" -eq 0 ]; then
+    rm -f "$candidates"
+    echo "run-state.sh: REFUSING to resolve — selector '$selector' matches no open item." >&2
+    exit 2
+  fi
+  if [ "$match_count" -gt 1 ]; then
+    echo "run-state.sh: REFUSING to resolve — selector '$selector' is ambiguous; matches:" >&2
+    sed 's/^/  /' "$candidates" >&2
+    rm -f "$candidates"
+    exit 2
+  fi
+
+  tmp="$(mktemp)" || { rm -f "$candidates"; echo "run-state.sh: FAILED to resolve item" >&2; exit 1; }
+  if ! awk -v selector="$selector" -v note="$note" '
+    /^- \[ \] / && index($0, selector) {
+      matches++
+      if (matches == 1) {
+        sub(/^- \[ \] /, "- [x] ")
+        $0 = $0 " — resolved: " note
+      }
+    }
+    { print }
+  ' "$d/RUN.md" > "$tmp" || ! mv "$tmp" "$d/RUN.md"; then
+    rm -f "$tmp" "$candidates"
+    echo "run-state.sh: FAILED to resolve item" >&2
+    exit 1
+  fi
+  rm -f "$candidates"
+  echo "resolved item: $selector — $note"
+  ;;
+
 rollback)
   parse_run_option "$@" || exit $?
   set -- "${PARSED_ARGS[@]}"
@@ -481,6 +532,11 @@ close)
   done
 
   recorded_spec="$(sed -n 's/^- spec: //p' "$d/RUN.md" | head -1)"
+  recorded_spec_used=0
+  if [ -z "$spec" ] && [ -n "$recorded_spec" ]; then
+    spec="$recorded_spec"
+    recorded_spec_used=1
+  fi
   if [ -n "$recorded_spec" ] && [ -n "$spec" ] \
     && [ "$(spec_key "$recorded_spec")" != "$(spec_key "$spec")" ]; then
     echo "run-state.sh: REFUSING to close — selected run $(basename "$d") has a different spec." >&2
@@ -497,13 +553,15 @@ close)
   # An unchecked item means the run is not finished, whatever else is clean.
   # This gate existed to stop premature "done" and did not check the one thing
   # it was built for. Found by an adversarial review, 2026-08-12.
-  spec_path="$spec"
-  case "$spec_path" in /*) ;; *) spec_path="$DIR/$spec_path" ;; esac
   # The boundary check is NOT under --force: --force is a bookkeeping override
   # ("close anyway"), never a licence to append this run's outcome to a file
   # outside the repo. A typo'd relative path plus --force would otherwise write
   # to someone else's file.
-  if [ -n "$spec" ]; then
+  if [ "$recorded_spec_used" -eq 1 ]; then
+    spec_path="$(resolve_spec_path "$spec")" || exit $?
+  elif [ -n "$spec" ]; then
+    spec_path="$spec"
+    case "$spec_path" in /*) ;; *) spec_path="$DIR/$spec_path" ;; esac
     if command -v realpath >/dev/null 2>&1; then
       resolved_dir="$(realpath "$DIR" 2>/dev/null || printf '%s\n' "$DIR")"
       resolved_spec="$(realpath "$spec_path" 2>/dev/null || realpath -m "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
