@@ -31,33 +31,28 @@ this plan takes the remainder that is tractable here.
   dispatches over-block an earlier close, and two runs open at once cannot be
   told apart at all.
 
-  The blocker is gone. R6 (`6cbff8b`) added `flow_run_id` and `spec_path` to
-  every dispatch record, which is exactly the identity the item asked for.
+  R6 (`6cbff8b`) added the identity the item asked for, but **not to every
+  record**, and the plan's first draft said otherwise. `codex-run.sh:573-579`
+  and `:610-617` write `flow_run_id`/`spec_path` only when the variables are
+  non-empty, and the watchdog's terminal record at `codex-run.sh:112-120` never
+  writes either. So a wrapper-death end record is unidentifiable even for a run
+  whose start was identified.
 
-  Done when: a dispatch carrying `flow_run_id` is attributed to the closing run
-  by exact match and never by timestamp; records without the field keep the
-  existing window behaviour, because 2000+ historical records across 47 repos
-  have no identity and must not change meaning; and `selftest.sh` asserts that a
-  later run's identified dispatch does not block an earlier run's close.
+  Attribution is also still timestamp-only in three places, not one:
+  orphan detection (`flow-status.sh:175-180`), orphan attribution (`:187-215`)
+  and ungraded-implement attribution (`:232-237`) all pass a bare timestamp to
+  `dispatch_is_attributable`.
 
-- **A2** — an old orphan dispatch can be retired
-
-  `cdl-stale-orphans`: two dispatches from 2026-08-21 have starts with no
-  terminal record, so `flow-status` reports them on every run in this repo and
-  `close` needs `--force`. Their work predates HEAD and a census found no
-  unaccounted changes. R3 stops new ones accruing; it does nothing for these.
-
-  R4 already softened the claim — they now report `liveness UNKNOWN` rather than
-  an asserted death. What is missing is a way to retire one deliberately.
-
-  Done when: an operator can record a terminal `abandoned` outcome for a named
-  orphan dispatch, with a reason, through an explicit command that names the
-  dispatch — never a blanket sweep and never automatic on age; a retired
-  dispatch stops being reported as an orphan and stops blocking close; the
-  record is distinguishable from a real terminal record, so retiring one cannot
-  be mistaken for the lane having finished; and `selftest.sh` covers retire,
-  refusal on an unknown id, and refusal on a dispatch that already has a
-  terminal record.
+  Done when: the watchdog record carries the same identity fields as the wrapper
+  record; a dispatch carrying `flow_run_id` is attributed by exact match and
+  never by timestamp; a record without the field keeps the window, because 2000+
+  historical records across 47 repos have no identity and must not change
+  meaning; **the precedence when both kinds appear in one run is stated in a
+  comment** — identity decides whenever present, the window only fills gaps, and
+  an identified foreign record is excluded even if it falls inside the window;
+  and `selftest.sh` asserts, at close time, all four cases in one fixture: an
+  identified foreign orphan, an identified closing-run orphan, a legacy orphan,
+  and a watchdog-generated end.
 
 - **A3** — a run item can be resolved without hand-editing
 
@@ -72,10 +67,11 @@ this plan takes the remainder that is tractable here.
 
 - **A4** — an ambiguous open run is refused, not guessed
 
-  `run-state.sh:25-29` `newest_open` picks the most recent open run when several
+  `run-state.sh:107-170` `newest_open` picks the most recent open run when several
   are open, so a `phase` or `item` can land on the wrong one.
   `codex-run.sh:344-350` already refuses this ambiguity for implement dispatches
-  and prints the candidates; run-state guesses instead.
+  and prints the candidates; `run-state.sh:162-166` refuses only in its own
+  selector path, while the mutating verbs still take the newest.
 
   Done when: verbs that mutate a run refuse when several runs are open and no
   `--run` is given, printing the candidates the way `codex-run.sh` does; read-only
@@ -84,38 +80,64 @@ this plan takes the remainder that is tractable here.
 
 - **A5** — close without `--spec` still checks the run's recorded plan
 
-  `run-state.sh:382-388,470-496`: the sign-off and spec cross-checks run only
-  when `--spec` is passed. A close with no `--spec` silently skips the run's own
+  `run-state.sh:533` guards the sign-off gate behind `[ -n "$spec" ]`, so the
+  gate at `:533-549` never runs on a bare close; recorded-spec counting at
+  `:569-591` still happens, and outcome promotion at `:595-598` is skipped. A close with no `--spec` silently skips the run's own
   recorded plan and its outcome promotion, so the sign-off gate — the thing that
   makes a close mean something — is opt-in.
 
+  **Migration risk, measured.** `run-state.sh:539-542` refuses a sign-off
+  section containing no ticked line at all, not merely one with an unticked box.
+  This repo has 13 `RUN.md` files, 12 closed and 1 open — and the open one is
+  *this run*, whose plan currently has `## Sign-off` holding only `_(pending)_`.
+  Under A5 a bare close of it would be refused. That is correct behaviour, but
+  it must be a deliberate outcome rather than a surprise.
+
   Done when: a close with no `--spec` uses the spec recorded in `RUN.md` and
-  applies the same gates; a run opened without any spec behaves as today; and
-  `selftest.sh` asserts a close with no `--spec` is refused when the recorded
-  spec has an unticked sign-off line.
+  applies the same gates; a run opened without any spec behaves as today; an
+  unreadable or missing recorded spec is refused with a message naming it rather
+  than silently skipping the gate; `--force` still overrides, as it does today;
+  and `selftest.sh` covers three fixtures — an unticked `- [ ]` line, a sign-off
+  section with no ticked line at all, and a run with no recorded spec.
 
 - **A6** — `--req` validation does not depend on a filename convention
 
-  `cdl-req-noplan`: `parallel-chunks.sh:46-52` derives the plan path only when
-  the manifest name ends `.chunks.json`, so a manifest named anything else skips
-  requirement validation entirely while still dispatching.
+  `cdl-req-noplan`: `parallel-chunks.sh:45-52` derives the plan path only when
+  the manifest name ends `.chunks.json`, and `:217-220` then omits `--plan`.
 
-  Done when: the plan is resolved from the manifest or the open run regardless of
-  the manifest's filename, and a manifest that cannot be tied to a plan is
-  refused rather than dispatched unvalidated; and `selftest.sh` covers a
-  manifest whose name does not end `.chunks.json`.
+  **The bypass is narrower than the item claims.** With exactly one open run, or
+  with `--run`, `codex-run.sh:351-404` still resolves and validates the run's
+  recorded spec whatever the manifest is called. The real hole is the remaining
+  case: no open run *and* no derived plan, where `codex-run.sh:354-364` returns
+  success before any validation. The manifest schema (`parallel-chunks.sh:74-104`)
+  has no plan field, so "resolve the plan from the manifest" is not currently a
+  defined input and this requirement does not invent one.
+
+  Done when: a `--req` dispatch with no open run and no resolvable plan is
+  refused rather than dispatched unvalidated; the single-open-run and `--run`
+  paths keep working unchanged; and `selftest.sh` covers the refusal and both
+  still-valid paths.
 
 - **A7** — the review diff shows the real change
 
-  `codex-run.sh:506-509`: untracked files are synthesised into the review diff as
-  plain content, dropping the executable bit and inlining a symlink's target as
+  `codex-run.sh:858-873`: untracked files are appended to the review diff as
+  `--- /dev/null`, `+++ b/path`, then content piped through `sed 's/^/+/'`, dropping the executable bit and inlining a symlink's target as
   though it were file text. The reviewer then grades something other than what
   was written — and this repo ships executable hooks and scripts, so a new hook
   landing non-executable is exactly the defect a reviewer should catch.
 
-  Done when: a new executable file appears in the review diff as a mode change,
-  and a new symlink appears as a symlink rather than as its target's text; and
-  `selftest.sh` asserts both.
+  **This needs a different diff construction, not an extra assertion.** The
+  append format emits no `new file mode`, cannot express mode `100755` or
+  symlink mode `120000`, and `sed` follows a symlink and inlines the target's
+  text. Tracked mode changes already survive via `git diff HEAD`
+  (`codex-run.sh:848-856`); only the untracked synthesis is blind.
+
+  Done when: a new executable file carries `new file mode 100755` in the review
+  diff and a new symlink is represented as a link rather than its target's
+  contents; a binary untracked file is reported as binary rather than emitted as
+  mangled text; the reviewer's inputs stay limited to `plan.md` and
+  `changes.diff` (`codex-run.sh:921-925`); and `selftest.sh` asserts the
+  executable, symlink and binary cases.
 
 - **A8** — attribution degradation is decided once, before any check runs
 
@@ -131,10 +153,17 @@ this plan takes the remainder that is tractable here.
 
 - **A9** — the plan requirement format is documented where plans are written
 
-  `cdl-1788337312-10399`: `codex-run.sh:396-398` requires requirement identifiers
-  as `- **R1** —` bullets and refuses the dispatch otherwise. Nothing documents
-  that. This repo's own 2026-09-02 plan was written with `### R1` headings, read
-  perfectly, and was refused at dispatch after the plan was complete.
+  `cdl-1788337312-10399`: `codex-run.sh:429` requires requirement identifiers as a `- **ID**` bullet,
+  optionally checkboxed, terminated by `**`, whitespace, or a non-numeric dot
+  suffix. Nothing documents that grammar, and the accepted form is broader than any prose
+  in the repo suggests — `scripts/selftest.sh:1417-1444` already accepts
+  `- **A1** alternate convention` and dotted suffixes.
+
+  The cost is observed, not hypothetical: this run's predecessor wrote its plan
+  with `### R1` headings, read perfectly, and was refused at dispatch once the
+  plan was finished. That evidence is not reproducible from the committed tree —
+  the file was converted to bullets before it was committed — so it is recorded
+  here as an observation rather than offered as a citation.
 
   Done when: `skills/charles-flow/SKILL.md` states the bullet contract where it
   tells the reader to write checkable requirements, with an example; and
@@ -150,10 +179,21 @@ this plan takes the remainder that is tractable here.
   refused to fall back — the failure was real — but it burned nine minutes to
   learn nothing, and `rc=124` misdescribes it as slow work rather than no network.
 
-  Done when: a dispatch whose provider is unreachable is detected and reported
-  distinctly from a genuine timeout, well before the budget expires; the check
-  cannot itself become a new failure mode when the probe is unavailable; and
-  `selftest.sh` covers the unreachable case and the ordinary case.
+  **An independent probe is the wrong mechanism.** DNS resolving proves nothing
+  about the websocket; a probe can pass while the real request fails, and it
+  disagrees with codex whenever a proxy, TLS setting or model route is involved.
+  The causal signal is already captured: codex's own stderr goes to `$RUN.err`
+  (`codex-run.sh:653-670`, `:785-790`) and is tailed on failure at `:1053-1057`.
+  The observed run wrote `failed to lookup address information: Try again`
+  there, repeatedly, minutes before the budget expired.
+
+  Done when: the wrapper recognises a repeated provider-unreachable signal in the
+  lane's own error stream and terminates the dispatch early with an exit code
+  distinct from `124`, naming the cause; a lane that is merely slow is never
+  terminated early; the detection degrades to today's behaviour if the error
+  stream is unreadable; the threshold (how many occurrences, over what window)
+  is stated in a comment rather than tuned invisibly; and `selftest.sh` covers a
+  stub lane emitting the unreachable signal, and one that is simply slow.
 
 ## Green
 
@@ -169,9 +209,55 @@ Baseline: `338 passed, 0 failed`; `20 ok, 0 failing`. Any behaviour change bumps
 `skills/charles-flow/SKILL.md`, `.claude-plugin/*`, and one new command file if
 A2 warrants one. Out of scope for edits: every other file in the repo.
 
-## Grill verdict
+## Grill verdict — 2026-09-03
 
-_(pending — grill-rounds)_
+- Rounds: 1 (unattended adversary; nothing survived needing the operator)
+- Attacks raised: 10 — resolved from source: 3, changed the plan: 7, escalated: 0
+- Plan changes:
+  - **A2 deleted outright.** It proposed retiring old orphan dispatches because
+    they "block close without --force". The premise is false: `flow-status.sh:157`
+    routes them through `say_repo`, which increments `repo_issues`, and only
+    `issues` drives the non-zero exit (`:398-400`). Proof: the 2026-09-02 run
+    closed cleanly without `--force` while both orphans were present. The
+    adversary also argued the mechanism was dangerous — a way to make evidence of
+    an unresolved failure disappear, invisible to every consumer, since
+    `flow-status.sh:175-180`, `verify-receipt.sh:40-58`, `lane-status.sh:60` and
+    `unsourced.sh:52-56` recognise only start/end. Building it would have been
+    worse than the problem it was solving, and there was no problem.
+  - Seven of the plan's `file:line` citations were wrong — written from the
+    previous run's line numbers, which moved across thirteen commits. All
+    corrected against source.
+  - A1's premise corrected: R6 did **not** add identity to every record. The
+    fields are written only when non-empty and the watchdog's terminal record
+    never writes them, so the requirement now includes fixing that, names all
+    three timestamp-only attribution sites, and states the mixed-record
+    precedence instead of leaving it to the implementer.
+  - A5 gained the measured migration risk: `run-state.sh:539-542` refuses a
+    sign-off section with no ticked line, and this run's own plan is in exactly
+    that state, so A5 would refuse a bare close of it.
+  - A6 narrowed to the actual bypass. Validation does not skip whenever the
+    manifest is misnamed — only when there is no open run *and* no derived plan.
+  - A7 rescoped: a mode change is not representable in the current append-based
+    synthesis, so this needs a different diff construction, not a new assertion.
+  - A9's supporting anecdote demoted to an observation: the `### R1` refusal did
+    happen, but the file was converted before it was committed, so the evidence
+    is not in the tree and must not be cited as though it were.
+  - A10's mechanism replaced. An independent reachability probe is weaker than
+    the signal already captured in the lane's own stderr, and can pass while the
+    real request fails.
+- Accepted risks:
+  - **A1 leaves a genuinely incoherent evidence model for mixed logs.** Two
+    records describing the same kind of work are judged by different rules purely
+    by when they were written. The alternative — migrating 2000+ historical
+    records across 47 repos — is worse. Identity wins where present; the window
+    is the fallback, and it decays as history ages out.
+  - **A10 is a heuristic on someone else's error text.** codex publishes no
+    stable error schema, so a wording change upstream silently disables early
+    termination. Chosen anyway because the failure mode is a silent nine-minute
+    stall, and degrading to today's behaviour is safe.
+  - **A7 cannot make an untracked binary reviewable**, only correctly labelled.
+  - The three items excluded at the top of this plan stay excluded.
+- Unresolved: none blocking.
 
 ## Sign-off
 
