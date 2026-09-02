@@ -284,3 +284,7 @@ Baseline at open was `338 passed, 0 failed`. Version 2.36.0.
 - [x] **A8** — attribution degradation is decided once, before any check runs — `a66033c`. Also caught and reverted a safety regression in the first implementation, where per-path canonicalisation failure would have turned a blocking ISSUE into a NOTE and let a close through.
 - [x] **A9** — the plan requirement format is documented where plans are written — `23344b3`. The skill states the bullet grammar, including that identifiers below `## Sign-off` do not count, and a selftest keeps contract and documentation together.
 - [x] **A10** — **implemented, measured, reverted** — `dae0f70`, reverted in `58b3151`. Not shipped, deliberately. Measured against all eight recorded occurrences: cadence is at most two errors per ten seconds against a three-in-ten threshold, so it would never have fired; and five of the eight signalling lanes recovered, one with seven occurrences — the same count as two that died. No threshold both fires and is safe. The measurement is on the backlog item so the next attempt starts from evidence.
+
+## Run outcome — 2026-09-02
+
+Backlog drain: nine requirements, eight shipped and one deliberately reverted after measurement. Selftest 338 -> 362, version 2.36.0. A2 was deleted during the grill when its premise was disproved; A10 was built, measured against real history, and reverted because the heuristic neither fires on real incidents nor discriminates recovering lanes from stalled ones.
