@@ -2094,6 +2094,18 @@ else
   echo "  FAIL  repo-wide flow status must keep every finding (rc=$all_status_rc)"; fail=$((fail+1))
 fi
 
+EMPTY_ID="$BOX/close-empty-flow-id"; mkdir -p "$EMPTY_ID/.charles/runs/closing"
+printf '# Run closing\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
+  "$CS_CLOSE" "$EMPTY_ID" > "$EMPTY_ID/.charles/runs/closing/RUN.md"
+printf '{"ts":"%s","event":"end","lane":"implement","engine":"luna","model":"m","rc":0,"run":"worker","dir":"%s","spec_path":"docs/specs/missing.md","task":"worker"}\n' \
+  "$CS_IMPL" "$EMPTY_ID" > "$EMPTY_ID/.charles/dispatches.jsonl"
+empty_id_status="$(bash "$FS" "$EMPTY_ID" --closing "$EMPTY_ID/.charles/runs/closing" 2>&1)"; empty_id_rc=$?
+if [ "$empty_id_rc" -eq 1 ] && grep -q 'ISSUE.*never reviewed' <<<"$empty_id_status"; then
+  echo "  PASS  spec-only dispatch is attributed to the closing run"; pass=$((pass+1))
+else
+  echo "  FAIL  spec-only dispatch must block as the closing run's issue (rc=$empty_id_rc)"; fail=$((fail+1))
+fi
+
 UC="$BOX/unsourced-close"; mkdir -p "$UC/.charles/runs/unsourced-run"
 printf 'green = "true"\n' > "$UC/.charles.toml"
 ( cd "$UC" && git init -q && git config user.name tester && git config user.email tester@example.invalid && \

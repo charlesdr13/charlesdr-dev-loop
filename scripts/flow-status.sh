@@ -83,7 +83,7 @@ paths_match() {
 
 dispatch_is_attributable() {
   local dispatch_ts="${1:-}" flow_run_id="${2:-}" spec_path="${3:-}"
-  [ -z "$CLOSING" ] || [ "$attribution_degraded" -eq 1 ] || {
+  [ -z "$CLOSING" ] || {
     # identity decides whenever present; the timestamp window only fills gaps; an
     # identified FOREIGN record is excluded even when it falls inside the window.
     case "$flow_run_id" in
@@ -91,6 +91,8 @@ dispatch_is_attributable() {
     esac
     if [ -n "$flow_run_id" ]; then
       [ "$flow_run_id" = "$closing_flow_run_id" ]
+    elif [ "$attribution_degraded" -eq 1 ]; then
+      return 0
     elif [ -n "$spec_path" ]; then
       spec_is_attributable "$spec_path"
     else
@@ -260,6 +262,7 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
   ungraded_repo=0
   # ponytail: O(implements × reviews); index the log if its size makes this slow.
   while IFS=$'\t' read -r dispatch_ts dispatch_flow_run_id dispatch_spec_path; do
+    [ "$dispatch_flow_run_id" = "__NO_FLOW_RUN_ID__" ] && dispatch_flow_run_id=""
     if dispatch_is_attributable "$dispatch_ts" "$dispatch_flow_run_id" "$dispatch_spec_path"; then
       ungraded_close=$((ungraded_close+1))
     else
@@ -294,7 +297,7 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
           ($t == "" or .ts > $t)
         end
       )
-    | [(.ts // ""), flow_id(.flow_run_id), text(.spec_path)] | @tsv
+    | [(.ts // ""), (flow_id(.flow_run_id) | if . == "" then "__NO_FLOW_RUN_ID__" else . end), text(.spec_path)] | @tsv
   ')
   ungraded=$((ungraded_close + ungraded_repo))
   if [ "${ungraded:-0}" -gt 0 ]; then
