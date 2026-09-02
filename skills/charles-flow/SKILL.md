@@ -527,6 +527,18 @@ is a 27-command UI system and owns the taste judgment. Do not rebuild it here.
 Scope is one route or one component. Screenshots and running apps go to the
 user, never to a lane: luna gets a diff, never a picture.
 
+## Flow 5 — release
+
+Use `/charlesdr-dev-loop:release <semver>`. It wraps `scripts/release.sh`.
+
+1. **Guard.** Open the `release` run and confirm `.claude-plugin/` is clean.
+2. **Green.** Run the repository's green command and record the `green` phase.
+3. **Version.** Write the semver to the plugin and marketplace metadata.
+4. **Ship.** Install and verify the cache, relink `codex-run`, and run doctor.
+   Record `ship` only after those checks pass.
+5. **Close.** Use `run-state.sh close` after `ship`. On failure, record a
+   `FAILED` item and leave the run open.
+
 ## The ground-truth gate
 
 A hard gate, not a checklist to wave at. All four, before any implementation:

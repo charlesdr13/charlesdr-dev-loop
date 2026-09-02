@@ -47,5 +47,15 @@
     },
     "first": "baseline",
     "terminal": ["review"]
+  },
+  "release": {
+    "phases": {
+      "guard": {"next": ["green"], "proof": "clean .claude-plugin/"},
+      "green": {"next": ["version"], "proof": "green command passed"},
+      "version": {"next": ["ship"], "proof": "version fields written"},
+      "ship": {"next": ["close"], "proof": "installed cache verified, codex-run relinked, doctor passed"}
+    },
+    "first": "guard",
+    "terminal": ["ship"]
   }
 }

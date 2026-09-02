@@ -3929,6 +3929,62 @@ else
   echo "  FAIL  R6 old-format records must match the prior global result (rc=$r6_old_rc): $r6_old_out"; fail=$((fail+1))
 fi
 
+# --- release flow coverage ----------------------------------------------------
+FLOW_JSON="$REPO_ROOT/scripts/flow.json"
+if jq -e '
+  def strings: type == "array" and all(.[]; type == "string");
+  . as $root |
+  ($root | type == "object") and
+  all(["feature", "debug", "polish", "ui", "release"][];
+    . as $flow |
+    ($root[$flow] | type == "object") and
+    ($root[$flow].phases | type == "object") and
+    ($root[$flow].first | type == "string") and
+    ($root[$flow].terminal | strings) and
+    ([$root[$flow].phases[] | type == "object" and (.next | strings) and (.proof | type == "string")] | all)
+  ) and
+  ($root.release.first == "guard") and
+  ($root.release.terminal == ["ship"]) and
+  ($root.release.phases.guard.next == ["green"]) and
+  ($root.release.phases.green.next == ["version"]) and
+  ($root.release.phases.version.next == ["ship"]) and
+  ($root.release.phases.ship.next == ["close"])
+' "$FLOW_JSON" >/dev/null 2>&1; then
+  echo "  PASS  flow.json validates all five flows, including release"; pass=$((pass+1))
+else
+  echo "  FAIL  flow.json must structurally validate the release flow"; fail=$((fail+1))
+fi
+
+RELEASE_FLOW="$BOX/flow-release"; mkdir -p "$RELEASE_FLOW"
+release_init="$(bash "$RS" init "$RELEASE_FLOW" release "release fixture" 2>"$RELEASE_FLOW/init.err")"; release_init_rc=$?
+release_run="$RELEASE_FLOW/.charles/runs/$release_init/RUN.md"
+release_guard_out="$(bash "$RS" phase "$RELEASE_FLOW" guard "clean .claude-plugin/" 2>"$RELEASE_FLOW/guard.err")"; release_guard_rc=$?
+release_status="$(bash "$FS" "$RELEASE_FLOW" 2>&1)"; release_status_rc=$?
+if [ "$release_status_rc" -eq 1 ] && [ "$release_guard_rc" -eq 0 ] \
+  && grep -q 'expected next: green' <<<"$release_status" \
+  && ! grep -qi 'not in flow.json' <<<"$release_status"; then
+  echo "  PASS  release flow-status gives phase guidance"; pass=$((pass+1))
+else
+  echo "  FAIL  release flow-status must guide the next phase (rc=$release_status_rc): $release_status"; fail=$((fail+1))
+fi
+
+release_phase_rc="$release_guard_rc"
+bash "$RS" phase "$RELEASE_FLOW" green "green command passed" >/dev/null 2>&1 || release_phase_rc=1
+bash "$RS" phase "$RELEASE_FLOW" version "version fields written" >/dev/null 2>&1 || release_phase_rc=1
+bash "$RS" phase "$RELEASE_FLOW" ship "installed cache verified" >/dev/null 2>&1 || release_phase_rc=1
+release_close_out="$(bash "$RS" close "$RELEASE_FLOW" "release fixture complete" 2>&1)"; release_close_rc=$?
+if [ "$release_init_rc" -eq 0 ] && [ "$release_phase_rc" -eq 0 ] \
+  && [ "$release_close_rc" -eq 0 ] && [ -f "$release_run" ] \
+  && grep -q ' guard$' "$release_run" \
+  && grep -q ' green$' "$release_run" \
+  && grep -q ' version$' "$release_run" \
+  && grep -q ' ship$' "$release_run" \
+  && grep -q '^## Outcome$' "$release_run"; then
+  echo "  PASS  release run opens, records phases, and closes normally"; pass=$((pass+1))
+else
+  echo "  FAIL  release run must use init, phase, and normal close (init rc=$release_init_rc, phase rc=$release_phase_rc, close rc=$release_close_rc): $release_close_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
