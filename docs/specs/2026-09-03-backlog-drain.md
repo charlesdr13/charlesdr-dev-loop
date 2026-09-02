@@ -258,6 +258,17 @@ A2 warrants one. Out of scope for edits: every other file in the repo.
   - **A7 cannot make an untracked binary reviewable**, only correctly labelled.
   - The three items excluded at the top of this plan stay excluded.
 - Unresolved: none blocking.
+- **Post-grill reversal, 2026-09-03: A10 implemented, measured, and reverted.**
+  The requirement was built on a single observed incident. Before shipping, the
+  heuristic was measured against all eight occurrences in this machine's dispatch
+  history and failed both ways. Cadence is one provider error every 5-8 seconds,
+  at most two in any ten-second window, so the implemented 3-in-10s threshold
+  would never have fired — including on the stall it was written for. And the
+  signal does not discriminate: five of the eight signalling lanes recovered and
+  completed, one of them with seven occurrences, the same count as two that died.
+  Any threshold loose enough to fire would kill working dispatches. Reverted in
+  `58b3151`; the measurement is recorded on the backlog item so the next attempt
+  starts from evidence rather than repeating the assumption.
 
 ## Sign-off
 
