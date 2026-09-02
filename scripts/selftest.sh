@@ -2335,6 +2335,114 @@ else
   echo "  FAIL  sweep must scan colon-separated env roots"; fail=$((fail+1))
 fi
 
+# --- R8 reopen and abandon ----------------------------------------------------
+# These are real run-state fixtures; no Codex lane is invoked.
+R8="$BOX/r8-reopen-abandon"; mkdir -p "$R8/reopen/docs/specs" "$R8/status/docs/specs"
+printf 'green = "true"\n' > "$R8/reopen/.charles.toml"
+printf 'green = "true"\n' > "$R8/status/.charles.toml"
+printf '# R8 plan\n\n## Grill verdict\n\n- Rounds: 1\n' > "$R8/reopen/docs/specs/plan.md"
+r8_reopen_id="$(bash "$RS" init "$R8/reopen" feature "reopen history" --spec docs/specs/plan.md 2>/dev/null)"
+bash "$RS" close "$R8/reopen" "finished before reopen" --run "$r8_reopen_id" \
+  --spec docs/specs/plan.md --force >/dev/null 2>&1
+r8_reopen_md="$R8/reopen/.charles/runs/$r8_reopen_id/RUN.md"
+r8_reopen_out="$(bash "$RS" reopen "$R8/reopen" --run "$r8_reopen_id" 2>&1)"; r8_reopen_rc=$?
+if [ "$r8_reopen_rc" -eq 0 ] && ! grep -q '^## Outcome' "$r8_reopen_md" \
+  && grep -q '^## Previous outcome' "$r8_reopen_md" \
+  && grep -q 'finished before reopen' "$r8_reopen_md" \
+  && grep -q '^## Run outcome' "$R8/reopen/docs/specs/plan.md" \
+  && grep -q 'finished before reopen' "$R8/reopen/docs/specs/plan.md" \
+  && grep -qF 'previous outcome preserved' <<<"$r8_reopen_out"; then
+  echo "  PASS  reopen reopens the run and preserves RUN.md/spec history"; pass=$((pass+1))
+else
+  echo "  FAIL  reopen must reopen and preserve both outcome records (rc=$r8_reopen_rc)"; fail=$((fail+1))
+fi
+r8_open_out="$(bash "$RS" reopen "$R8/reopen" --run "$r8_reopen_id" 2>&1)"; r8_open_rc=$?
+if [ "$r8_open_rc" -eq 8 ] && grep -q 'already open' <<<"$r8_open_out"; then
+  echo "  PASS  reopen refuses an already-open run with exit 8"; pass=$((pass+1))
+else
+  echo "  FAIL  reopen must refuse an already-open run with exit 8 (rc=$r8_open_rc)"; fail=$((fail+1))
+fi
+r8_unknown_out="$(bash "$RS" reopen "$R8/reopen" --run no-such-r8-run 2>&1)"; r8_unknown_rc=$?
+if [ "$r8_unknown_rc" -eq 7 ] && grep -q 'unknown run id' <<<"$r8_unknown_out"; then
+  echo "  PASS  reopen refuses an unknown run id with exit 7"; pass=$((pass+1))
+else
+  echo "  FAIL  reopen must refuse an unknown run id with exit 7 (rc=$r8_unknown_rc)"; fail=$((fail+1))
+fi
+
+printf '# R8 status plan\n\n## Grill verdict\n\n- Rounds: 1\n' > "$R8/status/docs/specs/plan.md"
+r8_abandon_id="$(bash "$RS" init "$R8/status" feature "abandon report" --spec docs/specs/plan.md 2>/dev/null)"
+r8_abandon_out="$(bash "$RS" abandon "$R8/status" --run "$r8_abandon_id" \
+  "lane died at phase 3" 2>&1)"; r8_abandon_rc=$?
+r8_abandon_md="$R8/status/.charles/runs/$r8_abandon_id/RUN.md"
+if [ "$r8_abandon_rc" -eq 0 ] && grep -q '^## Outcome$' "$r8_abandon_md" \
+  && grep -q '^ABANDONED$' "$r8_abandon_md" \
+  && grep -q '^## Abandoned$' "$r8_abandon_md" \
+  && grep -q 'lane died at phase 3' "$r8_abandon_md" \
+  && grep -q 'ABANDONED' "$R8/status/docs/specs/plan.md"; then
+  echo "  PASS  abandon writes an ABANDONED outcome and reason"; pass=$((pass+1))
+else
+  echo "  FAIL  abandon must write an ABANDONED outcome (rc=$r8_abandon_rc)"; fail=$((fail+1))
+fi
+
+r8_finished_id="$(bash "$RS" init "$R8/status" feature "finished report" 2>/dev/null)"
+bash "$RS" close "$R8/status" "finished" --run "$r8_finished_id" --force >/dev/null 2>&1
+r8_finished_md="$R8/status/.charles/runs/$r8_finished_id/RUN.md"
+cp "$r8_finished_md" "$R8/finished.before"
+r8_closed_out="$(bash "$RS" abandon "$R8/status" --run "$r8_finished_id" "too late" 2>&1)"; r8_closed_rc=$?
+if [ "$r8_closed_rc" -eq 9 ] && grep -q 'already closed' <<<"$r8_closed_out" \
+  && cmp -s "$r8_finished_md" "$R8/finished.before"; then
+  echo "  PASS  abandon refuses a closed run with exit 9"; pass=$((pass+1))
+else
+  echo "  FAIL  abandon must refuse a closed run with exit 9 (rc=$r8_closed_rc)"; fail=$((fail+1))
+fi
+r8_abandon_again_out="$(bash "$RS" abandon "$R8/status" --run "$r8_abandon_id" "again" 2>&1)"; r8_abandon_again_rc=$?
+if [ "$r8_abandon_again_rc" -eq 9 ]; then
+  echo "  PASS  abandon refuses an already-ABANDONED run"; pass=$((pass+1))
+else
+  echo "  FAIL  abandon must refuse an already-ABANDONED run (rc=$r8_abandon_again_rc)"; fail=$((fail+1))
+fi
+
+r8_show_out="$(bash "$RS" show "$R8/status" --list 2>&1)"
+if grep -q "^ABANDONED $r8_abandon_id$" <<<"$r8_show_out" \
+  && grep -q "^closed $r8_finished_id$" <<<"$r8_show_out" \
+  && ! grep -q "^ABANDONED $r8_finished_id$" <<<"$r8_show_out"; then
+  echo "  PASS  run-state show distinguishes ABANDONED from closed"; pass=$((pass+1))
+else
+  echo "  FAIL  run-state show must distinguish ABANDONED from closed"; fail=$((fail+1))
+fi
+r8_flow_out="$(bash "$FS" "$R8/status" 2>&1)"; r8_flow_rc=$?
+if [ "$r8_flow_rc" -eq 0 ] && grep -q 'ABANDONED' <<<"$r8_flow_out" \
+  && grep -q 'no runs left open' <<<"$r8_flow_out" \
+  && ! grep -q 'still open' <<<"$r8_flow_out"; then
+  echo "  PASS  flow-status reports ABANDONED and counts no open run"; pass=$((pass+1))
+else
+  echo "  FAIL  flow-status must report ABANDONED without an open-run issue (rc=$r8_flow_rc)"; fail=$((fail+1))
+fi
+r8_sweep_out="$(bash "$SWEEP" "$R8" 2>&1)"; r8_sweep_rc=$?
+if [ "$r8_sweep_rc" -eq 0 ] && grep -q 'status.*ABANDONED' <<<"$r8_sweep_out"; then
+  echo "  PASS  runs-sweep reports ABANDONED distinctly"; pass=$((pass+1))
+else
+  echo "  FAIL  runs-sweep must report ABANDONED distinctly (rc=$r8_sweep_rc)"; fail=$((fail+1))
+fi
+
+R8_PLUGIN="$R8/plugin"; R8_HOME="$R8/home"
+mkdir -p "$R8_PLUGIN/.claude-plugin" "$R8_PLUGIN/scripts" "$R8_HOME"
+printf '{"version":"fixture"}\n' > "$R8_PLUGIN/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R8_PLUGIN/scripts/codex-run.sh"
+chmod +x "$R8_PLUGIN/scripts/codex-run.sh"
+r8_link_out="$(cd "$R8/status" && HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8_PLUGIN" bash "$LINK" 2>&1)"
+if grep -q 'ABANDONED' <<<"$r8_link_out" && ! grep -q 'open run(s)' <<<"$r8_link_out"; then
+  echo "  PASS  SessionStart notice reports ABANDONED outside open count"; pass=$((pass+1))
+else
+  echo "  FAIL  SessionStart notice must distinguish ABANDONED (output: $r8_link_out)"; fail=$((fail+1))
+fi
+r8_warn_out="$(cd "$R8/status" && bash "$WARN" 2>&1)"
+if grep -q 'ABANDONED' <<<"$r8_warn_out" && ! grep -q 'FAILED item' <<<"$r8_warn_out"; then
+  echo "  PASS  Stop hook reports ABANDONED without a FAILED warning"; pass=$((pass+1))
+else
+  echo "  FAIL  Stop hook must distinguish ABANDONED (output: $r8_warn_out)"; fail=$((fail+1))
+fi
+
 # --- doctor drift classes -----------------------------------------------------
 DOCTOR="$(cd "$(dirname "$0")/.." && pwd)/scripts/doctor.sh"
 DD="$BOX/doctor-drift"; mkdir -p "$DD/bin" "$DD/repo/scripts" "$DD/repo/docs/specs" \

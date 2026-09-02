@@ -155,6 +155,8 @@ last_phase() {
 say_bad() { echo "  ISSUE  $1"; issues=$((issues+1)); }
 say_ok()  { echo "  ok     $1"; }
 say_repo() { echo "  NOTE   repo backlog (not this close): $1"; repo_issues=$((repo_issues+1)); }
+run_is_closed() { grep -q '^## Outcome' "$1" 2>/dev/null; }
+run_is_abandoned() { grep -q '^## Abandoned$' "$1" 2>/dev/null; }
 
 echo "flow status: $(basename "$DIR")"
 
@@ -336,8 +338,11 @@ fi
 open=0
 for d in "$DIR"/.charles/runs/*/; do
   [ -f "$d/RUN.md" ] || continue
-  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
   run_id="$(basename "${d%/}")"
+  if run_is_closed "$d/RUN.md"; then
+    run_is_abandoned "$d/RUN.md" && say_ok "run $run_id: ABANDONED"
+    continue
+  fi
   flow="$(sed -n 's/^- flow: //p' "$d/RUN.md" | head -1)"
   phase="$(last_phase "$d/RUN.md")"
   phase_label="${phase:-"(none)"}"

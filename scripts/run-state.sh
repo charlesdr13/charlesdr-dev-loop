@@ -15,7 +15,10 @@
 #   run-state.sh defer <dir> "<text>" [--run <id>]   -> item DEFERRED shorthand
 #   run-state.sh rollback <dir> "<command>"
 #   run-state.sh close <dir> "<outcome>" [--spec docs/specs/x.md]
+#   run-state.sh reopen <dir> --run <id>
+#   run-state.sh abandon <dir> [--run <id>] "<reason>"
 #   run-state.sh show  <dir> [--list]
+# R8 refusal codes: 7 unknown run id, 8 reopen of an open run, 9 abandon of a closed run.
 set -euo pipefail
 
 # readlink -f first: this script is reached through a PATH symlink, and an
@@ -72,6 +75,9 @@ last_phase() {
     sed -n 's/^- \[[^]]*\] //p' | tail -1
 }
 
+run_is_closed() { grep -q '^## Outcome' "$1" 2>/dev/null; }
+run_is_abandoned() { grep -q '^## Abandoned$' "$1" 2>/dev/null; }
+
 open_run_dirs() {
   local include_closed=0
   [ "${1:-}" = "--all" ] && include_closed=1
@@ -93,7 +99,7 @@ open_run_dirs() {
       echo "run-state.sh: REFUSING — cannot read run state: ${d%/}/RUN.md" >&2
       return 2
     }
-    [ "$include_closed" -eq 1 ] || { grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue; }
+    [ "$include_closed" -eq 1 ] || { run_is_closed "$d/RUN.md" && continue; }
     printf '%s\n' "${d%/}"
   done
 }
@@ -120,8 +126,12 @@ newest_open() { # selected open run, or newest when called for show
     for candidate in "${all_runs[@]}"; do
       candidate_name="${candidate##*/}"
       if [ "$candidate_name" = "$RUN_SELECTOR" ]; then
-        if grep -q '^## Outcome' "$candidate/RUN.md" 2>/dev/null; then
-          echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' names a closed run" >&2
+        if run_is_closed "$candidate/RUN.md"; then
+          if run_is_abandoned "$candidate/RUN.md"; then
+            echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' names an ABANDONED run" >&2
+          else
+            echo "run-state.sh: REFUSING — run selector '$RUN_SELECTOR' names a closed run" >&2
+          fi
           return 2
         fi
         exact_match="$candidate"
@@ -157,6 +167,26 @@ newest_open() { # selected open run, or newest when called for show
   fi
   [ "${#open_runs[@]}" -gt 0 ] || return 1
   printf '%s\n' "${open_runs[0]}"
+}
+
+run_dir_by_id() {
+  [ "$RUN_SELECTOR_SET" -eq 1 ] || {
+    echo "run-state.sh: --run <id> is required" >&2
+    return 2
+  }
+  case "$RUN_SELECTOR" in
+    */*|.|..)
+      echo "run-state.sh: unknown run id '$RUN_SELECTOR'" >&2
+      return 7
+      ;;
+  esac
+  local d="$RUNS/$RUN_SELECTOR"
+  if [ -f "$d/RUN.md" ]; then
+    printf '%s\n' "$d"
+    return 0
+  fi
+  echo "run-state.sh: unknown run id '$RUN_SELECTOR'" >&2
+  return 7
 }
 
 PARSED_ARGS=()
@@ -362,6 +392,77 @@ rollback)
   echo "recorded rollback"
   ;;
 
+reopen)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  [ "$RUN_SELECTOR_SET" -eq 1 ] || { echo "run-state.sh: reopen requires --run <id>" >&2; exit 2; }
+  [ "$#" -eq 0 ] || { echo "run-state.sh: reopen takes no arguments besides --run <id>" >&2; exit 2; }
+  lock_run_state || exit $?
+  d="$(run_dir_by_id)" || exit $?
+  if ! run_is_closed "$d/RUN.md"; then
+    echo "run-state.sh: REFUSING to reopen — run $(basename "$d") is already open" >&2
+    exit 8
+  fi
+
+  reopened="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp="$(mktemp)" || { echo "run-state.sh: FAILED to reopen run" >&2; exit 1; }
+  # Reopen preserves both close records: it renames the active RUN.md outcome
+  # and abandoned headings to historical headings, leaves the spec's appended
+  # `## Run outcome` untouched, and writes no replacement outcome. Only an
+  # active `^## Outcome` heading marks a run closed.
+  if ! awk -v stamp="$reopened" '
+    /^## Outcome/ { print "## Previous outcome (superseded by reopen " stamp ")"; next }
+    /^## Abandoned$/ { print "## Previous abandoned marker (superseded by reopen " stamp ")"; next }
+    { print }
+  ' "$d/RUN.md" > "$tmp"; then
+    rm -f "$tmp"
+    echo "run-state.sh: FAILED to reopen run" >&2
+    exit 1
+  fi
+  if ! mv "$tmp" "$d/RUN.md"; then
+    rm -f "$tmp"
+    echo "run-state.sh: FAILED to reopen run" >&2
+    exit 1
+  fi
+  echo "reopened run: $(basename "$d") (previous outcome preserved)"
+  ;;
+
+abandon)
+  parse_run_option "$@" || exit $?
+  set -- "${PARSED_ARGS[@]}"
+  [ "$#" -eq 1 ] && [ -n "$1" ] || { echo "run-state.sh: abandon requires a non-empty reason" >&2; exit 2; }
+  reason="$1"
+  lock_run_state || exit $?
+  if [ "$RUN_SELECTOR_SET" -eq 1 ]; then
+    d="$(run_dir_by_id)" || exit $?
+  else
+    d="$(newest_open)" || {
+      rc=$?
+      [ "$rc" -eq 1 ] && echo "run-state.sh: no open run" >&2
+      exit "$rc"
+    }
+  fi
+  if run_is_closed "$d/RUN.md"; then
+    echo "run-state.sh: REFUSING to abandon — run $(basename "$d") is already closed" >&2
+    exit 9
+  fi
+
+  recorded_spec="$(sed -n 's/^- spec: //p' "$d/RUN.md" | head -1)"
+  spec_path=""
+  if [ -n "$recorded_spec" ]; then
+    spec_path="$(resolve_spec_path "$recorded_spec")" || exit $?
+  fi
+  abandoned_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '\n## Outcome\n\nABANDONED\n\n## Abandoned\n\nreason: %s\n\nclosed: %s\n' \
+    "$reason" "$abandoned_at" >> "$d/RUN.md"
+  if [ -n "$spec_path" ]; then
+    printf '\n## Run outcome — %s\n\nABANDONED\n\nreason: %s\n' \
+      "${abandoned_at%%T*}" "$reason" >> "$spec_path"
+    echo "appended abandoned outcome to $recorded_spec"
+  fi
+  echo "abandoned run: $(basename "$d")"
+  ;;
+
 close)
   parse_run_option "$@" || exit $?
   set -- "${PARSED_ARGS[@]}"
@@ -504,7 +605,11 @@ show)
   set -- "${PARSED_ARGS[@]}"
   if [ "${1:-}" = "--list" ]; then
     for x in $(ls -1d "$RUNS"/*/ 2>/dev/null | sort -r); do
-      grep -q '^## Outcome' "$x/RUN.md" 2>/dev/null && st="closed" || st="OPEN  "
+      if run_is_closed "$x/RUN.md"; then
+        run_is_abandoned "$x/RUN.md" && st="ABANDONED" || st="closed"
+      else
+        st="OPEN  "
+      fi
       echo "$st $(basename "${x%/}")"
     done
     exit 0

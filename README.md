@@ -364,7 +364,8 @@ against the run's spec, and cannot dispatch a run opened without `--spec`.
 `resolve` surfaces `BLOCKED-HUMAN` first (usually two minutes of your time, and
 everything downstream waits on them), confirms before re-dispatching a `FAILED`
 lane, and closes only when every item is resolved *and* the flow reached its
-final phase — a run that died at phase 3 is abandoned, not finished.
+final phase. A run that died at phase 3 is not finished; use
+`run-state.sh abandon <dir> "<reason>"` to record it as terminal `ABANDONED`.
 
 Where `tasks-axi` is installed it owns the items, since it already resurfaces
 them at session start; otherwise they live in `RUN.md`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# runs-sweep.sh — read-only cross-repo report of open flow runs.
+# runs-sweep.sh — read-only cross-repo report of open and abandoned flow runs.
 #
 # Usage: runs-sweep.sh [root...]
 # Roots come from arguments, then CHARLES_SWEEP_ROOTS (colon-separated), then
@@ -113,6 +113,9 @@ expected_next() {
   fi
 }
 
+run_is_closed() { grep -q '^## Outcome' "$1" 2>/dev/null; }
+run_is_abandoned() { grep -q '^## Abandoned$' "$1" 2>/dev/null; }
+
 for root in "${roots[@]}"; do
   [ -n "$root" ] || continue
   if [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; then
@@ -130,7 +133,10 @@ for root in "${roots[@]}"; do
         printf '%s · %s · unreadable: %s\n' "$(basename "$repo")" "$run_id" "$run"
         continue
       fi
-      grep -q '^## Outcome' "$run" 2>/dev/null && continue
+      if run_is_closed "$run"; then
+        run_is_abandoned "$run" && printf '%s · %s · ABANDONED\n' "$(basename "$repo")" "$run_id"
+        continue
+      fi
       flow="$(sed -n 's/^- flow: //p' "$run" | head -1)"
       phase="$(last_phase "$run")"
       expected="$(expected_next "$flow" "$phase")"

@@ -60,10 +60,16 @@ while [ "$repo" != "/" ] && [ ! -f "$repo/.charles.toml" ]; do
 done
 [ -f "$repo/.charles.toml" ] || exit 0
 
-open_n=0; items=0; newest=""
+open_n=0; items=0; newest=""; abandoned_n=0; abandoned_ids=""
 for d in "$repo"/.charles/runs/*/; do
   [ -f "$d/RUN.md" ] || continue
-  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
+  if grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null; then
+    if grep -q '^## Abandoned$' "$d/RUN.md" 2>/dev/null; then
+      abandoned_n=$((abandoned_n + 1))
+      abandoned_ids="${abandoned_ids:+$abandoned_ids }$(basename "${d%/}")"
+    fi
+    continue
+  fi
   open_n=$((open_n + 1))
   n="$(grep -c '^- \[ \] ' "$d/RUN.md" 2>/dev/null)" || n=0
   items=$((items + ${n:-0}))
@@ -73,5 +79,8 @@ done
 if [ "$open_n" -gt 0 ]; then
   echo "charlesdr-dev-loop: $open_n open run(s) here, $items unresolved item(s). Newest: $newest"
   echo "  /charlesdr-dev-loop:resolve to pick up where you stopped"
+fi
+if [ "$abandoned_n" -gt 0 ]; then
+  echo "charlesdr-dev-loop: $abandoned_n ABANDONED run(s) here (not open): $abandoned_ids"
 fi
 exit 0

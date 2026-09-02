@@ -17,8 +17,14 @@ done
 runs="$root/.charles/runs"
 [ -d "$runs" ] || exit 0
 
+abandoned_ids=""
 for d in $(ls -1d "$runs"/*/ 2>/dev/null | sort -r); do
-  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
+  if grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null; then
+    if grep -q '^## Abandoned$' "$d/RUN.md" 2>/dev/null; then
+      abandoned_ids="${abandoned_ids:+$abandoned_ids }$(basename "${d%/}")"
+    fi
+    continue
+  fi
   # grep -c prints 0 AND exits 1 on no match, so `|| echo 0` would append a
   # second zero and the test below would choke on "0\n0".
   n="$(grep -c '^- \[ \] \*\*FAILED\*\*' "$d/RUN.md" 2>/dev/null)" || n=0
@@ -30,4 +36,7 @@ for d in $(ls -1d "$runs"/*/ 2>/dev/null | sort -r); do
   fi
   break   # newest open run only
 done
+if [ -n "$abandoned_ids" ]; then
+  echo "charlesdr-dev-loop: ABANDONED run(s) are terminal, not finished: $abandoned_ids"
+fi
 exit 0
