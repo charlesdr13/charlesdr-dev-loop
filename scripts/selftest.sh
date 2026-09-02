@@ -4377,6 +4377,51 @@ else
   echo "  FAIL  --req must still succeed with an explicit --run (rc=$a6_selected_rc): $a6_selected_out"; fail=$((fail+1))
 fi
 
+# --- A7 metadata-aware untracked review additions -----------------------------
+A7="$BOX/a7-untracked"; A7BIN="$BOX/a7-bin"; A7_CAPTURE="$BOX/a7-captured.diff"
+A7_TARGET="$BOX/a7-symlink-target.txt"; mkdir -p "$A7/docs/specs" "$A7BIN"
+( cd "$A7" && git init -q && git config user.name tester && git config user.email tester@example.invalid
+  printf '# A7 plan\n' > docs/specs/plan.md
+  git add docs/specs/plan.md && git commit -qm base ) >/dev/null 2>&1
+printf '#!/usr/bin/env bash\n: > "$A7_DISPATCHED"\ncp changes.diff "$A7_CAPTURE"\n' > "$A7BIN/codex"
+chmod +x "$A7BIN/codex"
+printf '#!/usr/bin/env bash\nprintf a7-hook\n' > "$A7/a7-executable.sh"; chmod +x "$A7/a7-executable.sh"
+printf 'plain-text-A7\n' > "$A7/a7-plain.txt"
+printf 'target-payload-A7\n' > "$A7_TARGET"; ln -s "$A7_TARGET" "$A7/a7-link"
+printf '\000BINARY-A7\001\377\n' > "$A7/a7-binary.bin"
+rm -f "$A7_CAPTURE" "$BOX/a7-dispatched"
+a7_out="$(A7_CAPTURE="$A7_CAPTURE" A7_DISPATCHED="$BOX/a7-dispatched" \
+  PATH="$A7BIN:$PATH" CHARLES_STATE_DIR="$BOX/a7-state" bash "$RUN_SH" \
+  --lane review --dir "$A7" --plan "$A7/docs/specs/plan.md" --timeout 5 "t" 2>&1)"; a7_rc=$?
+if [ "$a7_rc" -eq 0 ] && grep -qF 'new file mode 100755' "$A7_CAPTURE" \
+  && grep -qF '+++ b/a7-executable.sh' "$A7_CAPTURE" \
+  && grep -qF '+#!/usr/bin/env bash' "$A7_CAPTURE"; then
+  echo "  PASS  untracked executable keeps its 100755 mode"; pass=$((pass+1))
+else
+  echo "  FAIL  untracked executable must keep its mode (rc=$a7_rc): $a7_out"; fail=$((fail+1))
+fi
+if [ "$a7_rc" -eq 0 ] && grep -qF 'new file mode 120000' "$A7_CAPTURE" \
+  && grep -qF '+++ b/a7-link' "$A7_CAPTURE" \
+  && grep -qF "+$A7_TARGET" "$A7_CAPTURE" \
+  && ! grep -qF '+target-payload-A7' "$A7_CAPTURE"; then
+  echo "  PASS  untracked symlink keeps mode and target text"; pass=$((pass+1))
+else
+  echo "  FAIL  untracked symlink must not inline its target (rc=$a7_rc): $a7_out"; fail=$((fail+1))
+fi
+if [ "$a7_rc" -eq 0 ] && grep -qF 'Binary files /dev/null and b/a7-binary.bin differ' "$A7_CAPTURE" \
+  && ! grep -qF 'BINARY-A7' "$A7_CAPTURE"; then
+  echo "  PASS  untracked binary is reported as binary"; pass=$((pass+1))
+else
+  echo "  FAIL  untracked binary must not be mangled as text (rc=$a7_rc): $a7_out"; fail=$((fail+1))
+fi
+a7_plain_hits="$(grep -cF '+plain-text-A7' "$A7_CAPTURE" 2>/dev/null || true)"
+if [ "$a7_rc" -eq 0 ] && grep -qF 'new file mode 100644' "$A7_CAPTURE" \
+  && [ "$a7_plain_hits" -eq 1 ]; then
+  echo "  PASS  untracked plain text remains an added line with mode 100644"; pass=$((pass+1))
+else
+  echo "  FAIL  untracked plain text must remain an added line (hits=$a7_plain_hits rc=$a7_rc): $a7_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

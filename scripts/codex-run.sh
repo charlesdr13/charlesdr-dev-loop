@@ -865,7 +865,7 @@ run_review() {
       fi
       NOTE="Input is a git diff of the working tree against HEAD, plus untracked files as additions."
     fi
-    # untracked files are invisible to git diff — append them as adds
+    # untracked files are invisible to git diff — append Git's metadata-aware adds
     untracked_file="$box/untracked"
     if ! git -C "$DIR" ls-files --others --exclude-standard -z -- . "${excludes[@]}" > "$untracked_file"; then
       echo "codex-run.sh: refusing review — git error while assembling review diff (git ls-files)" >&2
@@ -874,8 +874,17 @@ run_review() {
     fi
     while IFS= read -r -d '' f; do
       case "$f" in .charles/*|.charles.toml|"$plan_rel") continue ;; esac
-      if ! printf '\n--- /dev/null\n+++ b/%s\n' "$f" >> "$box/changes.diff" \
-        || ! sed 's/^/+/' "$DIR/$f" >> "$box/changes.diff"; then
+      if git -C "$DIR" diff --no-index -- /dev/null "$f" >> "$box/changes.diff"; then
+        :
+      else
+        untracked_diff_rc=$?
+        if [ "$untracked_diff_rc" -ne 1 ]; then
+          echo "codex-run.sh: refusing review — could not assemble untracked file '$f'" >&2
+          rm -rf "$box"
+          return 4
+        fi
+      fi
+      if [ ! -s "$box/changes.diff" ]; then
         echo "codex-run.sh: refusing review — could not assemble untracked file '$f'" >&2
         rm -rf "$box"
         return 4
