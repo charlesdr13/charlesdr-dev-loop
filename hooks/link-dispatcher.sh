@@ -13,16 +13,40 @@ set -euo pipefail
 root="${CLAUDE_PLUGIN_ROOT:-}"
 [ -n "$root" ] || exit 0
 src="$root/scripts/codex-run.sh"
-[ -x "$src" ] || exit 0
+
+command -v git >/dev/null 2>&1 || exit 0
+git_clean=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY git)
+
+target_ok() {
+  local candidate="$1" resolved
+  [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+  resolved="$(readlink -f "$candidate" 2>/dev/null)" || return 1
+  [ -n "$resolved" ] || return 1
+  if "${git_clean[@]}" -C "$(dirname "$resolved")" rev-parse --show-toplevel >/dev/null 2>&1; then
+    echo "charlesdr-dev-loop: refusing to link codex-run into a git working tree: $resolved" >&2
+    return 1
+  fi
+}
+
+target=""
+ver="$(jq -r '.version' "$root/.claude-plugin/plugin.json" 2>/dev/null)" || ver=""
+if [ -n "$ver" ]; then
+  cache="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$ver/scripts/codex-run.sh"
+  target_ok "$cache" && target="$cache"
+fi
+if [ -z "$target" ] && target_ok "$src"; then
+  target="$src"
+fi
+[ -n "$target" ] || exit 0
 
 bin="$HOME/.local/bin"
 mkdir -p "$bin" 2>/dev/null || exit 0
 link="$bin/codex-run"
 
 # Only rewrite when it actually changed, so a reinstall is silent and idempotent.
-if [ "$(readlink "$link" 2>/dev/null)" != "$src" ]; then
-  ln -sfn "$src" "$link" 2>/dev/null || exit 0
-  echo "charlesdr-dev-loop: codex-run -> $src"
+if [ "$(readlink "$link" 2>/dev/null)" != "$target" ]; then
+  ln -sfn "$target" "$link" 2>/dev/null || exit 0
+  echo "charlesdr-dev-loop: codex-run -> $target"
 fi
 
 # --- where you left off -------------------------------------------------------

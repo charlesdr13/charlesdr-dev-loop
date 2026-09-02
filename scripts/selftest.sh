@@ -1698,24 +1698,75 @@ fi
 # did not, they hunted the filesystem and executed a live working copy. The hook
 # gives them a stable `codex-run` instead.
 LINK="$(cd "$(dirname "$0")/.." && pwd)/hooks/link-dispatcher.sh"
-FAKEROOT="$BOX/fakeplugin"; mkdir -p "$FAKEROOT/scripts"
-printf '#!/usr/bin/env bash\necho dispatched\n' > "$FAKEROOT/scripts/codex-run.sh"
-chmod +x "$FAKEROOT/scripts/codex-run.sh"
+DISPATCH_ROOT="$BOX/dispatcher-worktree"; mkdir -p "$DISPATCH_ROOT/scripts" "$DISPATCH_ROOT/.claude-plugin"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$DISPATCH_ROOT"
+printf '{"version":"2.34.0"}\n' > "$DISPATCH_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho dispatched\n' > "$DISPATCH_ROOT/scripts/codex-run.sh"
+chmod +x "$DISPATCH_ROOT/scripts/codex-run.sh"
 
 HOME_ORIG="$HOME"
 export HOME="$BOX/fakehome"; mkdir -p "$HOME"
-( cd "$BOX" && CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" ) >/dev/null 2>&1
-if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$FAKEROOT/scripts/codex-run.sh" ]; then
-  echo "  PASS  session hook links codex-run onto PATH"; pass=$((pass+1))
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$DISPATCH_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK" \
+    >"$BOX/dispatcher-refuse.out" 2>"$BOX/dispatcher-refuse.err"
+); refuse_rc=$?
+if [ "$refuse_rc" -eq 0 ] \
+  && [ ! -e "$HOME/.local/bin/codex-run" ] && [ ! -L "$HOME/.local/bin/codex-run" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-refuse.err"; then
+  echo "  PASS  session hook refuses a working-tree target without creating the link"; pass=$((pass+1))
 else
-  echo "  FAIL  session hook did not create the codex-run symlink"; fail=$((fail+1))
+  echo "  FAIL  session hook must refuse a working-tree target without creating the link"; fail=$((fail+1))
 fi
 
-second="$(cd "$BOX" && CLAUDE_PLUGIN_ROOT="$FAKEROOT" bash "$LINK" 2>&1)"
+cache_target="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/2.34.0/scripts/codex-run.sh"
+mkdir -p "$(dirname "$cache_target")"
+printf '#!/usr/bin/env bash\necho cached\n' > "$cache_target"
+chmod +x "$cache_target"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$DISPATCH_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>&1
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$cache_target" ]; then
+  echo "  PASS  session hook falls back to the installed cache copy"; pass=$((pass+1))
+else
+  echo "  FAIL  session hook did not use the installed cache copy"; fail=$((fail+1))
+fi
+
+second="$(cd "$BOX" && CLAUDE_PLUGIN_ROOT="$DISPATCH_ROOT" bash "$LINK" 2>&1)"
 if [ -z "$second" ]; then
   echo "  PASS  hook is idempotent on reinstall"; pass=$((pass+1))
 else
   echo "  FAIL  hook should be silent when the link is already correct"; fail=$((fail+1))
+fi
+
+ln -sfn "$DISPATCH_ROOT/scripts/codex-run.sh" "$cache_target"
+cache_bad_before="$(readlink "$HOME/.local/bin/codex-run")"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$DISPATCH_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-cache-refuse.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$cache_bad_before" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-cache-refuse.err"; then
+  echo "  PASS  hook rejects a cache target whose resolved path is a checkout"; pass=$((pass+1))
+else
+  echo "  FAIL  hook accepted a cache target whose resolved path is a checkout"; fail=$((fail+1))
+fi
+
+rm -f "$cache_target"
+good_target="$BOX/good-codex-run.sh"
+printf '#!/usr/bin/env bash\necho good\n' > "$good_target"
+chmod +x "$good_target"
+ln -sfn "$good_target" "$HOME/.local/bin/codex-run"
+good_before="$(readlink "$HOME/.local/bin/codex-run")"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$DISPATCH_ROOT" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-existing.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$good_before" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-existing.err"; then
+  echo "  PASS  hook leaves an existing link alone without an installed copy"; pass=$((pass+1))
+else
+  echo "  FAIL  hook repointed an existing link without an installed copy"; fail=$((fail+1))
 fi
 
 # with no plugin root it must exit quietly rather than erroring
