@@ -15,16 +15,17 @@ mechanical half of the audit, and a scope-creep review at the end.
 can review, where a single bad judgment contaminates everything. If the user
 names more, polish the first and say what you deferred.
 
-## 1. Open the run
+## 1. Baseline, then open the run
 
 ```bash
 # every script lives beside the dispatcher the SessionStart hook linked
 SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
+"$SCRIPTS/green.sh" "$(pwd)"      # baseline BEFORE opening the run or touching anything
 "$SCRIPTS/run-state.sh" init "$(pwd)" ui "<route>: <what should feel better>"
-"$SCRIPTS/green.sh" "$(pwd)"      # baseline BEFORE touching anything
 ```
 
-A red baseline means you are about to blame your change for an existing failure.
+If the baseline is red, stop before `init`; otherwise you are about to blame your
+change for an existing failure.
 
 ## 2. Route to impeccable — pick one, do not run several
 
@@ -72,13 +73,22 @@ before using it:
 "$SCRIPTS/verify-receipt.sh" "$(pwd)" --lane explore --since 1800
 ```
 
-Exit 1 means nothing ran — discard the report entirely.
+Exit 1 means nothing ran — discard the report entirely and record a `FAILED` item:
+
+```bash
+"$SCRIPTS/run-state.sh" item "$(pwd)" FAILED "codex explore returned no receipt"
+```
 
 ## 4. Decide, then implement
 
 Merge the two inputs yourself: impeccable's judgment leads, the codex audit
 supplies the mechanical backlog. Write the survivors to
-`docs/specs/YYYY-MM-DD-ui-<route>.md` — this is what makes step 5 possible.
+`docs/specs/YYYY-MM-DD-ui-<route>.md`, then bind that plan to the open run before
+implementing:
+
+```bash
+"$SCRIPTS/run-state.sh" spec "$(pwd)" docs/specs/<plan>.md
+```
 
 Record anything you are not doing as a run item, typed:
 
@@ -90,7 +100,7 @@ Record anything you are not doing as a run item, typed:
 Taste disagreements belong in `BLOCKED-HUMAN`. Do not resolve them by guessing
 what the user would prefer.
 
-## 5. Verify — three checks, none optional
+## 5. Verify — four checks, none optional
 
 1. **Green** — `"$SCRIPTS/green.sh" "$(pwd)"`, paste the output.
 2. **No regression on the floor.** Prettier must not mean less usable. Contrast,
@@ -101,6 +111,8 @@ what the user would prefer.
    the result looks better, but it can catch "the plan said tighten the card and
    the diff also rewrote the auth hook", which is how polish work actually goes
    wrong.
+4. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
+   requirement, with the actual verification output as evidence.
 
 Then close, or leave open if items remain:
 

@@ -1,6 +1,6 @@
 ---
 name: charles-flow
-description: Charles's development loop — Claude Code orchestrates, Codex lanes do the exploring and the typing, and an isolated reviewer grades the result. Use whenever work in a repo with a .charles.toml means building a feature, fixing a bug, or hunting for improvements; also when the user says "use the flow", "dispatch a fleet", "codex fleet", or names the feature/debug/polish flow. Not for repos that have not opted in.
+description: Charles's development loop — Claude Code orchestrates, Codex lanes do the exploring and the typing, and an isolated reviewer grades the result. Select the destination by work-kind: feature, debug, polish, UI/UX, release, or ops. Use whenever work in a repo with a .charles.toml means building a feature, fixing a bug, or hunting for improvements; also when the user says "use the flow", "dispatch a fleet", "codex fleet", or names a destination. Not for repos that have not opted in.
 ---
 
 # The flow
@@ -11,6 +11,19 @@ implementation go out to Codex lanes; grading goes to an isolated reviewer.
 **Gate:** this only applies in a repo with a `.charles.toml` at its root. If
 there isn't one, say so and offer `/charlesdr-dev-loop:init` — do not silently apply
 the flow, and do not silently skip it either.
+
+## Select by work-kind
+
+Route the request by its deliverable:
+
+| Work-kind | Destination |
+|---|---|
+| Build something new | `/charlesdr-dev-loop:feature` |
+| Something is broken | `/charlesdr-dev-loop:debug` |
+| Improve existing behaviour | `/charlesdr-dev-loop:polish` |
+| UI/UX work — router, not a flow | `/charlesdr-dev-loop:ui` |
+| Publish a version | `/charlesdr-dev-loop:release` |
+| Cross-repo run triage or recovery | `/charlesdr-dev-loop:ops` |
 
 ## Lanes
 
@@ -122,9 +135,10 @@ The dispatcher is on PATH as `codex-run` (a SessionStart hook links it to the
 installed plugin copy). Never hardcode a path into a checkout — an agent that
 executes a working tree runs whatever half-finished state it is in.
 
-**Skill-only install** (no plugin): call the dispatcher directly as
-`codex-run --lane ... --dir ...`. The same background Bash mechanism applies, so
-keep fleets small and give parallel calls separate `.charles/` logs.
+**Skill-only install** (no plugin): call the dispatcher directly in a Bash tool
+call with `run_in_background: true` for explore and implement:
+`codex-run --lane ... --dir ...`. Keep fleets small and give parallel calls
+separate `.charles/` logs.
 
 ## Plans: one artifact, and it is not a task list
 
@@ -247,11 +261,12 @@ Measured, per lane:
 concurrency-sensitive.** Measured on this repo: sol-class and terra-class
 reviews of the same code produced 13 findings with **one** overlap. A single
 reviewer is not a weaker version of two — it is a different, mostly disjoint set.
+Make each a separate Bash tool call with `run_in_background: true`:
 
 ```bash
-"$SCRIPTS/codex-run.sh" --lane review --dir "$(pwd)" --plan <plan> "<focus>" &
-"$SCRIPTS/codex-run.sh" --lane review --engine terra --dir "$(pwd)" --plan <plan> "<focus>" &
-wait
+# Each command is a separate Bash tool call with run_in_background: true.
+"$SCRIPTS/codex-run.sh" --lane review --dir "$(pwd)" --plan <plan> --timeout 2700 "<focus>"
+"$SCRIPTS/codex-run.sh" --lane review --engine terra --dir "$(pwd)" --plan <plan> --timeout 2700 "<focus>"
 ```
 
 Each gets its own `mktemp -d`, so they cannot interfere. Take the union of the
@@ -395,10 +410,10 @@ from inside a report, which is why the check reads that instead.
    state:** it ends by invoking `writing-plans`; here it ends by handing the
    design to the grill. Do not invoke `writing-plans`.
 2. **Explore.** Issue 3+ direct `codex-run --lane explore` calls as separate
-   background Bash calls, each on a different angle — prior art in this repo,
-   the integration points, the failure modes, what a competing design would
-   look like. Give each call its own `.charles/` log and synthesise the reports
-   yourself; do not hand the raw reports to the user.
+   Bash calls with `run_in_background: true`, each on a different angle — prior
+   art in this repo, the integration points, the failure modes, what a competing
+   design would look like. Give each call its own `.charles/` log and synthesise
+   the reports yourself; do not hand the raw reports to the user.
 3. **Write the plan** to `docs/specs/YYYY-MM-DD-<topic>.md` — before the grill,
    not after. If it yields 2+ parallel-compatible file slices, record that a companion
    `.chunks.json` manifest will be needed, but do not write it yet.
@@ -420,7 +435,8 @@ from inside a report, which is why the check reads that instead.
    `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"` as in
    `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
    docs/specs/<plan>.chunks.json` when the valid manifest holds
-   `parallel_min_chunks` or more entries. Otherwise dispatch serially with
+   `parallel_min_chunks` or more entries. Otherwise dispatch serially with a
+   Bash call marked `run_in_background: true` running
    `codex-run --lane implement --req <requirement IDs>`; one chunk, overlap not
    declared shared, an invalid manifest, missing `treehouse`, and any batch that
    edits the flow machinery are documented serial fallbacks.
@@ -436,9 +452,10 @@ from inside a report, which is why the check reads that instead.
 ## Flow 2 — debug
 
 1. `diagnosing-bugs` for the discipline — build the feedback loop first.
-2. Explore fleet on the failing behaviour with direct background
-   `codex-run --lane explore` calls. Each call gets the repro and is asked for a
-   cause **plus** the `file:line` evidence trail, never a patch.
+2. Explore fleet on the failing behaviour with direct `codex-run --lane explore`
+   calls; make each Bash call with `run_in_background: true`. Each call gets the
+   repro and is asked for a cause **plus** the `file:line` evidence trail, never
+   a patch.
 3. Ground to truth: confirm the cause yourself against source before fixing.
 4. **Write the plan** to `docs/specs/YYYY-MM-DD-<bug>.md`: the confirmed cause,
    the intended fix scope, and the green command. Three short sections. If it
@@ -451,9 +468,10 @@ from inside a report, which is why the check reads that instead.
    `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
    docs/specs/<plan>.chunks.json` when the valid manifest holds
    `parallel_min_chunks` or more entries. Otherwise dispatch the fix serially
-   with `codex-run --lane implement --req <requirement IDs>`; use serial for
-   one chunk, overlap not declared shared, an invalid manifest, missing
-   `treehouse`, or a batch that edits the flow machinery.
+   with a Bash call marked `run_in_background: true` running
+   `codex-run --lane implement --req <requirement IDs>`; use serial for one
+   chunk, overlap not declared shared, an invalid manifest, missing `treehouse`,
+   or a batch that edits the flow machinery.
 6. `codex-reviewer` against that plan — "does this diff fix the stated cause and
    nothing else".
 7. Verify: `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`, paste its output.
@@ -464,9 +482,9 @@ from inside a report, which is why the check reads that instead.
 
 ## Flow 3 — polish
 
-1. Direct background `codex-run --lane explore` calls asked for gaps, must-haves,
-   and quality-of-life wins — one call per lens, not three asked the same
-   question.
+1. Direct `codex-run --lane explore` calls with `run_in_background: true`, asked
+   for gaps, must-haves, and quality-of-life wins — one call per lens, not three
+   asked the same question.
 2. Brainstorm the shortlist with the user.
 3. Grill (`grill-rounds`), and write the survivor to `docs/specs/`. After the
    grill settles, write or rewrite the companion `.chunks.json` manifest beside
@@ -476,9 +494,10 @@ from inside a report, which is why the check reads that instead.
    `commands/ui.md:22`, and invoke `"$SCRIPTS/parallel-chunks.sh" "$(pwd)"
    docs/specs/<plan>.chunks.json` when the valid manifest holds
    `parallel_min_chunks` or more entries. Otherwise dispatch serially with a
-   background `codex-run --lane implement --req <requirement IDs>` call; use
-   serial for one chunk, overlap not declared shared, an invalid manifest,
-   missing `treehouse`, or a batch that edits the flow machinery.
+   Bash call marked `run_in_background: true` running
+   `codex-run --lane implement --req <requirement IDs>`; use serial for one
+   chunk, overlap not declared shared, an invalid manifest, missing `treehouse`,
+   or a batch that edits the flow machinery.
 5. `codex-reviewer` against that plan.
 6. Verify with `green.sh`.
 7. **Sign off.** Complete the plan's `## Sign-off` section: one checked line per
@@ -494,10 +513,10 @@ is a 27-command UI system and owns the taste judgment. Do not rebuild it here.
 2. Route to ONE impeccable command — `polish`, `audit`, `critique`, `animate`,
    `optimize`, `bolder`/`quieter`, or `live` (needs a dev server). Motion work
    also loads the gsap skills; `gsap-performance` before shipping animation.
-3. In parallel, one direct background `codex-run --lane explore` call for the
-   mechanical audit only — token drift, off-scale spacing, duplicate variants,
-   dead styles, with `file:line`. It cannot see, so never ask it for an aesthetic
-   opinion.
+3. In parallel, one direct `codex-run --lane explore` call with
+   `run_in_background: true` for the mechanical audit only — token drift,
+   off-scale spacing, duplicate variants, dead styles, with `file:line`. It
+   cannot see, so never ask it for an aesthetic opinion.
 4. Merge: impeccable leads, the codex audit is the mechanical backlog. Plan to
    `docs/specs/`. Taste disagreements become `BLOCKED-HUMAN` items.
 5. Verify green, confirm no regression in contrast/focus/tab-order/CLS, and run

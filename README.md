@@ -10,8 +10,8 @@ cd your-repo
 /charlesdr-dev-loop:feature add rate limiting to the API
 ```
 
-That single command runs the whole loop: brainstorm, three direct background
-Codex explore calls, an adversarial grill of the plan, a ground-truth gate,
+That single command runs the whole loop: brainstorm, three direct Codex explore
+calls with `run_in_background: true`, an adversarial grill of the plan, a ground-truth gate,
 implementation, isolated review, then your test command until it passes.
 
 ---
@@ -25,7 +25,7 @@ flowchart TD
     INIT --> GATE
     GATE -->|yes| BRAIN["brainstorm<br/><i>superpowers</i>"]
 
-    BRAIN --> EXP["explore fleet — 3x background Bash calls<br/><b>luna @ max</b> · read-only"]
+    BRAIN --> EXP["explore fleet — 3x Bash calls<br/><i>run_in_background: true</i> · <b>luna @ max</b> · read-only"]
     EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
     GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
     TRUTH -->|any fails| GRILL
@@ -264,9 +264,10 @@ codex-run --lane explore   --dir REPO --timeout 2700 "why does the refresh path 
 codex-run --lane implement --dir REPO --req R1,A3 --timeout 2700 "add the RangeError guard from the plan"
 # Short review: foreground and isolated; longer reviews use the background path below.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md --timeout 540 "check every requirement"
-# Long review: use --timeout 2700, then check lane-status.sh at most three times.
-nohup codex-run --lane review --dir REPO --plan docs/specs/x.md --timeout 2700 \
-  "check every requirement" >/tmp/charles-review-$$.log 2>&1 &
+# Long review: make a separate Bash call with run_in_background: true and --timeout 2700;
+# then check lane-status.sh at most three times.
+codex-run --lane review --dir REPO --plan docs/specs/x.md --timeout 2700 \
+  "check every requirement"
 # Review committed work, including any uncommitted changes on top.
 codex-run --lane review    --dir REPO --plan docs/specs/x.md --base REF "check every requirement"
 ```
@@ -325,6 +326,8 @@ writing to the same tree.
 | `/charlesdr-dev-loop:polish` | "What should I improve here" |
 | `/charlesdr-dev-loop:init` | Opt this repo in |
 | `/charlesdr-dev-loop:ui <route>` | UI/UX polish — routes to impeccable, adds a codex mechanical audit |
+| `/charlesdr-dev-loop:release <semver>` | Publish a version |
+| `/charlesdr-dev-loop:ops` | Cross-repo run triage and recovery |
 | `/charlesdr-dev-loop:resolve` | Pick up where the last run stopped |
 | `/charlesdr-dev-loop:doctor` | Check every lane and dependency |
 
@@ -387,10 +390,11 @@ its references already handle the perf/a11y floor. Rebuilding that would have
 produced a worse copy.
 
 The router adds only what impeccable lacks: durable run state, one direct
-background `codex-run --lane explore` call for the *mechanical* audit (token
-drift, off-scale spacing, duplicate variants, dead styles — grep-shaped findings
-an eye misses), gsap routing for motion work, and a `codex-reviewer` pass for
-scope creep, which is how polish work actually goes wrong.
+`codex-run --lane explore` call with `run_in_background: true` for the
+*mechanical* audit (token drift, off-scale spacing, duplicate variants, dead
+styles — grep-shaped findings an eye misses), gsap routing for motion work, and
+a `codex-reviewer` pass for scope creep, which is how polish work actually goes
+wrong.
 
 Taste never goes to a lane. luna gets a diff, never a picture, so anything
 needing an eye becomes a `BLOCKED-HUMAN` item rather than a guess.
@@ -409,8 +413,8 @@ and everything when `CHARLES_INLINE_OK=1`.
 **Subagents** — `PreToolUse` on `Agent|Task`. Stopping Claude from typing the
 code achieves nothing if it can hand the same work to one of its own subagents
 instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
-language specialist in an opted-in repo asks you to make a direct background
-`codex-run --lane ... --dir ... --timeout 2700 "<task>"` call instead. It is a
+language specialist in an opted-in repo asks you to make a direct Bash call with
+`run_in_background: true` running `codex-run --lane ...` instead. It is a
 denylist of agents that do repo code work — `google-drive`, `claude-code-guide`
 and the rest are none of this hook's business.
 

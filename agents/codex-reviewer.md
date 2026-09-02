@@ -20,7 +20,10 @@ SCRIPTS="$(dirname "$(readlink -f "$RUN")")"
 [ -x "$RUN" ] || { echo "codex-run not found — report this and STOP"; exit 1; }
 ```
 
-For a review expected to finish within roughly 9 minutes, dispatch with `"$RUN"`:
+For a review expected to finish within roughly 9 minutes, set the outer Bash
+tool timeout to `600` seconds (`timeout: 600`) and dispatch with `"$RUN"`:
+600s is the ceiling; when the outer timeout is unset, the Bash tool defaults to
+120s, which can silently kill a valid review before its own timeout is reached.
 
 ```bash
 "$RUN" --lane review \
@@ -93,21 +96,19 @@ minutes (heavy diff, big repo, or terra at max) runs in the background with
    timed-out lane is a `FAILED` item for `/charlesdr-dev-loop:resolve`, not a
    cue to improvise.
 
-**If the review genuinely needs longer than 10 minutes**, launch it once in the
-background with the real timeout and check a bounded number of times, sleeping
-inside the call so waiting costs turns instead of tokens:
+**If the review genuinely needs longer than 10 minutes**, make one separate Bash
+tool call with `run_in_background: true` and the real timeout:
 
 ```bash
-REVIEW_LOG="/tmp/charles-review-$$.log"
-nohup "$RUN" --lane review --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 2700 \
-  "<what to pay special attention to>" >"$REVIEW_LOG" 2>&1 &
-# then AT MOST three checks, each one a single call:
-sleep 300; "$SCRIPTS/lane-status.sh"; tail -20 "$REVIEW_LOG"
+# Bash tool call: run_in_background: true
+"$RUN" --lane review --dir <REPO> --plan <PATH-TO-PLAN.md> --timeout 2700 \
+  "<what to pay special attention to>"
 ```
 
-Three checks maximum. Exit 1 means `DONE` and the receipt/result can be read;
-exit 2 means `DEAD` and must be reported as `FAILED`; still running after the
-third check is also `FAILED`. Never re-dispatch it.
+The harness callback is the completion signal. If it is lost, use
+`lane-status.sh` for at most three checks; exit 1 means `DONE`, exit 2 means
+`DEAD` and must be reported as `FAILED`, and still running after the third check
+is also `FAILED`. Never re-dispatch it.
 
 ## If you end up waiting
 

@@ -12,6 +12,7 @@ Report what came back. For each issue, say what closes it:
 
 - **ungraded implements** → `codex-reviewer` against the plan in `docs/specs/`
 - **plans with no grill verdict** → `grill-rounds` on that plan
+- **unsourced working-tree changes** → resolve or commit them before close; they remain blocking
 - **open runs** → `/charlesdr-dev-loop:resolve`
 
 Do not offer to `--force` a close unless the user asks. The point of the check

@@ -3292,6 +3292,83 @@ else
   echo "  FAIL  ordinary in-repo --spec close should succeed"; fail=$((fail+1))
 fi
 
+# --- documentation contracts: background dispatch and UI router ---------------
+# Keep this list documentation-only: executable `&` in dispatcher scripts is
+# legitimate and is intentionally outside this assertion.
+DOCS=(
+  "$REPO_ROOT/skills/charles-flow/SKILL.md"
+  "$REPO_ROOT/README.md"
+  "$REPO_ROOT/agents/codex-reviewer.md"
+  "$REPO_ROOT/commands/debug.md"
+  "$REPO_ROOT/commands/polish.md"
+  "$REPO_ROOT/commands/ui.md"
+  "$REPO_ROOT/commands/status.md"
+)
+doc_background_bad="$(grep -nE 'nohup|codex-run.*[^&]&[[:space:]]*$|\$RUN.*[^&]&[[:space:]]*$' "${DOCS[@]}" 2>/dev/null || true)"
+if [ -z "$doc_background_bad" ]; then
+  echo "  PASS  instructional docs use no shell backgrounding"; pass=$((pass+1))
+else
+  echo "  FAIL  instructional docs contain shell backgrounding"; echo "        $doc_background_bad"; fail=$((fail+1))
+fi
+
+background_marker_missing=""
+for doc in "${DOCS[@]}"; do
+  case "$doc" in
+    */skills/charles-flow/SKILL.md|*/README.md|*/agents/codex-reviewer.md|*/commands/debug.md|*/commands/polish.md|*/commands/ui.md) \
+      grep -qF 'run_in_background: true' "$doc" || background_marker_missing="$background_marker_missing ${doc#"$REPO_ROOT"/}" ;;
+  esac
+done
+if [ -z "$background_marker_missing" ]; then
+  echo "  PASS  explore/implement background docs name run_in_background"; pass=$((pass+1))
+else
+  echo "  FAIL  background docs missing run_in_background: true:$background_marker_missing"; fail=$((fail+1))
+fi
+
+review_doc="$REPO_ROOT/agents/codex-reviewer.md"
+if grep -qF 'outer Bash' "$review_doc" \
+  && grep -qF 'timeout: 600' "$review_doc" \
+  && grep -qF '600s is the ceiling' "$review_doc" \
+  && grep -qF 'defaults to' "$review_doc" \
+  && grep -qF '120s' "$review_doc"; then
+  echo "  PASS  foreground review documents the outer timeout limits"; pass=$((pass+1))
+else
+  echo "  FAIL  foreground review must document timeout: 600, the 600s ceiling, and 120s default"; fail=$((fail+1))
+fi
+
+ui_doc="$REPO_ROOT/commands/ui.md"
+ui_green_line="$(grep -nF '"$SCRIPTS/green.sh" "$(pwd)"' "$ui_doc" | head -1 | cut -d: -f1)"
+ui_init_line="$(grep -nF '"$SCRIPTS/run-state.sh" init' "$ui_doc" | head -1 | cut -d: -f1)"
+if [ -n "$ui_green_line" ] && [ -n "$ui_init_line" ] && [ "$ui_green_line" -lt "$ui_init_line" ]; then
+  echo "  PASS  UI runs baseline green before opening the run"; pass=$((pass+1))
+else
+  echo "  FAIL  UI baseline green must precede run-state init"; fail=$((fail+1))
+fi
+if grep -qF '"$SCRIPTS/run-state.sh" spec "$(pwd)" docs/specs/<plan>.md' "$ui_doc"; then
+  echo "  PASS  UI binds the written plan with run-state spec"; pass=$((pass+1))
+else
+  echo "  FAIL  UI must bind the written plan with run-state spec"; fail=$((fail+1))
+fi
+ui_signoff_line="$(grep -nF '## Sign-off' "$ui_doc" | head -1 | cut -d: -f1)"
+ui_close_line="$(grep -nF '"$SCRIPTS/run-state.sh" close' "$ui_doc" | head -1 | cut -d: -f1)"
+if grep -qF 'run-state.sh" item "$(pwd)" FAILED' "$ui_doc" \
+  && [ -n "$ui_signoff_line" ] && [ -n "$ui_close_line" ] \
+  && [ "$ui_signoff_line" -lt "$ui_close_line" ] \
+  && grep -qF 'unsourced working-tree changes' "$REPO_ROOT/commands/status.md"; then
+  echo "  PASS  UI records failed receipts, signs off before close, and status names unsourced changes"; pass=$((pass+1))
+else
+  echo "  FAIL  UI/status lifecycle wording is incomplete"; fail=$((fail+1))
+fi
+
+flow_skill="$REPO_ROOT/skills/charles-flow/SKILL.md"
+if grep -qF '## Select by work-kind' "$flow_skill" \
+  && grep -qF '| Work-kind | Destination |' "$flow_skill" \
+  && grep -qF '| UI/UX work — router, not a flow |' "$flow_skill" \
+  && grep -qF 'This one is a **router, not a flow**' "$flow_skill"; then
+  echo "  PASS  flow selector table keeps UI as a router"; pass=$((pass+1))
+else
+  echo "  FAIL  flow selector table must keep UI as a router"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
