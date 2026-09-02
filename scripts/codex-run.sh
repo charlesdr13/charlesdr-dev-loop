@@ -358,7 +358,10 @@ validate_dispatch_scope() {
   else
     if [ "$validate_implement" -eq 1 ]; then
       [ "$REQ_SET" -eq 1 ] || return 0
-      [ -n "$PLAN" ] || return 0
+      if [ -z "$PLAN" ]; then
+        echo "codex-run.sh: REFUSING — --req implement dispatch has no open run or resolvable plan" >&2
+        return 2
+      fi
     else
       [ -n "$PLAN" ] || return 0
     fi

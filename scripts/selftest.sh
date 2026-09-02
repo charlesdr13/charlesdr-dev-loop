@@ -4331,6 +4331,52 @@ else
   echo "  FAIL  A1 watchdog end must keep identity and the blocking exit (rc=$a1_status_rc)"; fail=$((fail+1))
 fi
 
+# --- A6 requirement dispatch needs a run or plan ------------------------------
+A6="$BOX/a6-req-validation"; mkdir -p "$A6/bin" "$A6/docs/specs"
+cp "$REQDIR/bin/codex" "$A6/bin/codex"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n- [ ] **R1. requirement**\n' \
+  > "$A6/docs/specs/plan.md"
+a6_no_run_out="$(PATH="$A6/bin:$PATH" CHARLES_STATE_DIR="$A6/state" \
+  bash "$RUN_SH" --lane implement --dir "$A6" \
+  --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; a6_no_run_rc=$?
+if [ "$a6_no_run_rc" -eq 2 ] \
+  && grep -qF 'no open run or resolvable plan' <<<"$a6_no_run_out" \
+  && [ ! -s "$A6/.charles/dispatches.jsonl" ]; then
+  echo "  PASS  --req refuses without an open run or resolvable plan"; pass=$((pass+1))
+else
+  echo "  FAIL  --req must refuse without an open run or resolvable plan (rc=$a6_no_run_rc): $a6_no_run_out"; fail=$((fail+1))
+fi
+
+mkdir -p "$A6/.charles/runs/only-run"
+printf '# Run only-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A6/.charles/runs/only-run/RUN.md"
+rm -f "$A6/.charles/dispatches.jsonl"
+a6_single_out="$(PATH="$A6/bin:$PATH" CHARLES_STATE_DIR="$A6/state" \
+  bash "$RUN_SH" --lane implement --dir "$A6" \
+  --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; a6_single_rc=$?
+if [ "$a6_single_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' \
+    "$A6/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --req still succeeds with exactly one open run"; pass=$((pass+1))
+else
+  echo "  FAIL  --req must still succeed with exactly one open run (rc=$a6_single_rc): $a6_single_out"; fail=$((fail+1))
+fi
+
+mkdir -p "$A6/.charles/runs/selected-run"
+printf '# Run selected-run\n\n- flow: feature\n- spec: docs/specs/plan.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$A6/.charles/runs/selected-run/RUN.md"
+rm -f "$A6/.charles/dispatches.jsonl"
+a6_selected_out="$(PATH="$A6/bin:$PATH" CHARLES_STATE_DIR="$A6/state" \
+  bash "$RUN_SH" --lane implement --dir "$A6" \
+  --run selected-run --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; a6_selected_rc=$?
+if [ "$a6_selected_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .req == ["R1"])' \
+    "$A6/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --req still succeeds with an explicit --run"; pass=$((pass+1))
+else
+  echo "  FAIL  --req must still succeed with an explicit --run (rc=$a6_selected_rc): $a6_selected_out"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
