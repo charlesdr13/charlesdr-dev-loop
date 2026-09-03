@@ -2719,13 +2719,6 @@ else
   echo "  FAIL  terra must not use fast_mode"; fail=$((fail+1))
 fi
 
-PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '--enable fast_mode' "$ED/args.txt" 2>/dev/null; then
-  echo "  PASS  luna keeps fast_mode enabled"; pass=$((pass+1))
-else
-  echo "  FAIL  luna should keep fast_mode"; fail=$((fail+1))
-fi
-
 # R8: the local weekly quota disables fast_mode only once 20% remains.
 R8="$BOX/r8-sessions"
 for r8_case in 85 28; do
@@ -2734,6 +2727,14 @@ for r8_case in 85 28; do
     > "$R8/$r8_case/2026/08/28/rollout-$r8_case.jsonl"
 done
 mkdir -p "$R8/empty/2026/08/28"
+
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/28" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--enable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  luna keeps fast_mode enabled"; pass=$((pass+1))
+else
+  echo "  FAIL  luna should keep fast_mode"; fail=$((fail+1))
+fi
+
 for r8_case in 85 28 empty; do
   case "$r8_case" in 85) r8_expected=disable ;; *) r8_expected=enable ;; esac
   PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/$r8_case" \
