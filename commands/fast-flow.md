@@ -183,7 +183,7 @@ git -C "$WT" add -A && git -C "$WT" diff --cached HEAD | git apply --index
 
 Keep the worktree until step 8 is green: a `GAPS FOUND` retry dispatches into
 the same `$WT`, on top of the first implementation, and is merged with the same
-recipe. Return it only after green (`treehouse return "$WT"`, or
+recipe. Return it only after green (`treehouse return --force "$WT"`, or
 `git worktree remove --force "$WT"` for the fallback — its index is still
 dirty). A failed implementation or receipt stops under the failure rule; never
 implement inline.
