@@ -2,6 +2,7 @@
 # selftest.sh — asserts the hook allows what it should and asks on what it shouldn't.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
+unset CHARLES_FAST_MODE
 
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-to-codex.sh"
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
@@ -2754,6 +2755,35 @@ for r8_case in 85 28 empty; do
   fi
 done
 
+# R9: fast-flow forces luna fast_mode on, leaves terra disabled, and preserves
+# the quota result when CHARLES_FAST_MODE is unset.
+rm -f "$ED/args.txt"
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/85" \
+  CHARLES_FAST_MODE=1 bash "$RUN_SH" --lane implement --engine luna --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--enable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  R9 CHARLES_FAST_MODE=1 forces luna --enable fast_mode"; pass=$((pass+1))
+else
+  echo "  FAIL  R9 CHARLES_FAST_MODE=1 must force luna --enable fast_mode"; fail=$((fail+1))
+fi
+
+rm -f "$ED/args.txt"
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_CODEX_SESSIONS_DIR="$R8/85" \
+  CHARLES_FAST_MODE=1 bash "$RUN_SH" --lane implement --engine terra --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  R9 CHARLES_FAST_MODE=1 leaves terra --disable fast_mode"; pass=$((pass+1))
+else
+  echo "  FAIL  R9 CHARLES_FAST_MODE=1 must leave terra --disable fast_mode"; fail=$((fail+1))
+fi
+
+rm -f "$ED/args.txt"
+env -u CHARLES_FAST_MODE PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" \
+  CHARLES_CODEX_SESSIONS_DIR="$R8/85" bash "$RUN_SH" --lane implement --engine luna --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if grep -q -- '--disable fast_mode' "$ED/args.txt" 2>/dev/null; then
+  echo "  PASS  R9 unset CHARLES_FAST_MODE preserves the --disable quota result"; pass=$((pass+1))
+else
+  echo "  FAIL  R9 unset CHARLES_FAST_MODE must preserve the --disable quota result"; fail=$((fail+1))
+fi
+
 out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine nonsense --dir "$ED" --timeout 5 "t" 2>&1)"
 if grep -q 'unknown engine' <<<"$out"; then
   echo "  PASS  an unknown engine is rejected"; pass=$((pass+1))
@@ -3806,6 +3836,7 @@ DOCS=(
   "$REPO_ROOT/README.md"
   "$REPO_ROOT/agents/codex-reviewer.md"
   "$REPO_ROOT/commands/debug.md"
+  "$REPO_ROOT/commands/fast-flow.md"
   "$REPO_ROOT/commands/polish.md"
   "$REPO_ROOT/commands/ui.md"
   "$REPO_ROOT/commands/status.md"
@@ -3820,7 +3851,7 @@ fi
 background_marker_missing=""
 for doc in "${DOCS[@]}"; do
   case "$doc" in
-    */skills/charles-flow/SKILL.md|*/README.md|*/agents/codex-reviewer.md|*/commands/debug.md|*/commands/polish.md|*/commands/ui.md) \
+    */skills/charles-flow/SKILL.md|*/README.md|*/agents/codex-reviewer.md|*/commands/debug.md|*/commands/fast-flow.md|*/commands/polish.md|*/commands/ui.md) \
       grep -qF 'run_in_background: true' "$doc" || background_marker_missing="$background_marker_missing ${doc#"$REPO_ROOT"/}" ;;
   esac
 done
@@ -4056,7 +4087,7 @@ if jq -e '
   def strings: type == "array" and all(.[]; type == "string");
   . as $root |
   ($root | type == "object") and
-  all(["feature", "debug", "polish", "ui", "release"][];
+  all(["feature", "debug", "polish", "ui", "release", "fast"][];
     . as $flow |
     ($root[$flow] | type == "object") and
     ($root[$flow].phases | type == "object") and
@@ -4071,9 +4102,9 @@ if jq -e '
   ($root.release.phases.version.next == ["ship"]) and
   ($root.release.phases.ship.next == ["close"])
 ' "$FLOW_JSON" >/dev/null 2>&1; then
-  echo "  PASS  flow.json validates all five flows, including release"; pass=$((pass+1))
+  echo "  PASS  flow.json validates all six flows, including fast and release"; pass=$((pass+1))
 else
-  echo "  FAIL  flow.json must structurally validate the release flow"; fail=$((fail+1))
+  echo "  FAIL  flow.json must structurally validate the fast and release flows"; fail=$((fail+1))
 fi
 
 RELEASE_FLOW="$BOX/flow-release"; mkdir -p "$RELEASE_FLOW"

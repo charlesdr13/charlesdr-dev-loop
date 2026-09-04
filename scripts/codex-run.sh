@@ -29,6 +29,7 @@
 #
 # --fast is shorthand for --effort high. fast_mode is enabled explicitly on the
 # luna engine and disabled on the review lane, so it applies to luna only.
+# CHARLES_FAST_MODE=1 forces luna fast_mode on without the weekly quota probe; terra never calls it.
 
 set -euo pipefail
 
@@ -704,6 +705,10 @@ clear_touched() {
 
 # --- local weekly quota probe for luna fast_mode ------------------------------
 weekly_quota_fast_mode() {
+  if [ "${CHARLES_FAST_MODE:-}" = "1" ]; then
+    printf '%s\n' "--enable"
+    return 0
+  fi
   # R8 operator directive: less than 20% of weekly quota remaining disables fast_mode.
   local weekly_remaining=20
   local sessions_dir="${CHARLES_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"

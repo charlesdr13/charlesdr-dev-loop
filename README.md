@@ -324,6 +324,7 @@ writing to the same tree.
 | `/charlesdr-dev-loop:feature <what>` | Building something new |
 | `/charlesdr-dev-loop:debug <symptom>` | Something is broken |
 | `/charlesdr-dev-loop:polish` | "What should I improve here" |
+| `/charlesdr-dev-loop:fast-flow <ask>` | Small or medium adaptive fast lane |
 | `/charlesdr-dev-loop:init` | Opt this repo in |
 | `/charlesdr-dev-loop:ui <route>` | UI/UX polish — routes to impeccable, adds a codex mechanical audit |
 | `/charlesdr-dev-loop:release <semver>` | Publish a version |

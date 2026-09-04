@@ -21,6 +21,7 @@ Route the request by its deliverable:
 | Build something new | `/charlesdr-dev-loop:feature` |
 | Something is broken | `/charlesdr-dev-loop:debug` |
 | Improve existing behaviour | `/charlesdr-dev-loop:polish` |
+| Small or medium ask — adaptive fast lane | `/charlesdr-dev-loop:fast-flow` |
 | UI/UX work — router, not a flow | `/charlesdr-dev-loop:ui` |
 | Publish a version | `/charlesdr-dev-loop:release` |
 | Cross-repo run triage or recovery | `/charlesdr-dev-loop:ops` |
@@ -563,6 +564,22 @@ the command was invoked.
 5. **Close.** Close only the ops run opened in the command's repository, after
    recording `report`. If its local close is refused, report the reason and
    leave it open.
+
+## Flow 7 — fast
+
+Follow `commands/fast-flow.md` for the full command contract:
+
+1. Classify the ask and run the green baseline.
+2. Explore with one read-only luna lane in the background.
+3. Write the bounded plan, query prior art when configured, and open the fast run.
+4. Run grill round 1 with the codex adversary.
+5. Run exactly grill round 2 as one batched human message; never run round 3.
+6. Implement once in a worktree with one background luna lane and merge it back.
+7. Run one isolated default review, with one implement cycle for verified gaps.
+8. Verify green, sign off with pasted output, and close the run.
+
+The command file also defines the route-out rules, failure handling, two-cycle
+cap, and deliberate skips.
 
 ## The ground-truth gate
 

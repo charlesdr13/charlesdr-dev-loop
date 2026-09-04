@@ -67,5 +67,17 @@
     },
     "first": "survey",
     "terminal": ["report"]
+  },
+  "fast": {
+    "phases": {
+      "explore": {"next": ["plan"], "proof": "evidence-backed exploration"},
+      "plan": {"next": ["grill"], "proof": "plan in docs/specs"},
+      "grill": {"next": ["grill", "implement"], "proof": "Grill verdict"},
+      "implement": {"next": ["review"], "proof": "implementation receipt"},
+      "review": {"next": ["implement", "verify"], "proof": "review receipt"},
+      "verify": {"next": ["close"], "proof": "green output"}
+    },
+    "first": "explore",
+    "terminal": ["verify"]
   }
 }
