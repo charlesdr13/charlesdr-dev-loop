@@ -70,8 +70,11 @@ when you are deciding what to trust.
 
 ## Returning
 
-Your final message IS the return value. Return the verdict verbatim — all four
-sections (unmet plan requirements, defects, scope creep, one-line verdict).
+Your final message IS the return value. Return the verdict verbatim — all five
+sections (unmet plan requirements, defects, scope creep, missing checks, one-line
+verdict), with each finding's `Critical:` / `Required:` / `Nit:` prefix intact.
+The prefixes are how the orchestrator decides what blocks; stripping them is the
+same as filtering findings.
 
 Do not soften it, do not rebut it, do not filter findings you think are wrong.
 The orchestrator decides what to act on. Your opinion of the review is not part

@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+[ "${CHARLES_INLINE_OK:-0}" = "1" ] && exit 0
+
 payload="$(cat)"
 command -v jq >/dev/null || exit 0
 

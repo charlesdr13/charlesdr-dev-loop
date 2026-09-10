@@ -2478,6 +2478,7 @@ DD="$BOX/doctor-drift"; mkdir -p "$DD/bin" "$DD/repo/scripts" "$DD/repo/docs/spe
 printf 'green = "true"\n' > "$DD/repo/.charles.toml"
 printf '{"version":"fixture"}\n' > "$DD/repo/.claude-plugin/plugin.json"
 cp "$DOCTOR" "$DD/repo/scripts/doctor.sh"
+cp "$REPO_ROOT/scripts/run-common.sh" "$DD/repo/scripts/run-common.sh"
 cp "$FS" "$DD/repo/scripts/flow-status.sh"
 cp "$REPO_ROOT/scripts/flow.json" "$DD/repo/scripts/flow.json"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/repo/scripts/codex-run.sh"
@@ -2789,6 +2790,267 @@ if grep -q 'unknown engine' <<<"$out"; then
   echo "  PASS  an unknown engine is rejected"; pass=$((pass+1))
 else
   echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
+fi
+
+# --- claude lane contracts ----------------------------------------------------
+CL="$BOX/claude-lane"; mkdir -p "$CL/bin" "$CL/state"
+make_unsourced_repo "$CL/repo"
+touch "$CL/repo/.charles.toml"
+git -C "$CL/repo" worktree add -q "$CL/worktree" HEAD
+printf 'review change\n' > "$CL/repo/change.txt"
+cat > "$CL/bin/claude" <<'SH'
+#!/usr/bin/env bash
+jq -nc --arg inline "${CHARLES_INLINE_OK:-}" --arg nested "${CLAUDECODE+x}" \
+  --arg effort_env "${CLAUDE_CODE_EFFORT_LEVEL+x}" --arg cwd "$PWD" \
+  --arg stdin "$(readlink /proc/$$/fd/0)" \
+  '{argv:$ARGS.positional,inline:$inline,nested:$nested,effort_env:$effort_env,cwd:$cwd,stdin:$stdin}' \
+  --args -- "$@" > "$CLAUDE_TEST_CAPTURE"
+jq -nc --arg p "$PWD/tracked" '{tool_name:"Edit",tool_input:{file_path:$p}}' | bash "$CLAUDE_TEST_MARK"
+printf 'claude result\n'
+if [ -n "${CLAUDE_TEST_READY:-}" ]; then
+  : > "$CLAUDE_TEST_READY"
+  while [ ! -e "$CLAUDE_TEST_RELEASE" ]; do sleep 0.05; done
+fi
+exit "${CLAUDE_TEST_RC:-0}"
+SH
+cat > "$CL/bin/codex" <<'SH'
+#!/usr/bin/env bash
+jq -nc '$ARGS.positional' --args -- "$@" > "$CLAUDE_TEST_CODEX"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then printf 'codex result\n' > "$2"; break; fi
+  shift
+done
+SH
+chmod +x "$CL/bin/claude" "$CL/bin/codex"
+claude_run() {
+  PATH="$CL/bin:$PATH" CHARLES_STATE_DIR="$CL/state" CHARLES_ENGINE="${CLAUDE_TEST_ENGINE:-}" \
+    CLAUDE_TEST_CAPTURE="$CL/claude.json" CLAUDE_TEST_CODEX="$CL/codex.json" CLAUDE_TEST_MARK="$MARK" \
+    CHARLES_INLINE_OK=0 CLAUDECODE=orchestrator CLAUDE_CODE_EFFORT_LEVEL=high \
+    ANTHROPIC_DEFAULT_SONNET_MODEL=unexpected-alias \
+    bash "$RUN_SH" --dir "$CL/repo" --timeout 10 "$@" "claude task"
+}
+
+# Hold a successful child after stdout: .last must stay unpublished while it runs.
+CLAUDE_TEST_READY="$CL/ready" CLAUDE_TEST_RELEASE="$CL/release" \
+  claude_run --lane explore --engine claude > "$CL/stdout" 2> "$CL/stderr" & cl_pid=$!
+for _ in {1..100}; do [ -e "$CL/ready" ] && break; sleep 0.05; done
+cl_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
+cl_live_out="$(CHARLES_STATE_DIR="$CL/state" bash "$REPO_ROOT/scripts/lane-status.sh" "$cl_run" 2>&1)"; cl_live_rc=$?
+if [ -e "$CL/ready" ] && [ ! -s "$CL/state/$cl_run.last" ] \
+  && [ -s "$CL/state/$cl_run.jsonl" ] && [ "$cl_live_rc" -eq 0 ] && [[ "$cl_live_out" == RUNNING:* ]]; then
+  echo "  PASS  claude live stdout stays unpublished and lane-status stays RUNNING"; pass=$((pass+1))
+else
+  echo "  FAIL  claude must not publish .last before success ($cl_live_out)"; fail=$((fail+1))
+fi
+touch "$CL/release"
+wait "$cl_pid"; cl_rc=$?
+cl_done_out="$(CHARLES_STATE_DIR="$CL/state" bash "$REPO_ROOT/scripts/lane-status.sh" "$cl_run" 2>&1)"; cl_done_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/state/$cl_run.last" 2>/dev/null)" = 'claude result' ] \
+  && cmp -s "$CL/stdout" "$CL/state/$cl_run.last" && [ "$(cat "$CL/state/$cl_run.done")" = 0 ] \
+  && [ "$cl_done_rc" -eq 1 ] && [[ "$cl_done_out" == DONE:* ]] \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "claude" and .model == "claude-sonnet-5" and .rc == 0' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  successful claude stdout becomes .last with a matching receipt and DONE status"; pass=$((pass+1))
+else
+  echo "  FAIL  claude success must publish stdout and record its model (rc=$cl_rc)"; fail=$((fail+1))
+fi
+if jq -e '.argv[0:7] == ["-p","--model","claude-sonnet-5","--effort","medium","--output-format","text"]
+  and (.argv | index("--permission-mode")) == null
+  and (.argv[.argv | index("--disallowed-tools") + 1] == "Edit Write MultiEdit NotebookEdit")
+  and .inline == "1" and .nested == "" and .effort_env == "" and .stdin == "/dev/null"
+  and (.argv[-1] | contains("claude task") and contains("Git is READ-ONLY")
+    and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
+    and contains("invoke codex-run") and contains("spawn a subagent")
+    and (contains("Does this need to exist at all") | not))' "$CL/claude.json" >/dev/null; then
+  echo "  PASS  claude explore pins Sonnet/medium, sanitises the environment, and carries the guard and worker instruction"; pass=$((pass+1))
+else
+  echo "  FAIL  claude explore argv, environment, stdin, or worker prompt is wrong"; fail=$((fail+1))
+fi
+
+for cl_posture in workspace-write read-only; do
+  cl_flags=(); [ "$cl_posture" = "read-only" ] && cl_flags=(--read-only)
+  claude_run --lane implement --engine claude --allow-main-tree "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
+  if [ "$cl_rc" -eq 0 ] && jq -e --arg posture "$cl_posture" '
+    (.argv[-1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
+    and if $posture == "workspace-write" then
+      .argv[.argv | index("--permission-mode") + 1] == "bypassPermissions"
+    else (.argv | index("--permission-mode")) == null
+      and .argv[.argv | index("--disallowed-tools") + 1] == "Edit Write MultiEdit NotebookEdit"
+    end' "$CL/claude.json" >/dev/null; then
+    echo "  PASS  claude implement $cl_posture uses the sandbox posture and carries the ladder"; pass=$((pass+1))
+  else
+    echo "  FAIL  claude implement $cl_posture permissions or ladder is wrong (rc=$cl_rc)"; fail=$((fail+1))
+  fi
+done
+claude_run --lane explore --engine claude --effort max >/dev/null 2>&1; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && jq -e '.argv[.argv | index("--effort") + 1] == "max"' "$CL/claude.json" >/dev/null; then
+  echo "  PASS  explicit claude effort survives the inherited effort override"; pass=$((pass+1))
+else
+  echo "  FAIL  explicit claude effort must be honoured"; fail=$((fail+1))
+fi
+
+printf '%s\n' "$CL/repo/tracked" > "$CL/repo/.charles/pending-ask"
+CLAUDE_TEST_RC=7 claude_run --lane implement --engine claude --allow-main-tree >/dev/null 2>&1; cl_rc=$?
+cl_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$cl_rc" -eq 7 ] && [ -f "$CL/state/$cl_run.last" ] && [ ! -s "$CL/state/$cl_run.last" ] \
+  && [ "$(cat "$CL/state/$cl_run.done")" = 7 ] \
+  && jq -se --arg r "$cl_run" 'map(select(.event == "end" and .run == $r)) |
+    length == 1 and .[0].engine == "claude" and .[0].model == "claude-sonnet-5" and .[0].rc == 7' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  failed claude output leaves .last empty and records failure without fallback"; pass=$((pass+1))
+else
+  echo "  FAIL  failed claude output must not publish or fall back (rc=$cl_rc)"; fail=$((fail+1))
+fi
+if [ "$(cat "$CL/repo/.charles/pending-ask" 2>/dev/null)" = "$CL/repo/tracked" ] \
+  && [ ! -e "$CL/repo/.charles/inline-ok" ]; then
+  echo "  PASS  a failed claude worker cannot turn pending-ask into human approval"; pass=$((pass+1))
+else
+  echo "  FAIL  mark-inline-ok must leave pending-ask untouched for a worker"; fail=$((fail+1))
+fi
+
+for cl_refusal in resume review; do
+  rm -f "$CL/claude.json" "$CL/codex.json"
+  cl_flags=(--lane explore --resume); cl_message='--resume'
+  if [ "$cl_refusal" = review ]; then cl_flags=(--lane review --plan "$CL/repo/tracked"); cl_message=sol; fi
+  cl_out="$(claude_run --engine claude "${cl_flags[@]}" 2>&1)"; cl_rc=$?
+  if [ "$cl_rc" -eq 2 ] && [[ "$cl_out" == *"$cl_message"* ]] \
+    && [ ! -e "$CL/claude.json" ] && [ ! -e "$CL/codex.json" ]; then
+    echo "  PASS  explicit claude $cl_refusal is refused before dispatch with exit 2"; pass=$((pass+1))
+  else
+    echo "  FAIL  claude $cl_refusal must be refused (rc=$cl_rc)"; fail=$((fail+1))
+  fi
+done
+
+for cl_source in project environment global; do
+  printf 'terra\n' > "$CL/state/engine"
+  printf 'claude\n' > "$CL/repo/.charles/engine"
+  cl_env=""
+  case "$cl_source" in
+    environment) printf 'terra\n' > "$CL/repo/.charles/engine"; cl_env=claude ;;
+    global) rm -f "$CL/repo/.charles/engine"; printf 'claude\n' > "$CL/state/engine" ;;
+  esac
+  for cl_effort in medium max; do
+    cl_flags=(); [ "$cl_effort" = max ] && cl_flags=(--effort max)
+    CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane review --plan "$CL/repo/tracked" "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
+    if [ "$cl_rc" -eq 0 ] && jq -e --arg effort "$cl_effort" \
+      '.[index("-m") + 1] == "gpt-5.6-sol" and index("model_reasoning_effort=" + $effort) != null' "$CL/codex.json" >/dev/null; then
+      echo "  PASS  $cl_source claude preference reviews on sol at $cl_effort"; pass=$((pass+1))
+    else
+      echo "  FAIL  $cl_source claude preference must review on sol at $cl_effort (rc=$cl_rc)"; fail=$((fail+1))
+    fi
+  done
+done
+
+printf 'terra\n' > "$CL/state/engine"
+printf 'claude\n' > "$CL/repo/.charles/engine"
+for cl_source in flag environment project worktree; do
+  cl_env=""; cl_flags=(); cl_expected=claude; cl_dir="$CL/repo"; cl_lane=explore
+  case "$cl_source" in
+    flag) cl_env=luna; cl_flags=(--engine claude) ;;
+    environment) cl_env=luna; cl_expected=luna ;;
+    worktree) cl_dir="$CL/worktree"; cl_lane=implement ;;
+  esac
+  CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane "$cl_lane" --dir "$cl_dir" "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
+  if [ "$cl_rc" -eq 0 ] && jq -se --arg engine "$cl_expected" \
+    'map(select(.event == "end")) | last | .engine == $engine' "$cl_dir/.charles/dispatches.jsonl" >/dev/null \
+    && [ ! -e "$CL/worktree/.charles/engine" ]; then
+    echo "  PASS  $cl_source engine precedence resolves to $cl_expected at the shared run root"; pass=$((pass+1))
+  else
+    echo "  FAIL  $cl_source engine precedence or linked-worktree resolution is wrong (rc=$cl_rc)"; fail=$((fail+1))
+  fi
+done
+
+# Doctor must resolve at the same root; use a PATH with no real claude binary.
+mkdir -p "$CL/doctor-bin"
+for cl_tool in bash dirname readlink cat git jq grep sed date; do
+  ln -s "$(command -v "$cl_tool")" "$CL/doctor-bin/$cl_tool"
+done
+ln -s "$CL/bin/codex" "$CL/doctor-bin/codex"
+for cl_source in project environment global; do
+  printf 'claude\n' > "$CL/repo/.charles/engine"
+  printf 'terra\n' > "$CL/state/engine"
+  cl_env=""
+  case "$cl_source" in
+    environment) cl_env=luna ;;
+    global) rm -f "$CL/repo/.charles/engine"; printf 'claude\n' > "$CL/state/engine" ;;
+  esac
+  cl_out="$(cd "$CL/worktree" && CHARLES_ENGINE="$cl_env" CHARLES_STATE_DIR="$CL/state" PATH="$CL/doctor-bin" bash "$DOCTOR" 2>&1)"; cl_rc=$?
+  if { [ "$cl_source" = environment ] && ! grep -q '^  FAIL.*claude CLI not on PATH' <<<"$cl_out"; } \
+    || { [ "$cl_source" != environment ] && [ "$cl_rc" -ne 0 ] && grep -q '^  FAIL.*claude CLI not on PATH' <<<"$cl_out"; }; then
+    echo "  PASS  doctor checks claude availability using $cl_source precedence from a worktree"; pass=$((pass+1))
+  else
+    echo "  FAIL  doctor claude availability or $cl_source precedence is wrong (rc=$cl_rc)"; fail=$((fail+1))
+  fi
+done
+ln -s "$CL/bin/claude" "$CL/doctor-bin/claude"
+cl_out="$(cd "$CL/worktree" && CHARLES_ENGINE=claude CHARLES_STATE_DIR="$CL/state" PATH="$CL/doctor-bin" bash "$DOCTOR" 2>&1)"
+if grep -q '^  OK.*claude CLI on PATH' <<<"$cl_out" && ! grep -q '^  FAIL.*claude CLI' <<<"$cl_out"; then
+  echo "  PASS  doctor accepts an available claude CLI"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must accept claude on PATH"; fail=$((fail+1))
+fi
+
+# Execute the documented /engine command so its scope rules stay reviewable.
+ln -s "$RUN_SH" "$CL/bin/codex-run"
+awk '/^```bash$/ { block=1; next } block && /^```$/ { exit } block { print }' \
+  "$REPO_ROOT/commands/engine.md" > "$CL/engine-command.sh"
+engine_command() {
+  ( cd "$1" && CHARLES_ENGINE="${CLAUDE_TEST_ENGINE:-}" PATH="$CL/bin:$PATH" \
+    CHARLES_STATE_DIR="$CL/state" ARGUMENTS="$2" bash "$CL/engine-command.sh" )
+}
+mkdir -p "$CL/repo/subdir"
+for cl_dir in "$CL/repo/subdir" "$CL/worktree"; do
+  printf 'terra\n' > "$CL/repo/.charles/engine"
+  printf 'luna\n' > "$CL/state/engine"
+  cl_out="$(engine_command "$cl_dir" claude)"; cl_rc=$?
+  if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = claude ] \
+    && [ "$(cat "$CL/state/engine")" = luna ] && [ ! -e "$CL/worktree/.charles/engine" ] \
+    && [ "$cl_out" = 'engine (project): claude' ]; then
+    echo "  PASS  /engine writes the shared project preference from ${cl_dir##*/}"; pass=$((pass+1))
+  else
+    echo "  FAIL  /engine must write the shared project preference ($cl_out)"; fail=$((fail+1))
+  fi
+done
+cl_out="$(engine_command "$CL/repo" 'global terra')"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/state/engine")" = terra ] \
+  && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ "$cl_out" = 'engine (project): claude' ]; then
+  echo "  PASS  /engine global changes global and reports the effective project override"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine global must preserve and show the project override"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL/worktree" default)"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ ! -e "$CL/repo/.charles/engine" ] \
+  && [ "$(cat "$CL/state/engine")" = terra ] && [ "$cl_out" = 'engine (global): terra' ]; then
+  echo "  PASS  /engine default clears only the project preference"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine default must clear only the project preference"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL" claude)"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/state/engine")" = claude ] \
+  && [ ! -e "$CL/.charles/engine" ] && [ "$cl_out" = 'engine (global): claude' ]; then
+  echo "  PASS  /engine outside an opted-in repo writes global"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine outside an opted-in repo must write global"; fail=$((fail+1))
+fi
+printf 'claude\n' > "$CL/repo/.charles/engine"
+cl_out="$(engine_command "$CL/repo" 'global default')"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ ! -e "$CL/state/engine" ] \
+  && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ "$cl_out" = 'engine (project): claude' ]; then
+  echo "  PASS  /engine global default clears only global"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine global default must clear only global"; fail=$((fail+1))
+fi
+cl_out="$(CLAUDE_TEST_ENGINE=luna engine_command "$CL/repo" '')"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$cl_out" = 'engine (environment): luna' ]; then
+  echo "  PASS  /engine reports the environment override"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine must report the resolved environment engine"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL/repo" nonsense 2>&1)"; cl_rc=$?
+if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ ! -e "$CL/state/engine" ]; then
+  echo "  PASS  /engine refuses invalid values without changing preferences"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine must validate values before writing"; fail=$((fail+1))
 fi
 
 # R1: a real timeout is not rescued, but an engine that merely returns 124 is.

@@ -199,8 +199,8 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna | max | read-only |
-| implement | gpt-5.6-luna | max | workspace-write |
+| explore | gpt-5.6-luna; claude-sonnet-5 with `claude` | luna: max; claude: medium | read-only |
+| implement | gpt-5.6-luna; claude-sonnet-5 with `claude` | luna: max; claude: medium | workspace-write |
 | review | gpt-5.6-sol by default; gpt-5.6-luna/terra with `--engine` | sol: medium; luna/terra: max; `--effort` overrides | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
@@ -212,12 +212,22 @@ Review effort is positional: intermediate reviews use `--effort medium`; the
 final pre-close review omits `--effort` and uses the model-aware default (sol at
 medium, luna/terra at max). This is a documented rule, not a flag.
 
-To move every lane — explore, implement and review — onto one engine without a
-restart, run `/charlesdr-dev-loop:engine deepseek` (`luna`, `terra`, `default`
-are the other values). It writes `$CHARLES_STATE_DIR/engine`, read at the start
-of each dispatch, so it takes effect on the next lane with no restart. A
-per-call `--engine` flag, or CHARLES_ENGINE in the environment, still wins. Use
-it when codex quota is short: deepseek bills a separate key.
+Run `/charlesdr-dev-loop:engine claude` to use Claude Sonnet (`claude-sonnet-5`)
+at medium for explore and implement. Review stays on codex sol at medium;
+`--effort` overrides the default. Explicit `--engine claude --lane review` and
+`--engine claude --resume` are refused. Claude failures have no fallback.
+Read-only claude lanes block edit tools; Bash writes remain a known isolation
+ceiling.
+
+Engine values are `luna`, `terra`, `deepseek`, and `claude`. `/engine <value>`
+writes `<run root>/.charles/engine` in a repo with `.charles.toml`, shared by the
+primary checkout and linked worktrees; elsewhere it writes the global
+`$CHARLES_STATE_DIR/engine` (default: `~/.cache/charlesdr-dev-loop/engine`).
+`/engine global <value>` always writes global. `/engine default` clears the
+project preference; `/engine global default` clears global. The command reports
+the effective scope and engine. Precedence: `--engine`, `CHARLES_ENGINE`,
+project file, global file. Changes take effect on the next dispatch. `deepseek`
+bills a separate key when codex quota is short.
 
 **Older all-lane timing baseline** (179 runs; predates the implement
 remeasurement below):

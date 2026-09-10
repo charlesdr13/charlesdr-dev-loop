@@ -10,6 +10,14 @@ echo "charlesdr-dev-loop doctor"
 echo
 echo "Lanes:"
 have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/run-common.sh"
+run_root="$(charles_run_root "$PWD")"
+engine="${CHARLES_ENGINE:-}"
+[ -n "$engine" ] || engine="$(cat "$run_root/.charles/engine" 2>/dev/null || true)"
+[ -n "$engine" ] || engine="$(cat "${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}/engine" 2>/dev/null || true)"
+if [ "$engine" = "claude" ]; then
+  have claude && say OK "claude CLI on PATH ($(command -v claude))" || say FAIL "claude CLI not on PATH — explore AND implement dead"
+fi
 [ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (PRIMARY engine)" || say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
 [ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"

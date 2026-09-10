@@ -13,6 +13,9 @@
 #   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
 #   terra     gpt-5.6-terra @ max     ESCALATION — when luna's work came back wrong
 #   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
+#   claude    claude-sonnet-5 @ medium; review stays on codex sol @ medium
+# Selection: --engine > CHARLES_ENGINE > <run root>/.charles/engine > global
+# $CHARLES_STATE_DIR/engine. Linked worktrees share the primary checkout's preference.
 #
 # Availability and capability are different problems. A dispatch that DIED falls
 # back to deepseek. Work that RAN and was wrong escalates to terra. Difficulty is
@@ -139,6 +142,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
 ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
+ENGINE_FROM_FLAG=0   # only --engine is explicit; env/file preferences set ENGINE_SET too
 EFFORT_SET=0         # review picks effort from its resolved model unless set
 PEAK_SUB=0           # 1 = deepseek was swapped to luna because DeepSeek is at peak price
 EFFORT="max"         # default reasoning effort: max | high | medium. high is markedly
@@ -170,7 +174,7 @@ usage() { sed -n '2,24p' "$0"; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane)      LANE="$2"; shift 2 ;;
-    --engine)    ENGINE="$2"; ENGINE_SET=1; shift 2 ;;
+    --engine)    ENGINE="$2"; ENGINE_SET=1; ENGINE_FROM_FLAG=1; shift 2 ;;
     --effort)    EFFORT="$2"; EFFORT_SET=1; shift 2 ;;
     --fast)      EFFORT="high"; EFFORT_SET=1; shift ;;
     --dir)       DIR="$2"; shift 2 ;;
@@ -199,15 +203,19 @@ TASK="${1:-}"
 [ -d "$DIR" ]  || { echo "codex-run.sh: no such directory: $DIR" >&2; exit 2; }
 [ -z "$BASE" ] || [ "$LANE" = "review" ] || { echo "codex-run.sh: --base is only valid with --lane review" >&2; exit 2; }
 
-# --- global engine switch ------------------------------------------------------
+DIR="$(cd "$DIR" && pwd)"
+RUN_DIR="$(charles_run_root "$DIR")"
+
+# --- project/global engine switch ---------------------------------------------
 # ponytail: a file, not just an env var — each harness Bash call is a fresh shell,
 # so `export CHARLES_ENGINE=deepseek` cannot persist across dispatches. Written by
 # the /engine command; an explicit --engine on the call still wins.
-if [ "$ENGINE_SET" -eq 0 ]; then
+if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   pick="${CHARLES_ENGINE:-}"
+  [ -n "$pick" ] || pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"
   [ -n "$pick" ] || pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"
   case "$pick" in
-    luna|terra) ENGINE="$pick"; ENGINE_SET=1 ;;            # review honours it too
+    luna|terra|claude) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude preferences review on sol
     deepseek)
       ENGINE=deepseek; ENGINE_SET=1
       # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
@@ -222,8 +230,14 @@ if [ "$ENGINE_SET" -eq 0 ]; then
   esac
 fi
 
-DIR="$(cd "$DIR" && pwd)"
-RUN_DIR="$(charles_run_root "$DIR")"
+if [ "$ENGINE" = "claude" ]; then
+  if [ "$LANE" = "review" ] && [ "$ENGINE_FROM_FLAG" -eq 1 ]; then
+    echo "codex-run.sh: --engine claude cannot review; use sol (omit --engine)" >&2
+    exit 2
+  fi
+  [ "$RESUME" -eq 0 ] || { echo "codex-run.sh: --resume is unavailable for claude: no session id is recorded" >&2; exit 2; }
+fi
+
 mkdir -p "$STATE_DIR"
 RUN="$STATE_DIR/$(date +%Y%m%d-%H%M%S)-$$-$LANE"
 RUN_ID="${RUN##*/}"
@@ -562,6 +576,12 @@ future that has not arrived. Prefer deleting over adding. Prefer boring over
 clever. Fewest files, shortest working diff. Mark a deliberate shortcut with a
 comment naming its ceiling and the upgrade path.
 
+Lazy code without its check is unfinished. Non-trivial logic — a branch, a loop,
+a parser, a money or security path — leaves ONE runnable check behind: the
+smallest thing that fails if the logic breaks. Match whatever the repo already
+uses; if it has nothing, an assert-based self-check is enough. No frameworks, no
+fixtures, no per-function suites unless asked. Trivial one-liners need no test.
+
 Do NOT simplify away: input validation at trust boundaries, error handling that
 prevents data loss, security controls, accessibility basics, or anything the
 brief explicitly asked for. If the brief and this instruction conflict, the
@@ -605,6 +625,7 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       luna)     model="gpt-5.6-luna" ;;
       terra)    model="gpt-5.6-terra" ;;
       deepseek) model="deepseek-v4-flash" ;;
+      claude)   model="claude-sonnet-5" ;;
       review)   if [ "$ENGINE_SET" -eq 1 ]; then
                   case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; *) model="gpt-5.6-sol" ;; esac
                 else model="gpt-5.6-sol"; fi ;;
@@ -825,6 +846,40 @@ run_deepseek() {
   return "$rc"
 }
 
+# --- engine: claude sonnet @ medium -----------------------------------------
+run_claude() {
+  [ "$EFFORT_SET" -eq 0 ] && EFFORT=medium
+  local args=(-p --model claude-sonnet-5 --effort "$EFFORT" --output-format text)
+  if [ "$SANDBOX" = "workspace-write" ]; then
+    args+=(--permission-mode bypassPermissions)
+  else
+    # ponytail: edit tools are blocked, but Bash can still write. Stronger isolation
+    # needs an external sandbox; do not build one into this text adapter.
+    args+=(--disallowed-tools "Edit Write MultiEdit NotebookEdit")
+  fi
+  local extra="" rc=0
+  [ "$LANE" = "implement" ] && extra="
+
+$LADDER"
+  run_attempt claude claude-sonnet-5 "$DIR" "$RUN.jsonl" "$RUN.err" \
+    timeout -k 30s "$TIMEOUT" env -u CLAUDECODE -u CLAUDE_CODE_EFFORT_LEVEL \
+      CHARLES_INLINE_OK=1 claude "${args[@]}" "$TASK
+
+$GUARD$extra
+
+You ARE the worker lane. Do the work yourself. Do not dispatch another lane,
+invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." < /dev/null || rc=$?
+  # Keep live stdout in the transcript: a nonempty .last makes lane-status say DONE.
+  if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+  else
+    : > "$RUN.last"
+  fi
+  echo "— claude/claude-sonnet-5 · effort=$EFFORT · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  return "$rc"
+}
+
 # --- lane: review (sol @ medium; luna/terra @ max; isolated temp dir) ---------
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
@@ -958,7 +1013,17 @@ Report, in this order:
    never varies, a new dependency doing what a few lines would, scaffolding for
    a future the plan never mentions. Quote the hunk and say what it should have
    been instead.
-4. A one-line verdict: SATISFIES PLAN | GAPS FOUND | CANNOT TELL (and why).
+4. Whether non-trivial logic in the diff — a branch, a loop, a parser, a money
+   or security path — shipped a runnable check alongside it. A missing check on
+   non-trivial logic is Required, not a nit. Trivial one-liners need none.
+5. A one-line verdict: SATISFIES PLAN | GAPS FOUND | CANNOT TELL (and why).
+
+Prefix every finding with Critical: (blocks — security, data loss, broken
+behaviour), Required: (must fix before this counts as done), or Nit: (optional,
+the author may ignore it). Order by leverage: correctness and security first.
+If you have one structural problem and ten nits, the structural problem is the
+review.
+
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
   local rc=0
@@ -987,7 +1052,7 @@ case "$LANE" in
   *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
 esac
 if [ "$LANE" != "review" ]; then
-  case "$ENGINE" in luna|terra|deepseek) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek)" >&2; exit 2 ;; esac
+  case "$ENGINE" in luna|terra|deepseek|claude) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek|claude)" >&2; exit 2 ;; esac
 fi
 [ "$REQ_SET" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --req is only valid with --lane implement" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
@@ -1037,7 +1102,8 @@ dispatch() { # dispatch ENGINE
     luna)     run_gpt luna ;;
     terra)    run_gpt terra ;;
     deepseek) run_deepseek ;;
-    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek)" >&2; exit 2 ;;
+    claude)   run_claude ;;
+    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude)" >&2; exit 2 ;;
   esac
 }
 
