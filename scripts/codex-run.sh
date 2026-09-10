@@ -849,7 +849,7 @@ run_deepseek() {
 # --- engine: claude sonnet @ medium -----------------------------------------
 run_claude() {
   [ "$EFFORT_SET" -eq 0 ] && EFFORT=medium
-  local args=(-p --model claude-sonnet-5 --effort "$EFFORT" --output-format text)
+  local args=(--model claude-sonnet-5 --effort "$EFFORT" --output-format text)
   if [ "$SANDBOX" = "workspace-write" ]; then
     args+=(--permission-mode bypassPermissions)
   else
@@ -863,12 +863,13 @@ run_claude() {
 $LADDER"
   run_attempt claude claude-sonnet-5 "$DIR" "$RUN.jsonl" "$RUN.err" \
     timeout -k 30s "$TIMEOUT" env -u CLAUDECODE -u CLAUDE_CODE_EFFORT_LEVEL \
-      CHARLES_INLINE_OK=1 claude "${args[@]}" "$TASK
+      CHARLES_INLINE_OK=1 claude -p "$TASK
 
 $GUARD$extra
 
 You ARE the worker lane. Do the work yourself. Do not dispatch another lane,
-invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." < /dev/null || rc=$?
+invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." "${args[@]}" < /dev/null || rc=$?
+  # ponytail: the prompt sits right after -p because --disallowed-tools is variadic and would swallow it.
   # Keep live stdout in the transcript: a nonempty .last makes lane-status say DONE.
   if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
   if [ "$rc" -eq 0 ]; then
