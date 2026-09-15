@@ -2792,6 +2792,49 @@ else
   echo "  FAIL  unknown engine should be rejected"; fail=$((fail+1))
 fi
 
+# Unrecognised preference must refuse by name (not silently become luna).
+mkdir -p "$ED/.charles"
+printf 'bogus\n' > "$ED/.charles/engine"
+rm -f "$ED/args.txt"
+out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q bogus <<<"$out" && grep -q 'project file' <<<"$out" && [ ! -e "$ED/args.txt" ]; then
+  echo "  PASS  project engine file of bogus is refused by name"; pass=$((pass+1))
+else
+  echo "  FAIL  project engine file of bogus must exit 2 naming value and source (rc=$rc)"; fail=$((fail+1))
+fi
+
+rm -f "$ED/.charles/engine" "$ED/args.txt"
+out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" CHARLES_ENGINE=bogus bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q bogus <<<"$out" && grep -q 'from env' <<<"$out" && [ ! -e "$ED/args.txt" ]; then
+  echo "  PASS  CHARLES_ENGINE=bogus is refused by name"; pass=$((pass+1))
+else
+  echo "  FAIL  CHARLES_ENGINE=bogus must exit 2 naming value and source (rc=$rc)"; fail=$((fail+1))
+fi
+
+printf 'bogus\n' > "$ED/.charles/engine"
+printf '#!/usr/bin/env bash\ntouch %s/grok-ran\n' "$ED" > "$ED/bin/grok"
+chmod +x "$ED/bin/grok"
+rm -f "$ED/grok-ran" "$ED/args.txt"
+PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED" bash "$RUN_SH" --lane implement --engine grok --dir "$ED" --timeout 5 "t" >/dev/null 2>&1
+if [ -e "$ED/grok-ran" ]; then
+  echo "  PASS  --engine grok still runs with a bogus file present"; pass=$((pass+1))
+else
+  echo "  FAIL  --engine grok must beat a bogus engine file"; fail=$((fail+1))
+fi
+rm -f "$ED/.charles/engine" "$ED/bin/grok" "$ED/grok-ran"
+
+# the global layer names itself too — "global file", not the project string
+mkdir -p "$ED/global-state"
+printf 'bogus\n' > "$ED/global-state/engine"
+rm -f "$ED/args.txt"
+out="$(PATH="$ED/bin:$PATH" CHARLES_STATE_DIR="$ED/global-state" bash "$RUN_SH" --lane implement --dir "$ED" --timeout 5 "t" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q bogus <<<"$out" && grep -q 'global file' <<<"$out" && [ ! -e "$ED/args.txt" ]; then
+  echo "  PASS  global engine file of bogus is refused naming the global layer"; pass=$((pass+1))
+else
+  echo "  FAIL  global engine file of bogus must exit 2 naming 'global file' (rc=$rc)"; fail=$((fail+1))
+fi
+rm -rf "$ED/global-state"
+
 # --- claude lane contracts ----------------------------------------------------
 CL="$BOX/claude-lane"; mkdir -p "$CL/bin" "$CL/state"
 make_unsourced_repo "$CL/repo"

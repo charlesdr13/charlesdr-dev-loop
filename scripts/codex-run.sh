@@ -216,8 +216,9 @@ RUN_DIR="$(charles_run_root "$DIR")"
 # the /engine command; an explicit --engine on the call still wins.
 if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   pick="${CHARLES_ENGINE:-}"
-  [ -n "$pick" ] || pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"
-  [ -n "$pick" ] || pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"
+  pref_src=env
+  [ -n "$pick" ] || { pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"; pref_src="project file"; }
+  [ -n "$pick" ] || { pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"; pref_src="global file"; }
   case "$pick" in
     luna|terra|claude|grok) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude review pins sol; grok review honours this preference too (R8)
     deepseek)
@@ -231,6 +232,8 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
         01|02|03|06|07|08|09) ENGINE=luna; PEAK_SUB=1
           echo "codex-run.sh: DeepSeek peak window — running this $LANE on luna instead" >&2 ;;
       esac ;;
+    "") ;;
+    *) echo "codex-run.sh: unknown engine '$pick' from $pref_src (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;;
   esac
 fi
 
