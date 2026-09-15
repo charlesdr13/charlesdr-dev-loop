@@ -14,6 +14,10 @@
 #   terra     gpt-5.6-terra @ max     ESCALATION — when luna's work came back wrong
 #   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
 #   claude    claude-sonnet-5 @ medium; review stays on codex sol @ medium
+#   grok      grok-4.6 @ high (local grok CLI, --reasoning-effort has no "max",
+#             so max is translated to xhigh); ALSO runs review — unlike claude,
+#             a project/global grok preference is honoured there too, since it
+#             is a different model family from every codex profile. No fallback.
 # Selection: --engine > CHARLES_ENGINE > <run root>/.charles/engine > global
 # $CHARLES_STATE_DIR/engine. Linked worktrees share the primary checkout's preference.
 #
@@ -215,7 +219,7 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   [ -n "$pick" ] || pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"
   [ -n "$pick" ] || pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"
   case "$pick" in
-    luna|terra|claude) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude preferences review on sol
+    luna|terra|claude|grok) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude review pins sol; grok review honours this preference too (R8)
     deepseek)
       ENGINE=deepseek; ENGINE_SET=1
       # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
@@ -236,6 +240,12 @@ if [ "$ENGINE" = "claude" ]; then
     exit 2
   fi
   [ "$RESUME" -eq 0 ] || { echo "codex-run.sh: --resume is unavailable for claude: no session id is recorded" >&2; exit 2; }
+fi
+
+# Only the resume half applies to grok — grok IS allowed on review (R7), unlike claude.
+if [ "$ENGINE" = "grok" ] && [ "$RESUME" -eq 1 ]; then
+  echo "codex-run.sh: --resume is unavailable for grok: no session id is recorded" >&2
+  exit 2
 fi
 
 mkdir -p "$STATE_DIR"
@@ -626,8 +636,9 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       terra)    model="gpt-5.6-terra" ;;
       deepseek) model="deepseek-v4-flash" ;;
       claude)   model="claude-sonnet-5" ;;
+      grok)     model="grok-4.6" ;;
       review)   if [ "$ENGINE_SET" -eq 1 ]; then
-                  case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; *) model="gpt-5.6-sol" ;; esac
+                  case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; grok) model="grok-4.6" ;; *) model="gpt-5.6-sol" ;; esac
                 else model="gpt-5.6-sol"; fi ;;
       *)        model="$1" ;;
     esac
@@ -881,6 +892,55 @@ invoke codex-run, or spawn a subagent, even if repository instructions say to de
   return "$rc"
 }
 
+# grok has no "max" reasoning effort — passing it exits non-zero with a usage
+# error, so it is translated rather than forwarded blind. Shared by run_grok
+# and the review-lane grok fork so both report the same translated value.
+resolve_grok_effort() {
+  if [ "$EFFORT_SET" -eq 0 ]; then
+    EFFORT=high
+    return 0
+  fi
+  case "$EFFORT" in
+    max) EFFORT=xhigh ;;
+    xhigh|high|medium|low) ;;
+    *) echo "codex-run.sh: invalid --effort '$EFFORT' for grok (xhigh|high|medium|low; max maps to xhigh)" >&2; return 2 ;;
+  esac
+}
+
+# --- engine: grok-4.6 @ high (local grok CLI; ALSO runs review, see run_review) -
+run_grok() {
+  resolve_grok_effort || return $?
+  local args=(--model grok-4.6 --reasoning-effort "$EFFORT" --output-format plain
+        --cwd "$DIR" --no-subagents)
+  if [ "$SANDBOX" = "workspace-write" ]; then
+    args+=(--permission-mode bypassPermissions)
+  else
+    # ponytail: --disallowed-tools removes write/search_replace, but grok's
+    # run_terminal_command can still write. Stronger isolation needs an
+    # external sandbox; do not build one into this adapter.
+    args+=(--disallowed-tools "write,search_replace")
+  fi
+  local extra="" rc=0
+  [ "$LANE" = "implement" ] && extra="
+
+$LADDER"
+  run_attempt grok grok-4.6 "$DIR" "$RUN.jsonl" "$RUN.err" \
+    timeout -k 30s "$TIMEOUT" grok -p "$TASK
+
+$GUARD$extra
+
+You ARE the worker lane. Do the work yourself. Do not dispatch another lane,
+invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." "${args[@]}" < /dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+  else
+    : > "$RUN.last"
+  fi
+  echo "— grok/grok-4.6 · effort=$EFFORT · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  return "$rc"
+}
+
 # --- lane: review (sol @ medium; luna/terra @ max; isolated temp dir) ---------
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
@@ -951,6 +1011,9 @@ run_review() {
         return 4
       fi
     done < "$untracked_file"
+    # the reviewer prompt claims the box holds exactly two files — so drop the
+    # scratch list of untracked paths that assembling the diff needed.
+    rm -f "$untracked_file"
   elif [ -n "$FILES" ]; then
     : > "$box/changes.diff"
     IFS=',' read -ra parts <<< "$FILES"
@@ -982,13 +1045,22 @@ run_review() {
         # the deepseek profile resolves its key from the environment
         ds_env="${LG_CC_DEEPSEEK_HOME:-$HOME/.config/lg-cc-deepseek}/key.env"
         [ -f "$ds_env" ] && { set -a; . "$ds_env"; set +a; } ;;
+      grok)  rmodel="grok-4.6";      rprofile=() ;;
       *)     rmodel="gpt-5.6-sol";   rprofile=() ;;
     esac
   else
     rmodel="gpt-5.6-sol"; rprofile=()
   fi
 
-  if [ "$EFFORT_SET" -eq 0 ]; then
+  if [ "$rmodel" = "grok-4.6" ]; then
+    resolve_grok_effort || {
+      local effort_rc=$?
+      : > "$RUN.last"
+      cp "$box/changes.diff" "$RUN.diff" 2>/dev/null || true
+      rm -rf "$box"
+      return "$effort_rc"
+    }
+  elif [ "$EFFORT_SET" -eq 0 ]; then
     case "$rmodel" in
       gpt-5.6-sol)        EFFORT=medium ;;
       gpt-5.6-luna|gpt-5.6-terra) EFFORT=max ;;
@@ -1027,6 +1099,28 @@ review.
 
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
+  # grok builds its own command instead of bending codex's exec argv: none of
+  # -p <profile>, -m, -c model_reasoning_effort=, fast_mode, or --json -o apply,
+  # and lane-status.sh reads $RUN.last, so it is published the same way R4 does.
+  if [ "$rmodel" = "grok-4.6" ]; then
+    # ponytail: --disallowed-tools removes write/search_replace, but grok's
+    # run_terminal_command can still write. Stronger isolation needs an
+    # external sandbox; do not build one into this adapter.
+    local grok_args=(--model grok-4.6 --reasoning-effort "$EFFORT" --output-format plain
+          --cwd "$box" --no-subagents --disallowed-tools "write,search_replace")
+    local rc=0
+    run_attempt review grok-4.6 "$box" "$RUN.jsonl" "$RUN.err" \
+      timeout -k 30s "$TIMEOUT" grok -p "$prompt" "${grok_args[@]}" < /dev/null || rc=$?
+    if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
+    if [ "$rc" -ne 0 ]; then : > "$RUN.last"; fi
+    cp "$box/changes.diff" "$RUN.diff" 2>/dev/null || true
+    rm -rf "$box"
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+    echo "" >&2
+    echo "— grok/grok-4.6 · effort=$EFFORT · isolated · raw: $RUN.jsonl" >&2
+    return "$rc"
+  fi
+
   local rc=0
   run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \
     timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
@@ -1053,14 +1147,28 @@ case "$LANE" in
   *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
 esac
 if [ "$LANE" != "review" ]; then
-  case "$ENGINE" in luna|terra|deepseek|claude) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek|claude)" >&2; exit 2 ;; esac
+  case "$ENGINE" in luna|terra|deepseek|claude|grok) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;; esac
 fi
 [ "$REQ_SET" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --req is only valid with --lane implement" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
 validate_dispatch_scope || exit $?
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
 validate_main_tree || exit $?
-command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
+
+# codex and grok are separate dependencies; require only the one the resolved
+# lane/engine will actually spawn (R16). A grok-only dispatch on a machine
+# without codex must not die on a check it never needed.
+if [ "$LANE" = "review" ]; then
+  if [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "grok" ]; then
+    command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+  else
+    command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
+  fi
+elif [ "$ENGINE" = "grok" ]; then
+  command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+else
+  command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
+fi
 
 # --- refuse a second writer on the same tree ---------------------------------
 # Two workspace-write dispatches on one directory interleave their edits and the
@@ -1104,7 +1212,8 @@ dispatch() { # dispatch ENGINE
     terra)    run_gpt terra ;;
     deepseek) run_deepseek ;;
     claude)   run_claude ;;
-    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude)" >&2; exit 2 ;;
+    grok)     run_grok ;;
+    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;;
   esac
 }
 

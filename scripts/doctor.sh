@@ -18,6 +18,9 @@ engine="${CHARLES_ENGINE:-}"
 if [ "$engine" = "claude" ]; then
   have claude && say OK "claude CLI on PATH ($(command -v claude))" || say FAIL "claude CLI not on PATH — explore AND implement dead"
 fi
+if [ "$engine" = "grok" ]; then
+  have grok && say OK "grok CLI on PATH ($(command -v grok))" || say FAIL "grok CLI not on PATH — explore, implement AND review dead (grok preference governs review too)"
+fi
 [ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (PRIMARY engine)" || say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
 [ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"

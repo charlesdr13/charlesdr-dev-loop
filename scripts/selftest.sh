@@ -2854,11 +2854,14 @@ if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/state/$cl_run.last" 2>/dev/null)" = 'clau
 else
   echo "  FAIL  claude success must publish stdout and record its model (rc=$cl_rc)"; fail=$((fail+1))
 fi
-if jq -e '.argv[0:7] == ["-p","--model","claude-sonnet-5","--effort","medium","--output-format","text"]
+# the prompt sits at argv[1], right after -p (commit 1942595): --disallowed-tools
+# is variadic and swallowed a trailing prompt, so it can no longer be argv[-1].
+if jq -e '.argv[0] == "-p"
+  and .argv[2:8] == ["--model","claude-sonnet-5","--effort","medium","--output-format","text"]
   and (.argv | index("--permission-mode")) == null
   and (.argv[.argv | index("--disallowed-tools") + 1] == "Edit Write MultiEdit NotebookEdit")
   and .inline == "1" and .nested == "" and .effort_env == "" and .stdin == "/dev/null"
-  and (.argv[-1] | contains("claude task") and contains("Git is READ-ONLY")
+  and (.argv[1] | contains("claude task") and contains("Git is READ-ONLY")
     and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
     and contains("invoke codex-run") and contains("spawn a subagent")
     and (contains("Does this need to exist at all") | not))' "$CL/claude.json" >/dev/null; then
@@ -2871,7 +2874,7 @@ for cl_posture in workspace-write read-only; do
   cl_flags=(); [ "$cl_posture" = "read-only" ] && cl_flags=(--read-only)
   claude_run --lane implement --engine claude --allow-main-tree "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
   if [ "$cl_rc" -eq 0 ] && jq -e --arg posture "$cl_posture" '
-    (.argv[-1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
+    (.argv[1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
     and if $posture == "workspace-write" then
       .argv[.argv | index("--permission-mode") + 1] == "bypassPermissions"
     else (.argv | index("--permission-mode")) == null
@@ -3052,6 +3055,280 @@ if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ !
 else
   echo "  FAIL  /engine must validate values before writing"; fail=$((fail+1))
 fi
+
+# --- grok lane contracts -------------------------------------------------------
+GL="$BOX/grok-lane"; mkdir -p "$GL/bin" "$GL/state"
+make_unsourced_repo "$GL/repo"
+touch "$GL/repo/.charles.toml"
+cat > "$GL/bin/grok" <<'SH'
+#!/usr/bin/env bash
+jq -nc --arg cwd "$PWD" --arg stdin "$(readlink /proc/$$/fd/0)" \
+  '{argv:$ARGS.positional,cwd:$cwd,stdin:$stdin}' \
+  --args -- "$@" > "$GROK_TEST_CAPTURE"
+# no default: a fork that drops --cwd must fail the exact-listing check, not
+# silently pass because run_attempt happened to cd into the box.
+gl_cwd_arg=""; gl_prev=""
+for gl_a in "$@"; do
+  [ "$gl_prev" = "--cwd" ] && gl_cwd_arg="$gl_a"
+  gl_prev="$gl_a"
+done
+ls -A "$gl_cwd_arg" > "$GROK_TEST_LS" 2>/dev/null || true
+printf 'grok result\n'
+exit "${GROK_TEST_RC:-0}"
+SH
+cat > "$GL/bin/codex" <<'SH'
+#!/usr/bin/env bash
+jq -nc '$ARGS.positional' --args -- "$@" > "${GROK_TEST_CODEX:?}"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then printf 'codex result\n' > "$2"; break; fi
+  shift
+done
+SH
+chmod +x "$GL/bin/grok" "$GL/bin/codex"
+grok_run() {
+  PATH="$GL/bin:$PATH" CHARLES_STATE_DIR="$GL/state" CHARLES_ENGINE="${GROK_TEST_ENGINE:-}" \
+    GROK_TEST_CAPTURE="$GL/grok.json" GROK_TEST_CODEX="$GL/codex.json" GROK_TEST_LS="$GL/ls.txt" \
+    bash "$RUN_SH" --dir "$GL/repo" --timeout 10 "$@" "grok task"
+}
+
+rm -f "$GL/grok.json" "$GL/codex.json"
+grok_run --lane explore --engine grok >"$GL/stdout" 2>"$GL/stderr"; gl_rc=$?
+if [ "$gl_rc" -eq 0 ] && [ ! -e "$GL/codex.json" ] && jq -e --arg dir "$GL/repo" '
+    .argv[0] == "-p"
+    and (.argv[1] | contains("grok task") and contains("Git is READ-ONLY")
+      and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
+      and contains("invoke codex-run") and contains("spawn a subagent")
+      and (contains("Does this need to exist at all") | not))
+    and .argv[(.argv | index("--model")) + 1] == "grok-4.6"
+    and .argv[(.argv | index("--reasoning-effort")) + 1] == "high"
+    and .argv[(.argv | index("--output-format")) + 1] == "plain"
+    and .argv[(.argv | index("--cwd")) + 1] == $dir
+    and (.argv | index("--no-subagents")) != null
+    and (.argv | index("--permission-mode")) == null
+    and .argv[(.argv | index("--disallowed-tools")) + 1] == "write,search_replace"
+    and .stdin == "/dev/null"' "$GL/grok.json" >/dev/null \
+  && ! grep -q 'fast_mode=' "$GL/stderr"; then
+  echo "  PASS  grok explore builds --model/--reasoning-effort high and read-only posture"; pass=$((pass+1))
+else
+  echo "  FAIL  grok explore argv, posture, stdin, or receipt is wrong (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+for gl_posture in workspace-write read-only; do
+  gl_flags=(); [ "$gl_posture" = "read-only" ] && gl_flags=(--read-only)
+  rm -f "$GL/grok.json"
+  grok_run --lane implement --engine grok --allow-main-tree "${gl_flags[@]}" >/dev/null 2>"$GL/stderr"; gl_rc=$?
+  if [ "$gl_rc" -eq 0 ] && jq -e --arg posture "$gl_posture" '
+    (.argv[1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
+    and if $posture == "workspace-write" then
+      .argv[(.argv | index("--permission-mode")) + 1] == "bypassPermissions"
+      and (.argv | index("--disallowed-tools")) == null
+    else (.argv | index("--permission-mode")) == null
+      and .argv[(.argv | index("--disallowed-tools")) + 1] == "write,search_replace"
+    end' "$GL/grok.json" >/dev/null \
+    && ! grep -q 'fast_mode=' "$GL/stderr"; then
+    echo "  PASS  grok implement $gl_posture uses the sandbox posture and carries the ladder"; pass=$((pass+1))
+  else
+    echo "  FAIL  grok implement $gl_posture permissions or ladder is wrong (rc=$gl_rc)"; fail=$((fail+1))
+  fi
+done
+
+rm -f "$GL/grok.json"
+grok_run --lane explore --engine grok --effort max >/dev/null 2>&1; gl_rc=$?
+if [ "$gl_rc" -eq 0 ] && jq -e '.argv[(.argv | index("--reasoning-effort")) + 1] == "xhigh"' "$GL/grok.json" >/dev/null; then
+  echo "  PASS  grok --effort max is translated to xhigh"; pass=$((pass+1))
+else
+  echo "  FAIL  grok --effort max must translate to xhigh"; fail=$((fail+1))
+fi
+
+rm -f "$GL/grok.json"
+grok_run --lane explore --engine grok --effort medium >/dev/null 2>&1; gl_rc=$?
+if [ "$gl_rc" -eq 0 ] && jq -e '.argv[(.argv | index("--reasoning-effort")) + 1] == "medium"' "$GL/grok.json" >/dev/null; then
+  echo "  PASS  explicit grok --effort medium survives"; pass=$((pass+1))
+else
+  echo "  FAIL  explicit grok --effort medium must be honoured"; fail=$((fail+1))
+fi
+
+rm -f "$GL/grok.json"
+gl_out="$(grok_run --lane explore --engine grok --effort bogus 2>&1)"; gl_rc=$?
+if [ "$gl_rc" -eq 2 ] && [[ "$gl_out" == *"xhigh"*"high"*"medium"*"low"* ]] && [ ! -e "$GL/grok.json" ]; then
+  echo "  PASS  invalid grok --effort exits 2 naming the four levels without spawning grok"; pass=$((pass+1))
+else
+  echo "  FAIL  invalid grok --effort must be refused before dispatch (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$GL/grok.json"
+grok_run --lane explore --engine grok >/dev/null 2>&1; gl_rc=$?
+gl_run="$(jq -r 'select(.event == "start") | .run' "$GL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$gl_rc" -eq 0 ] && [ "$(cat "$GL/state/$gl_run.last" 2>/dev/null)" = 'grok result' ] \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "grok" and .model == "grok-4.6" and .rc == 0' \
+    "$GL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  successful grok rc=0 publishes .last and records engine/model"; pass=$((pass+1))
+else
+  echo "  FAIL  successful grok dispatch must publish .last and record grok/grok-4.6 (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+GROK_TEST_RC=7 grok_run --lane explore --engine grok >/dev/null 2>&1; gl_rc=$?
+gl_run="$(jq -r 'select(.event == "start") | .run' "$GL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$gl_rc" -eq 7 ] && [ -f "$GL/state/$gl_run.last" ] && [ ! -s "$GL/state/$gl_run.last" ] \
+  && jq -se --arg r "$gl_run" 'map(select(.event == "end" and .run == $r)) |
+    length == 1 and .[0].engine == "grok" and .[0].model == "grok-4.6" and .[0].rc == 7' \
+    "$GL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  failed grok rc leaves .last empty and records failure without fallback"; pass=$((pass+1))
+else
+  echo "  FAIL  failed grok dispatch must leave .last empty and record no fallback (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$GL/grok.json" "$GL/codex.json"
+gl_out="$(grok_run --engine grok --lane explore --resume 2>&1)"; gl_rc=$?
+if [ "$gl_rc" -eq 2 ] && [[ "$gl_out" == *"--resume"* ]] \
+  && [ ! -e "$GL/grok.json" ] && [ ! -e "$GL/codex.json" ]; then
+  echo "  PASS  explicit grok --resume is refused before dispatch with exit 2"; pass=$((pass+1))
+else
+  echo "  FAIL  grok --resume must be refused (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+# review runs grok, not codex, in a box holding exactly plan.md and changes.diff
+rm -f "$GL/grok.json" "$GL/codex.json" "$GL/ls.txt"
+printf 'review change\n' > "$GL/repo/change.txt"
+gl_out="$(grok_run --engine grok --lane review --plan "$GL/repo/tracked" 2>"$GL/stderr")"; gl_rc=$?
+if [ "$gl_rc" -eq 0 ] && [ ! -e "$GL/codex.json" ] && [ -e "$GL/grok.json" ] \
+  && [ "$(sort "$GL/ls.txt" 2>/dev/null | paste -sd, -)" = "changes.diff,plan.md" ] \
+  && jq -e '.argv[(.argv | index("--disallowed-tools")) + 1] == "write,search_replace"
+    and (.argv | index("--permission-mode")) == null
+    and .argv[(.argv | index("--model")) + 1] == "grok-4.6"
+    and .argv[(.argv | index("--reasoning-effort")) + 1] == "high"
+    and .argv[(.argv | index("--output-format")) + 1] == "plain"
+    and (.argv | index("--cwd")) != null
+    and (.argv | index("--no-subagents")) != null
+    and .argv[0] == "-p" and (.argv[1] | contains("adversarial reviewer"))
+    and .stdin == "/dev/null"' "$GL/grok.json" >/dev/null \
+  && ! grep -q 'fast_mode=' "$GL/stderr"; then
+  echo "  PASS  --engine grok --lane review runs grok in an isolated box, no fast_mode receipt"; pass=$((pass+1))
+else
+  echo "  FAIL  grok review must run grok, not codex, in a two-file box (rc=$gl_rc)"; fail=$((fail+1))
+fi
+# F3: the review-lane grok fork publishes .last/.diff and removes the box on every path
+GL_RTMP="$GL/rtmp"; rm -rf "$GL_RTMP"; mkdir -p "$GL_RTMP"
+
+rm -f "$GL/grok.json"
+TMPDIR="$GL_RTMP" grok_run --engine grok --lane review --plan "$GL/repo/tracked" >/dev/null 2>&1; gl_rc=$?
+gl_run="$(jq -r 'select(.event == "start" and .lane == "review") | .run' "$GL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$gl_rc" -eq 0 ] && [ "$(cat "$GL/state/$gl_run.last" 2>/dev/null)" = 'grok result' ] \
+  && grep -q 'review change' "$GL/state/$gl_run.diff" 2>/dev/null && [ -z "$(ls -A "$GL_RTMP")" ] \
+  && jq -e '.argv[(.argv | index("--model")) + 1] == "grok-4.6"
+    and .argv[(.argv | index("--reasoning-effort")) + 1] == "high"
+    and (.argv | index("--no-subagents")) != null
+    and .stdin == "/dev/null"' "$GL/grok.json" >/dev/null; then
+  echo "  PASS  successful grok review publishes .last, copies .diff, and removes the box"; pass=$((pass+1))
+else
+  echo "  FAIL  successful grok review must publish .last/.diff and remove the box (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$GL/grok.json"
+GROK_TEST_RC=9 TMPDIR="$GL_RTMP" grok_run --engine grok --lane review --plan "$GL/repo/tracked" >/dev/null 2>&1; gl_rc=$?
+gl_run="$(jq -r 'select(.event == "start" and .lane == "review") | .run' "$GL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$gl_rc" -eq 9 ] && [ -f "$GL/state/$gl_run.last" ] && [ ! -s "$GL/state/$gl_run.last" ] \
+  && grep -q 'review change' "$GL/state/$gl_run.diff" 2>/dev/null && [ -z "$(ls -A "$GL_RTMP")" ] \
+  && jq -e '.argv[(.argv | index("--model")) + 1] == "grok-4.6"
+    and .argv[(.argv | index("--reasoning-effort")) + 1] == "high"
+    and (.argv | index("--no-subagents")) != null
+    and .stdin == "/dev/null"' "$GL/grok.json" >/dev/null; then
+  echo "  PASS  failed grok review rc leaves .last empty, still copies .diff, and removes the box"; pass=$((pass+1))
+else
+  echo "  FAIL  failed grok review must leave .last empty and still clean up (rc=$gl_rc)"; fail=$((fail+1))
+fi
+
+# resolve_grok_effort fails before run_attempt on this path, so no "start"
+# event is ever written; the previous test's run would still be the newest
+# one in dispatches.jsonl. Identify THIS invocation's run by snapshotting the
+# state dir before the call and taking the *-review.last file that's new.
+rm -f "$GL/grok.json"
+gl_before="$(ls "$GL/state"/*-review.last 2>/dev/null | sort)"
+gl_out="$(TMPDIR="$GL_RTMP" grok_run --engine grok --lane review --plan "$GL/repo/tracked" --effort bogus 2>&1)"; gl_rc=$?
+gl_last_file="$(comm -13 <(printf '%s\n' "$gl_before") <(ls "$GL/state"/*-review.last 2>/dev/null | sort))"
+gl_diff_file="${gl_last_file%.last}.diff"
+if [ "$gl_rc" -eq 2 ] && [[ "$gl_out" == *"xhigh"*"high"*"medium"*"low"* ]] && [ ! -e "$GL/grok.json" ] \
+  && [ -n "$gl_last_file" ] && [ -f "$gl_last_file" ] && [ ! -s "$gl_last_file" ] \
+  && grep -q 'review change' "$gl_diff_file" 2>/dev/null && [ -z "$(ls -A "$GL_RTMP")" ]; then
+  echo "  PASS  invalid grok --effort on review exits 2 without spawning grok and cleans up the box"; pass=$((pass+1))
+else
+  echo "  FAIL  invalid grok --effort on review must be refused before dispatch (rc=$gl_rc)"; fail=$((fail+1))
+fi
+rm -rf "$GL_RTMP"
+rm -f "$GL/repo/change.txt"
+
+# inverse of the claude precedence test above: a grok preference DOES follow onto review
+rm -f "$GL/grok.json" "$GL/codex.json"
+printf 'grok\n' > "$GL/repo/.charles/engine"
+printf 'precedence change\n' > "$GL/repo/precedence.txt"
+grok_run --lane review --plan "$GL/repo/tracked" >/dev/null 2>&1; gl_rc=$?
+rm -f "$GL/repo/precedence.txt"
+if [ "$gl_rc" -eq 0 ] && [ -e "$GL/grok.json" ] && [ ! -e "$GL/codex.json" ] \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "grok-4.6"' \
+    "$GL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  a project grok preference runs review on grok, unlike claude's sol pin"; pass=$((pass+1))
+else
+  echo "  FAIL  a project grok preference must run review on grok (rc=$gl_rc)"; fail=$((fail+1))
+fi
+rm -f "$GL/repo/.charles/engine"
+
+# R16: codex and grok dependencies are required only by the engine that needs them.
+R16="$BOX/r16-deps"; mkdir -p "$R16/grok-only" "$R16/codex-only"
+ln -s "$GL/bin/grok" "$R16/grok-only/grok"
+R16_TOOLS="bash dirname readlink cat git jq grep sed date flock timeout head tail env mktemp mkdir mv sort ls
+  awk basename kill ps rm cp setsid sleep touch tr realpath printf"
+for t in $R16_TOOLS; do
+  ln -s "$(command -v "$t")" "$R16/grok-only/$t" 2>/dev/null || true
+done
+ln -s "$(command -v codex 2>/dev/null || echo /bin/false)" "$R16/codex-only/codex" 2>/dev/null || true
+for t in $R16_TOOLS; do
+  ln -s "$(command -v "$t")" "$R16/codex-only/$t" 2>/dev/null || true
+done
+
+R16G="$R16/repo-grok-only"; make_unsourced_repo "$R16G"
+r16_out="$(PATH="$R16/grok-only" CHARLES_STATE_DIR="$R16/state1" GROK_TEST_CAPTURE="$R16/g.json" \
+  bash "$RUN_SH" --lane explore --engine grok --dir "$R16G" --timeout 10 "t" 2>&1)"; r16_rc=$?
+if [ "$r16_rc" -eq 0 ] && [ -e "$R16/g.json" ]; then
+  echo "  PASS  a grok-only PATH (no codex) still runs a grok dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  a grok dispatch must not require codex on PATH (rc=$r16_rc)"; fail=$((fail+1))
+fi
+
+r16_out="$(PATH="$R16/grok-only" CHARLES_STATE_DIR="$R16/state2" \
+  bash "$RUN_SH" --lane explore --engine luna --dir "$R16G" --timeout 10 "t" 2>&1)"; r16_rc=$?
+if [ "$r16_rc" -eq 127 ] && grep -q 'codex CLI not on PATH' <<<"$r16_out"; then
+  echo "  PASS  a codex engine still requires codex on PATH even when grok is present"; pass=$((pass+1))
+else
+  echo "  FAIL  luna must still require codex on PATH (rc=$r16_rc)"; fail=$((fail+1))
+fi
+
+R16C="$R16/repo-codex-only"; make_unsourced_repo "$R16C"
+r16_out="$(PATH="$R16/codex-only" CHARLES_STATE_DIR="$R16/state3" \
+  bash "$RUN_SH" --lane explore --engine grok --dir "$R16C" --timeout 10 "t" 2>&1)"; r16_rc=$?
+if [ "$r16_rc" -eq 127 ] && grep -q 'grok CLI not on PATH' <<<"$r16_out"; then
+  echo "  PASS  a grok engine requires grok on PATH even when codex is present"; pass=$((pass+1))
+else
+  echo "  FAIL  grok must require grok on PATH (rc=$r16_rc)"; fail=$((fail+1))
+fi
+
+# F4: the review-lane command -v split is engine-keyed too, not just explore/implement
+printf 'r16 review change\n' > "$R16G/r16-change.txt"
+r16_out="$(PATH="$R16/grok-only" CHARLES_STATE_DIR="$R16/state4" GROK_TEST_CAPTURE="$R16/g-review.json" \
+  bash "$RUN_SH" --lane review --engine grok --dir "$R16G" --plan "$R16G/tracked" --timeout 10 "t" 2>&1)"; r16_rc=$?
+if [ "$r16_rc" -eq 0 ] && [ -e "$R16/g-review.json" ]; then
+  echo "  PASS  a grok-only PATH (no codex) still runs a grok review"; pass=$((pass+1))
+else
+  echo "  FAIL  a grok review must not require codex on PATH (rc=$r16_rc)"; fail=$((fail+1))
+fi
+
+r16_out="$(PATH="$R16/grok-only" CHARLES_STATE_DIR="$R16/state5" \
+  bash "$RUN_SH" --lane review --engine luna --dir "$R16G" --plan "$R16G/tracked" --timeout 10 "t" 2>&1)"; r16_rc=$?
+if [ "$r16_rc" -eq 127 ] && grep -q 'codex CLI not on PATH' <<<"$r16_out"; then
+  echo "  PASS  a codex-family review still requires codex on PATH even when grok is present"; pass=$((pass+1))
+else
+  echo "  FAIL  a codex-family review must still require codex on PATH (rc=$r16_rc)"; fail=$((fail+1))
+fi
+rm -f "$R16G/r16-change.txt"
 
 # R1: a real timeout is not rescued, but an engine that merely returns 124 is.
 R1="$BOX/r1-fallback"; mkdir -p "$R1/bin" "$R1/home/.claude/skills/codex-deepseek/scripts"

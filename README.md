@@ -199,9 +199,9 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna; claude-sonnet-5 with `claude` | luna: max; claude: medium | read-only |
-| implement | gpt-5.6-luna; claude-sonnet-5 with `claude` | luna: max; claude: medium | workspace-write |
-| review | gpt-5.6-sol by default; gpt-5.6-luna/terra with `--engine` | sol: medium; luna/terra: max; `--effort` overrides | read-only, isolated temp dir |
+| explore | gpt-5.6-luna; claude-sonnet-5 with `claude`; grok-4.6 with `grok` | luna: max; claude: medium; grok: high | read-only |
+| implement | gpt-5.6-luna; claude-sonnet-5 with `claude`; grok-4.6 with `grok` | luna: max; claude: medium; grok: high | workspace-write |
+| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine` | sol: medium; luna/terra: max; grok: high; `--effort` overrides | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
 medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
@@ -219,7 +219,16 @@ at medium for explore and implement. Review stays on codex sol at medium;
 Read-only claude lanes block edit tools; Bash writes remain a known isolation
 ceiling.
 
-Engine values are `luna`, `terra`, `deepseek`, and `claude`. `/engine <value>`
+Run `/charlesdr-dev-loop:engine grok` to use Grok (`grok-4.6`, local `grok`
+CLI) at high effort for all three lanes — explore, implement, AND review.
+Unlike `claude`, a `grok` preference IS honoured on review: it is a different
+model family from every codex profile, which is exactly what the isolated
+review wants. `--effort max` is translated to `xhigh`, since grok has no
+`max`. `--resume` is refused: no session id is recorded. Grok failures have no
+fallback. Read-only grok lanes block `write`/`search_replace`; Bash writes
+remain the same known isolation ceiling as claude.
+
+Engine values are `luna`, `terra`, `deepseek`, `claude`, and `grok`. `/engine <value>`
 writes `<run root>/.charles/engine` in a repo with `.charles.toml`, shared by the
 primary checkout and linked worktrees; elsewhere it writes the global
 `$CHARLES_STATE_DIR/engine` (default: `~/.cache/charlesdr-dev-loop/engine`).

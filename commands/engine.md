@@ -1,5 +1,5 @@
 ---
-description: Switch the project engine (luna | terra | deepseek | claude), set a global default, or show the current one
+description: Switch the project engine (luna | terra | deepseek | claude | grok), set a global default, or show the current one
 ---
 
 ```bash
@@ -15,16 +15,16 @@ if [ "$GLOBAL" -eq 0 ] && [ -f "$ROOT/.charles.toml" ] \
   TARGET="$ROOT/.charles/engine"
 fi
 case "$VALUE" in
-  luna|terra|deepseek|claude) mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
+  luna|terra|deepseek|claude|grok) mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
   default|clear|reset)
     rm -f "$TARGET" || exit $? ;;
   "") ;;
-  *) echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|default; optional global prefix)" >&2; exit 2 ;;
+  *) echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|grok|default; optional global prefix)" >&2; exit 2 ;;
 esac
 PICK="${CHARLES_ENGINE:-}"; SCOPE=environment
 if [ -z "$PICK" ]; then PICK="$(cat "$ROOT/.charles/engine" 2>/dev/null || true)"; SCOPE=project; fi
 if [ -z "$PICK" ]; then PICK="$(cat "$D/engine" 2>/dev/null || true)"; SCOPE=global; fi
-case "$PICK" in luna|terra|deepseek|claude) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
+case "$PICK" in luna|terra|deepseek|claude|grok) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
 echo "engine ($SCOPE): $PICK"
 ```
 
@@ -52,3 +52,10 @@ luna with deepseek as fallback, and review uses sol.
 reasoning with luna's normal fast_mode selection. Outside them the lane stays
 on deepseek. An explicit `--engine deepseek` is never swapped: that is the
 failure fallback path.
+
+`grok` runs all three lanes — explore, implement, AND review — on `grok-4.6` at
+high effort by default via the local `grok` CLI; `--effort max` means `xhigh`
+(grok has no `max`). Unlike `claude`, a `grok` preference is honoured on review
+too: it is a different model family from every codex profile, which is exactly
+what the isolated review wants. `--resume` is refused: no session id is
+recorded. A failed grok dispatch has no fallback.

@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: Dispatches an adversarial review to gpt-5.6-sol at medium by default, or gpt-5.6-luna/terra at max when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
+description: Dispatches an adversarial review to gpt-5.6-sol at medium by default, or gpt-5.6-luna/terra at max, or grok-4.6 at high, when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
 model: haiku
 tools: Bash, Read
 ---
@@ -67,6 +67,10 @@ When the diff touches concurrency, state machines, auth, money or data
 migration, run a second with `--engine terra` in parallel and report the union.
 Say which model produced which finding; they fail differently and it matters
 when you are deciding what to trust.
+
+`--engine grok` (grok-4.6, high effort) is another second opinion worth
+running alongside terra — it is a genuinely different model family from every
+codex profile, not just a different profile of the same one.
 
 ## Returning
 
