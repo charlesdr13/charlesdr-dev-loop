@@ -38,10 +38,14 @@ the global preference. The echoed scope is the effective one, even after a
 global change that a project preference overrides.
 
 Precedence: `--engine` flag, `CHARLES_ENGINE`, project file, global file.
-`claude` runs explore and implement on `claude-sonnet-5` at medium effort;
-review stays on codex sol at medium. Explicit `--engine claude --lane review`
-and `--engine claude --resume` are refused. `--effort` still overrides the
-default. A failed claude dispatch has no fallback.
+`claude` hands explore, implement AND review off to a Claude Code subagent
+instead of running a process here: `codex-run` prints a SPAWN block (agent name
++ prompt) and exits, and the orchestrating session spawns `claude-explorer`
+(haiku), `claude-implementer` (sonnet), or `claude-reviewer` (opus, isolated to
+a review box the same way `codex-reviewer` is). Like `grok`, a `claude`
+preference is honoured on review too — it no longer silently pins sol.
+`--resume` is refused: no session id is recorded for a subagent. A failed
+claude dispatch has no fallback.
 
 `deepseek` is the free-of-codex-quota lane (deepseek-v4-flash @ max, via
 `~/.codex/deepseek.config.toml`). With no preference, explore and implement use

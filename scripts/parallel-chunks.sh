@@ -601,8 +601,10 @@ if [ "$rc" -eq 0 ]; then
         CH_KEEP[$shared_chunk]=1; rc=3; shared_bad=1
         continue
       fi
-      actual_mode="$(stat -c '%a' -- "$wt/$shared_path" 2>/dev/null)" || actual_mode=""
-      if [ "$actual_mode" != "${base_mode:3}" ]; then
+      # Git only tracks the executable bit, so compare executability, not the
+      # full permission bits (which vary with the caller's umask).
+      if { [ "$base_mode" = 100755 ] && [ ! -x "$wt/$shared_path" ]; } || \
+         { [ "$base_mode" != 100755 ] && [ -x "$wt/$shared_path" ]; }; then
         echo "  ${CH_NAME[$shared_chunk]}: REJECTED — shared path '$shared_path' changed mode" >&2
         CH_KEEP[$shared_chunk]=1; rc=3; shared_bad=1
         continue

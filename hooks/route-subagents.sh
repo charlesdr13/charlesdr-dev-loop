@@ -25,6 +25,7 @@ tool="$(jq -r '.tool_name // empty' <<<"$payload")"
 case "$tool" in Agent|Task) ;; *) exit 0 ;; esac
 
 [ "${CHARLES_INLINE_OK:-0}" = "1" ] && exit 0
+[ "${CHARLES_SUBAGENTS_OK:-0}" = "1" ] && exit 0   # subagent gate off, edit gate stays
 
 # --- opt-in gate: .charles.toml at or above cwd -------------------------------
 cwd="$(jq -r '.cwd // empty' <<<"$payload")"
@@ -55,7 +56,13 @@ sub="$(jq -r '.tool_input.subagent_type // empty' <<<"$payload")"
 [ -n "$sub" ] || exit 0
 
 # Review keeps its isolated agent; explore and implement use direct dispatch.
-case "$sub" in codex-reviewer) exit 0 ;; esac
+# Suffix match, not exact: plugin agents spawn namespaced
+# (charlesdr-dev-loop:codex-reviewer / charlesdr-dev-loop:claude-explorer).
+# The three claude-<lane> agents ARE the engine=claude lane, spawned straight
+# from codex-run.sh's SPAWN block — they are not a bypass of it.
+case "$sub" in
+  *codex-reviewer|*claude-explorer|*claude-implementer|*claude-reviewer) exit 0 ;;
+esac
 
 # Agents that do repo code work, and therefore belong on a lane.
 case "$sub" in
@@ -78,6 +85,6 @@ esac
 mkdir -p "$root/.charles" 2>/dev/null || true
 printf '%s\n' "agent:$sub" > "$root/.charles/pending-ask" 2>/dev/null || true
 
-jq -nc --arg r "This repo routes code work to a codex lane, and '$sub' is not one. Spawn $alt instead. Approve only if this genuinely is not repo code work — reading docs, a non-code lookup, or a one-off question. Bypass the session with CHARLES_INLINE_OK=1." \
+jq -nc --arg r "This repo routes code work to a codex lane, and '$sub' is not one. Spawn $alt instead. Approve only if this genuinely is not repo code work — reading docs, a non-code lookup, or a one-off question. Bypass the session with CHARLES_INLINE_OK=1; turn this gate off with CHARLES_SUBAGENTS_OK=1." \
   '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'
 exit 0

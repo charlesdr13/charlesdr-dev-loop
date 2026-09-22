@@ -34,6 +34,17 @@ Route the request by its deliverable:
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
+**engine=claude:** run the `codex-run` call in the foreground, not backgrounded
+— it validates scope exactly as the codex lanes do, logs the `start` event,
+prints a SPAWN block to stdout, and exits immediately, so there is no process
+to wait on. Then spawn the SPAWN block's named agent
+(`charlesdr-dev-loop:claude-explorer`, `claude-implementer`, or
+`claude-reviewer`) with its prompt verbatim; implement subagents get the
+worktree dir named on the SPAWN's `charles-dir:` line, the same directory
+codex-run validated. A hook logs the matching `end` event once the subagent
+returns — do not write one yourself, and do not delete a reviewer's box
+yourself either.
+
 Implement lanes never run against a main checkout by default; use a `treehouse`
 worktree. If the parallel path refuses for a machinery reason, the fallback is
 a hand-made worktree. An operator may deliberately waive the rule with

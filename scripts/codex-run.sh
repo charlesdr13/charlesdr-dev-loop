@@ -13,10 +13,16 @@
 #   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
 #   terra     gpt-5.6-terra @ max     ESCALATION — when luna's work came back wrong
 #   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
-#   claude    claude-sonnet-5 @ medium; review stays on codex sol @ medium
+#   claude    hands off to a Claude Code subagent instead of running here: logs
+#             the start event, prints a SPAWN block (agent + prompt) to stdout,
+#             and exits — the orchestrating session spawns claude-explorer
+#             (haiku) / claude-implementer (sonnet) / claude-reviewer (opus).
+#             ALSO runs review now — a project/global claude preference is
+#             honoured there too, same as grok. No fallback; --resume is
+#             unavailable (no session id is recorded for a subagent).
 #   grok      grok-4.6 @ high (local grok CLI, --reasoning-effort has no "max",
-#             so max is translated to xhigh); ALSO runs review — unlike claude,
-#             a project/global grok preference is honoured there too, since it
+#             so max is translated to xhigh); ALSO runs review — a
+#             project/global grok preference is honoured there too, since it
 #             is a different model family from every codex profile. No fallback.
 # Selection: --engine > CHARLES_ENGINE > <run root>/.charles/engine > global
 # $CHARLES_STATE_DIR/engine. Linked worktrees share the primary checkout's preference.
@@ -220,7 +226,7 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   [ -n "$pick" ] || { pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"; pref_src="project file"; }
   [ -n "$pick" ] || { pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"; pref_src="global file"; }
   case "$pick" in
-    luna|terra|claude|grok) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude review pins sol; grok review honours this preference too (R8)
+    luna|terra|claude|grok) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude and grok review both honour this preference (R8)
     deepseek)
       ENGINE=deepseek; ENGINE_SET=1
       # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
@@ -237,15 +243,12 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   esac
 fi
 
-if [ "$ENGINE" = "claude" ]; then
-  if [ "$LANE" = "review" ] && [ "$ENGINE_FROM_FLAG" -eq 1 ]; then
-    echo "codex-run.sh: --engine claude cannot review; use sol (omit --engine)" >&2
-    exit 2
-  fi
-  [ "$RESUME" -eq 0 ] || { echo "codex-run.sh: --resume is unavailable for claude: no session id is recorded" >&2; exit 2; }
+if [ "$ENGINE" = "claude" ] && [ "$RESUME" -eq 1 ]; then
+  echo "codex-run.sh: --resume is unavailable for claude: no session id is recorded" >&2
+  exit 2
 fi
 
-# Only the resume half applies to grok — grok IS allowed on review (R7), unlike claude.
+# grok and claude are both allowed on review (R7); only resume is restricted for either.
 if [ "$ENGINE" = "grok" ] && [ "$RESUME" -eq 1 ]; then
   echo "codex-run.sh: --resume is unavailable for grok: no session id is recorded" >&2
   exit 2
@@ -638,7 +641,6 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       luna)     model="gpt-5.6-luna" ;;
       terra)    model="gpt-5.6-terra" ;;
       deepseek) model="deepseek-v4-flash" ;;
-      claude)   model="claude-sonnet-5" ;;
       grok)     model="grok-4.6" ;;
       review)   if [ "$ENGINE_SET" -eq 1 ]; then
                   case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; grok) model="grok-4.6" ;; *) model="gpt-5.6-sol" ;; esac
@@ -860,39 +862,34 @@ run_deepseek() {
   return "$rc"
 }
 
-# --- engine: claude sonnet @ medium -----------------------------------------
-run_claude() {
-  [ "$EFFORT_SET" -eq 0 ] && EFFORT=medium
-  local args=(--model claude-sonnet-5 --effort "$EFFORT" --output-format text)
-  if [ "$SANDBOX" = "workspace-write" ]; then
-    args+=(--permission-mode bypassPermissions)
-  else
-    # ponytail: edit tools are blocked, but Bash can still write. Stronger isolation
-    # needs an external sandbox; do not build one into this text adapter.
-    args+=(--disallowed-tools "Edit Write MultiEdit NotebookEdit")
+# --- engine: claude — hands off to a Claude Code subagent, no process run here
+# print_spawn_block writes the block the orchestrating session parses to spawn
+# charlesdr-dev-loop:claude-<lane agent>. charles-run/charles-dir are always the repo
+# run id and directory (dispatches.jsonl lives there for every lane, including
+# review, whose real workspace is the box named by an extra charles-box line).
+# Shared by explore/implement (spawn_claude_lane) and review (run_review) so
+# the header format cannot drift between the two call sites.
+print_spawn_block() { # print_spawn_block LANE [EXTRA_HEADER_LINES]
+  local agent
+  case "$1" in explore) agent=explorer ;; implement) agent=implementer ;; review) agent=reviewer ;; esac
+  printf 'SPAWN: charlesdr-dev-loop:claude-%s\n' "$agent"
+  printf 'PROMPT:\n'
+  printf 'charles-run: %s\n' "$RUN_ID"
+  printf 'charles-dir: %s\n' "$DIR"
+  [ -z "${2:-}" ] || printf '%s\n' "$2"
+  printf '\n%s\n' "$TASK"
+}
+
+spawn_claude_lane() {
+  local extra=""
+  if [ "$LANE" = "implement" ]; then
+    [ -z "${SPEC_PATH:-}" ] || extra="charles-plan: $SPEC_PATH"
+    if [ -n "$REQ" ]; then
+      if [ -n "$extra" ]; then extra="$extra
+charles-req: $REQ"; else extra="charles-req: $REQ"; fi
+    fi
   fi
-  local extra="" rc=0
-  [ "$LANE" = "implement" ] && extra="
-
-$LADDER"
-  run_attempt claude claude-sonnet-5 "$DIR" "$RUN.jsonl" "$RUN.err" \
-    timeout -k 30s "$TIMEOUT" env -u CLAUDECODE -u CLAUDE_CODE_EFFORT_LEVEL \
-      CHARLES_INLINE_OK=1 claude -p "$TASK
-
-$GUARD$extra
-
-You ARE the worker lane. Do the work yourself. Do not dispatch another lane,
-invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." "${args[@]}" < /dev/null || rc=$?
-  # ponytail: the prompt sits right after -p because --disallowed-tools is variadic and would swallow it.
-  # Keep live stdout in the transcript: a nonempty .last makes lane-status say DONE.
-  if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
-  if [ "$rc" -eq 0 ]; then
-    [ -s "$RUN.last" ] && cat "$RUN.last"
-  else
-    : > "$RUN.last"
-  fi
-  echo "— claude/claude-sonnet-5 · effort=$EFFORT · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
-  return "$rc"
+  print_spawn_block "$LANE" "$extra"
 }
 
 # grok has no "max" reasoning effort — passing it exits non-zero with a usage
@@ -1037,6 +1034,17 @@ run_review() {
     return 3
   fi
 
+  # claude review hands the box to claude-reviewer instead of running codex here.
+  # Unlike the codex/grok paths, the box is NOT deleted — the isolated reviewer
+  # still needs to read it — and there is no process to run_attempt, so it is
+  # left standing with a marker file; hooks/claude-lane-receipt.sh deletes it
+  # once the reviewer subagent's PostToolUse receipt fires.
+  if [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "claude" ]; then
+    : > "$box/.charles-review-box"
+    print_spawn_block review "charles-box: $box"
+    return 0
+  fi
+
   # review defaults to sol; --engine picks another model for a second opinion
   local rmodel rprofile
   if [ "$ENGINE_SET" -eq 1 ]; then
@@ -1160,15 +1168,20 @@ validate_main_tree || exit $?
 
 # codex and grok are separate dependencies; require only the one the resolved
 # lane/engine will actually spawn (R16). A grok-only dispatch on a machine
-# without codex must not die on a check it never needed.
+# without codex must not die on a check it never needed. claude needs neither
+# CLI — it hands off to a Claude Code subagent instead of running a process.
 if [ "$LANE" = "review" ]; then
   if [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "grok" ]; then
     command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+  elif [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "claude" ]; then
+    :
   else
     command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
   fi
 elif [ "$ENGINE" = "grok" ]; then
   command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+elif [ "$ENGINE" = "claude" ]; then
+  :
 else
   command -v codex >/dev/null || { echo "codex-run.sh: codex CLI not on PATH" >&2; exit 127; }
 fi
@@ -1214,7 +1227,6 @@ dispatch() { # dispatch ENGINE
     luna)     run_gpt luna ;;
     terra)    run_gpt terra ;;
     deepseek) run_deepseek ;;
-    claude)   run_claude ;;
     grok)     run_grok ;;
     *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;;
   esac
@@ -1222,6 +1234,10 @@ dispatch() { # dispatch ENGINE
 
 if [ "$LANE" = "review" ]; then
   set +e; run_review; RC=$?; set -e
+elif [ "$ENGINE" = "claude" ]; then
+  # No process to run and nothing to fall back from: the SPAWN block IS the
+  # dispatch. The orchestrating session spawns the subagent after this exits.
+  spawn_claude_lane; RC=0
 else
   set +e; dispatch "$ENGINE"; RC=$?; set -e
 

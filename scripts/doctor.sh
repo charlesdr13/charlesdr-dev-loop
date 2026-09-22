@@ -9,19 +9,35 @@ have() { command -v "$1" >/dev/null 2>&1; }
 echo "charlesdr-dev-loop doctor"
 echo
 echo "Lanes:"
-have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/run-common.sh"
 run_root="$(charles_run_root "$PWD")"
 engine="${CHARLES_ENGINE:-}"
 [ -n "$engine" ] || engine="$(cat "$run_root/.charles/engine" 2>/dev/null || true)"
 [ -n "$engine" ] || engine="$(cat "${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}/engine" 2>/dev/null || true)"
+# engine=claude hands explore/implement/review off to a plugin subagent instead
+# of running codex/luna, so their absence is not fatal here — only the three
+# agent files matter, checked below.
 if [ "$engine" = "claude" ]; then
-  have claude && say OK "claude CLI on PATH ($(command -v claude))" || say FAIL "claude CLI not on PATH — explore AND implement dead"
+  have codex && say OK "codex CLI on PATH ($(command -v codex))" || say WARN "codex CLI not on PATH — not needed while engine=claude"
+else
+  have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
+fi
+if [ "$engine" = "claude" ]; then
+  for a in claude-explorer claude-implementer claude-reviewer; do
+    [ -f "$REPO_ROOT/agents/$a.md" ] && say OK "agents/$a.md present" || say FAIL "missing agents/$a.md — claude engine lane dead"
+  done
 fi
 if [ "$engine" = "grok" ]; then
   have grok && say OK "grok CLI on PATH ($(command -v grok))" || say FAIL "grok CLI not on PATH — explore, implement AND review dead (grok preference governs review too)"
 fi
-[ -f "$HOME/.codex/luna.config.toml" ] && say OK "luna profile (PRIMARY engine)" || say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
+if [ -f "$HOME/.codex/luna.config.toml" ]; then
+  say OK "luna profile (PRIMARY engine)"
+elif [ "$engine" = "claude" ]; then
+  say WARN "missing ~/.codex/luna.config.toml — not needed while engine=claude"
+else
+  say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
+fi
 [ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"
 [ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say WARN "missing ~/.config/lg-cc-deepseek/key.env — no fallback if luna fails"
@@ -58,7 +74,6 @@ fi
 
 echo
 echo "Installed plugin:"
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VER="$(jq -r '.version' "$REPO_ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
 CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VER"
 if [ ! -d "$CACHE" ]; then

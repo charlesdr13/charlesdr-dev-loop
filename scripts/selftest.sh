@@ -2,7 +2,7 @@
 # selftest.sh — asserts the hook allows what it should and asks on what it shouldn't.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
-unset CHARLES_FAST_MODE
+unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK
 
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-to-codex.sh"
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
@@ -183,6 +183,10 @@ echo
 routing_cases=(
   "opted-out repo, general-purpose|allow|general-purpose|$BOX/plain"
   "codex-reviewer remains allowed|allow|codex-reviewer|$BOX/repo"
+  "namespaced codex-reviewer remains allowed|allow|charlesdr-dev-loop:codex-reviewer|$BOX/repo"
+  "namespaced claude-explorer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-explorer|$BOX/repo"
+  "namespaced claude-implementer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-implementer|$BOX/repo"
+  "namespaced claude-reviewer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-reviewer|$BOX/repo"
   "google-drive is not code work|allow|google-drive|$BOX/repo"
   "Explore must route to a lane|ask|Explore|$BOX/repo"
   "general-purpose must route|ask|general-purpose|$BOX/repo"
@@ -235,6 +239,11 @@ scheck_tool "fresh grant quiets the subagent gate" allow Agent Explore "$BOX/rep
 touch -d '30 minutes ago' "$BOX/repo/.charles/inline-ok"
 scheck_tool "grant older than 10min re-arms the subagent gate" ask Agent Explore "$BOX/repo"
 rm -f "$BOX/repo/.charles/inline-ok"
+
+jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"general-purpose",prompt:"x"}}' \
+  | CHARLES_SUBAGENTS_OK=1 bash "$SUBHOOK" 2>/dev/null | grep -q . \
+  && { echo "  FAIL  CHARLES_SUBAGENTS_OK=1 still asks"; fail=$((fail+1)); } \
+  || { echo "  PASS  CHARLES_SUBAGENTS_OK=1 turns the subagent gate off"; pass=$((pass+1)); }
 
 message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
   "codex-run --lane explore --dir <repo> --timeout 2700"
@@ -329,6 +338,7 @@ parallel_fixture "$PD/r10-repo" "$PD/r10-alpha" true
 parallel_swap_fixture "$PD/swap-repo" "$PD/swap-alpha"
 parallel_fixture "$PD/shared-clean-repo" "$PD/shared-clean-alpha" true '' shared
 parallel_fixture "$PD/shared-conflict-repo" "$PD/shared-conflict-alpha" true '' shared
+parallel_fixture "$PD/shared-exec-repo" "$PD/shared-exec-alpha" true '' shared
 parallel_fixture "$PD/stale-repo" "$PD/stale-alpha" true
 parallel_fixture "$PD/head-moved-repo" "$PD/head-moved-alpha" true
 git -C "$PD/good-repo" worktree add -q "$PD/good-beta" HEAD
@@ -345,6 +355,7 @@ git -C "$PD/bad-receipt-repo" worktree add -q "$PD/bad-receipt-beta" HEAD
 git -C "$PD/r10-repo" worktree add -q "$PD/r10-beta" HEAD
 git -C "$PD/shared-clean-repo" worktree add -q "$PD/shared-clean-beta" HEAD
 git -C "$PD/shared-conflict-repo" worktree add -q "$PD/shared-conflict-beta" HEAD
+git -C "$PD/shared-exec-repo" worktree add -q "$PD/shared-exec-beta" HEAD
 (
   cd "$PD/stale-repo" && printf 'current\n' > current && git add current && git commit -qm advance
 )
@@ -437,6 +448,8 @@ case "\${1:-}" in
       shared-clean-repo:chunk-beta) printf '%s\n' "$PD/shared-clean-beta" ;;
       shared-conflict-repo:chunk-alpha) printf '%s\n' "$PD/shared-conflict-alpha" ;;
       shared-conflict-repo:chunk-beta) printf '%s\n' "$PD/shared-conflict-beta" ;;
+      shared-exec-repo:chunk-alpha) printf '%s\n' "$PD/shared-exec-alpha" ;;
+      shared-exec-repo:chunk-beta) printf '%s\n' "$PD/shared-exec-beta" ;;
       stale-repo:chunk-alpha) printf '%s\n' "$PD/stale-alpha" ;;
       stale-repo:chunk-beta) printf '%s\n' "$PD/stale-beta" ;;
       head-moved-repo:chunk-alpha) printf '%s\n' "$PD/head-moved-alpha" ;;
@@ -527,6 +540,8 @@ case "$PWD" in
   */shared-clean-beta) printf 'base\nbase\nbeta\n' > shared; exit 0 ;;
   */shared-conflict-alpha) printf 'base\nalpha\nbase\n' > shared; exit 0 ;;
   */shared-conflict-beta) printf 'base\nbeta\nbase\n' > shared; exit 0 ;;
+  */shared-exec-alpha) printf 'exec alpha\nbase\nbase\n' > shared; chmod +x shared; exit 0 ;;
+  */shared-exec-beta) printf 'base\nbase\nexec beta\n' > shared; exit 0 ;;
   */stale-alpha) printf 'stale alpha\n' > alpha; exit 0 ;;
   */stale-beta) printf 'stale beta\n' > beta; exit 0 ;;
   */head-moved-alpha)
@@ -787,6 +802,8 @@ else
   echo "  FAIL  shared manifest must refuse --no-green before leasing (rc=$shared_no_green_rc)"; fail=$((fail+1))
 fi
 
+# Group-write is untracked by git: a umask-0002 checkout must not read as a mode change.
+chmod g+w "$PD"/shared-{clean,conflict}-{alpha,beta}/shared
 : > "$PD/shared-clean-returns"
 shared_clean_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/shared-clean-returns" CHARLES_STATE_DIR="$PD/state" \
   bash "$PARALLEL" "$PD/shared-clean-repo" "$PD/shared-spec.json" 2>&1)"; shared_clean_rc=$?
@@ -811,6 +828,20 @@ if [ "$shared_conflict_rc" -eq 3 ] \
   echo "  PASS  conflicting shared merge rejects before changing the root"; pass=$((pass+1))
 else
   echo "  FAIL  conflicting shared merge must reject before root mutation (rc=$shared_conflict_rc)"; fail=$((fail+1))
+fi
+
+shared_exec_before="$PD/shared-exec-before"
+cp "$PD/shared-exec-repo/shared" "$shared_exec_before"
+: > "$PD/shared-exec-returns"
+shared_exec_out="$(PATH="$PD/bin:$PATH" CHARLES_RETURN_RECORD="$PD/shared-exec-returns" CHARLES_STATE_DIR="$PD/state" \
+  bash "$PARALLEL" "$PD/shared-exec-repo" "$PD/shared-spec.json" 2>&1)"; shared_exec_rc=$?
+if [ "$shared_exec_rc" -eq 3 ] \
+  && grep -qF "shared path 'shared' changed mode" <<<"$shared_exec_out" \
+  && cmp -s "$PD/shared-exec-repo/shared" "$shared_exec_before" \
+  && ! grep -qF 'merged shared shared' <<<"$shared_exec_out"; then
+  echo "  PASS  exec-bit flip on shared path is still rejected"; pass=$((pass+1))
+else
+  echo "  FAIL  exec-bit flip on shared path must be rejected (rc=$shared_exec_rc)"; fail=$((fail+1))
 fi
 
 : > "$PD/stale-returns"
@@ -2835,27 +2866,11 @@ else
 fi
 rm -rf "$ED/global-state"
 
-# --- claude lane contracts ----------------------------------------------------
+# --- claude lane contracts (engine=claude hands off to a plugin subagent) -----
 CL="$BOX/claude-lane"; mkdir -p "$CL/bin" "$CL/state"
 make_unsourced_repo "$CL/repo"
 touch "$CL/repo/.charles.toml"
 git -C "$CL/repo" worktree add -q "$CL/worktree" HEAD
-printf 'review change\n' > "$CL/repo/change.txt"
-cat > "$CL/bin/claude" <<'SH'
-#!/usr/bin/env bash
-jq -nc --arg inline "${CHARLES_INLINE_OK:-}" --arg nested "${CLAUDECODE+x}" \
-  --arg effort_env "${CLAUDE_CODE_EFFORT_LEVEL+x}" --arg cwd "$PWD" \
-  --arg stdin "$(readlink /proc/$$/fd/0)" \
-  '{argv:$ARGS.positional,inline:$inline,nested:$nested,effort_env:$effort_env,cwd:$cwd,stdin:$stdin}' \
-  --args -- "$@" > "$CLAUDE_TEST_CAPTURE"
-jq -nc --arg p "$PWD/tracked" '{tool_name:"Edit",tool_input:{file_path:$p}}' | bash "$CLAUDE_TEST_MARK"
-printf 'claude result\n'
-if [ -n "${CLAUDE_TEST_READY:-}" ]; then
-  : > "$CLAUDE_TEST_READY"
-  while [ ! -e "$CLAUDE_TEST_RELEASE" ]; do sleep 0.05; done
-fi
-exit "${CLAUDE_TEST_RC:-0}"
-SH
 cat > "$CL/bin/codex" <<'SH'
 #!/usr/bin/env bash
 jq -nc '$ARGS.positional' --args -- "$@" > "$CLAUDE_TEST_CODEX"
@@ -2864,109 +2879,142 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 SH
-chmod +x "$CL/bin/claude" "$CL/bin/codex"
+chmod +x "$CL/bin/codex"
 claude_run() {
   PATH="$CL/bin:$PATH" CHARLES_STATE_DIR="$CL/state" CHARLES_ENGINE="${CLAUDE_TEST_ENGINE:-}" \
-    CLAUDE_TEST_CAPTURE="$CL/claude.json" CLAUDE_TEST_CODEX="$CL/codex.json" CLAUDE_TEST_MARK="$MARK" \
-    CHARLES_INLINE_OK=0 CLAUDECODE=orchestrator CLAUDE_CODE_EFFORT_LEVEL=high \
-    ANTHROPIC_DEFAULT_SONNET_MODEL=unexpected-alias \
+    CLAUDE_TEST_CODEX="$CL/codex.json" \
     bash "$RUN_SH" --dir "$CL/repo" --timeout 10 "$@" "claude task"
 }
 
-# Hold a successful child after stdout: .last must stay unpublished while it runs.
-CLAUDE_TEST_READY="$CL/ready" CLAUDE_TEST_RELEASE="$CL/release" \
-  claude_run --lane explore --engine claude > "$CL/stdout" 2> "$CL/stderr" & cl_pid=$!
-for _ in {1..100}; do [ -e "$CL/ready" ] && break; sleep 0.05; done
-cl_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
-cl_live_out="$(CHARLES_STATE_DIR="$CL/state" bash "$REPO_ROOT/scripts/lane-status.sh" "$cl_run" 2>&1)"; cl_live_rc=$?
-if [ -e "$CL/ready" ] && [ ! -s "$CL/state/$cl_run.last" ] \
-  && [ -s "$CL/state/$cl_run.jsonl" ] && [ "$cl_live_rc" -eq 0 ] && [[ "$cl_live_out" == RUNNING:* ]]; then
-  echo "  PASS  claude live stdout stays unpublished and lane-status stays RUNNING"; pass=$((pass+1))
+# explore: a SPAWN block on stdout, one start event, and no process run at all —
+# the hand-off IS the dispatch (R2).
+cl_out="$(claude_run --lane explore --engine claude)"; cl_rc=$?
+cl_explore_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$cl_rc" -eq 0 ] \
+  && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-explorer"$'\n'PROMPT:* ]] \
+  && grep -qF "charles-run: $cl_explore_run" <<<"$cl_out" \
+  && grep -qF "charles-dir: $CL/repo" <<<"$cl_out" \
+  && grep -qF "claude task" <<<"$cl_out" \
+  && jq -se --arg r "$cl_explore_run" \
+    'map(select(.run == $r)) | length == 1 and .[0].event == "start" and .[0].engine == "claude" and .[0].lane == "explore"' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null \
+  && [ ! -e "$CL/codex.json" ]; then
+  echo "  PASS  claude explore prints a SPAWN block, logs one start event, runs no process"; pass=$((pass+1))
 else
-  echo "  FAIL  claude must not publish .last before success ($cl_live_out)"; fail=$((fail+1))
+  echo "  FAIL  claude explore SPAWN/start contract is wrong (rc=$cl_rc)"; echo "        $cl_out"; fail=$((fail+1))
 fi
-touch "$CL/release"
-wait "$cl_pid"; cl_rc=$?
-cl_done_out="$(CHARLES_STATE_DIR="$CL/state" bash "$REPO_ROOT/scripts/lane-status.sh" "$cl_run" 2>&1)"; cl_done_rc=$?
-if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/state/$cl_run.last" 2>/dev/null)" = 'claude result' ] \
-  && cmp -s "$CL/stdout" "$CL/state/$cl_run.last" && [ "$(cat "$CL/state/$cl_run.done")" = 0 ] \
-  && [ "$cl_done_rc" -eq 1 ] && [[ "$cl_done_out" == DONE:* ]] \
-  && jq -se 'map(select(.event == "end")) | last | .engine == "claude" and .model == "claude-sonnet-5" and .rc == 0' \
+
+# implement: same contract, plus the plan path and requirement IDs it validated.
+cat > "$CL/repo/plan.md" <<'EOF'
+# test plan
+
+## Requirements
+- [ ] **R1** do the thing
+
+## Grill verdict
+Grill waived: test.
+
+## Sign-off
+EOF
+cl_out="$(claude_run --lane implement --engine claude --allow-main-tree --plan "$CL/repo/plan.md" --req R1 "implement R1")"; cl_rc=$?
+cl_implement_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-implementer"$'\n'* ]] \
+  && grep -qF "charles-plan: $CL/repo/plan.md" <<<"$cl_out" && grep -qF "charles-req: R1" <<<"$cl_out" \
+  && jq -se --arg r "$cl_implement_run" \
+    'map(select(.run == $r and .event == "start")) | length == 1 and .[0].req == ["R1"]' \
     "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
-  echo "  PASS  successful claude stdout becomes .last with a matching receipt and DONE status"; pass=$((pass+1))
+  echo "  PASS  claude implement SPAWN carries the plan path and requirement IDs"; pass=$((pass+1))
 else
-  echo "  FAIL  claude success must publish stdout and record its model (rc=$cl_rc)"; fail=$((fail+1))
-fi
-# the prompt sits at argv[1], right after -p (commit 1942595): --disallowed-tools
-# is variadic and swallowed a trailing prompt, so it can no longer be argv[-1].
-if jq -e '.argv[0] == "-p"
-  and .argv[2:8] == ["--model","claude-sonnet-5","--effort","medium","--output-format","text"]
-  and (.argv | index("--permission-mode")) == null
-  and (.argv[.argv | index("--disallowed-tools") + 1] == "Edit Write MultiEdit NotebookEdit")
-  and .inline == "1" and .nested == "" and .effort_env == "" and .stdin == "/dev/null"
-  and (.argv[1] | contains("claude task") and contains("Git is READ-ONLY")
-    and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
-    and contains("invoke codex-run") and contains("spawn a subagent")
-    and (contains("Does this need to exist at all") | not))' "$CL/claude.json" >/dev/null; then
-  echo "  PASS  claude explore pins Sonnet/medium, sanitises the environment, and carries the guard and worker instruction"; pass=$((pass+1))
-else
-  echo "  FAIL  claude explore argv, environment, stdin, or worker prompt is wrong"; fail=$((fail+1))
+  echo "  FAIL  claude implement SPAWN/start contract is wrong (rc=$cl_rc)"; echo "        $cl_out"; fail=$((fail+1))
 fi
 
-for cl_posture in workspace-write read-only; do
-  cl_flags=(); [ "$cl_posture" = "read-only" ] && cl_flags=(--read-only)
-  claude_run --lane implement --engine claude --allow-main-tree "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
-  if [ "$cl_rc" -eq 0 ] && jq -e --arg posture "$cl_posture" '
-    (.argv[1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
-    and if $posture == "workspace-write" then
-      .argv[.argv | index("--permission-mode") + 1] == "bypassPermissions"
-    else (.argv | index("--permission-mode")) == null
-      and .argv[.argv | index("--disallowed-tools") + 1] == "Edit Write MultiEdit NotebookEdit"
-    end' "$CL/claude.json" >/dev/null; then
-    echo "  PASS  claude implement $cl_posture uses the sandbox posture and carries the ladder"; pass=$((pass+1))
+# review: the box is built exactly as the codex path builds it, marked, named in
+# the SPAWN prompt, and — unlike the codex/grok paths — NOT deleted (R2/R3).
+echo x > "$CL/repo/change.txt"
+cl_out="$(claude_run --lane review --engine claude --plan "$CL/repo/tracked" "check it")"; cl_rc=$?
+cl_review_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
+cl_box="$(sed -n 's/^charles-box: //p' <<<"$cl_out" | head -1)"
+if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-reviewer"$'\n'* ]] \
+  && [ -n "$cl_box" ] && [ -f "$cl_box/.charles-review-box" ] \
+  && [ -f "$cl_box/plan.md" ] && [ -s "$cl_box/changes.diff" ]; then
+  echo "  PASS  claude review builds the box, marks it, names it, and does not delete it"; pass=$((pass+1))
+else
+  echo "  FAIL  claude review box contract is wrong (rc=$cl_rc)"; echo "        $cl_out"; fail=$((fail+1))
+fi
+
+# --- review-box hook: claude-reviewer is confined to $cl_box; no one else is --
+REVIEWBOX="$(cd "$(dirname "$0")/.." && pwd)/hooks/claude-review-box.sh"
+rb_check() { # rb_check NAME EXPECT TOOL TOOL_INPUT_JSON AGENT_TYPE
+  local name="$1" expect="$2" out decision
+  out="$(jq -nc --argjson ti "$4" --arg t "$3" --arg a "$5" '{tool_name:$t,tool_input:$ti,agent_type:$a}' | bash "$REVIEWBOX" 2>/dev/null)"
+  if [ -z "$out" ]; then decision=allow; else decision="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null)"; fi
+  if [ "$decision" = "$expect" ]; then
+    echo "  PASS  $name (expected $expect)"; pass=$((pass+1))
   else
-    echo "  FAIL  claude implement $cl_posture permissions or ladder is wrong (rc=$cl_rc)"; fail=$((fail+1))
+    echo "  FAIL  $name — expected $expect, got $decision"; echo "        $out"; fail=$((fail+1))
   fi
-done
-claude_run --lane explore --engine claude --effort max >/dev/null 2>&1; cl_rc=$?
-if [ "$cl_rc" -eq 0 ] && jq -e '.argv[.argv | index("--effort") + 1] == "max"' "$CL/claude.json" >/dev/null; then
-  echo "  PASS  explicit claude effort survives the inherited effort override"; pass=$((pass+1))
+}
+rb_reviewer="charlesdr-dev-loop:claude-reviewer"
+rb_check "reviewer Read inside its box" allow Read "$(jq -nc --arg p "$cl_box/plan.md" '{file_path:$p}')" "$rb_reviewer"
+rb_check "reviewer Read outside its box" deny Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "$rb_reviewer"
+rb_check "reviewer Read of a missing path" deny Read "$(jq -nc --arg p "$cl_box/nope.md" '{file_path:$p}')" "$rb_reviewer"
+rb_check "reviewer Bash is denied outright" deny Bash '{"command":"ls"}' "$rb_reviewer"
+rb_check "non-reviewer agent is ignored" allow Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "charlesdr-dev-loop:claude-implementer"
+rb_check "main thread (no agent_type) is ignored" allow Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" ""
+# a marker planted outside the temp root unlocks nothing
+: > "$CL/repo/.charles-review-box"
+rb_check "reviewer Read under a planted marker" deny Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "$rb_reviewer"
+rb_check "reviewer Grep with no path" deny Grep '{"pattern":"x"}' "$rb_reviewer"
+rb_check "reviewer Glob inside its box" allow Glob "$(jq -nc --arg p "$cl_box" '{path:$p,pattern:"*.md"}')" "$rb_reviewer"
+rb_check "reviewer Glob climbing out with .." deny Glob "$(jq -nc --arg p "$cl_box" '{path:$p,pattern:"../*/changes.diff"}')" "$rb_reviewer"
+jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "charles-run: none
+charles-dir: $CL/repo
+charles-box: $CL/repo" '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$(cd "$(dirname "$0")/.." && pwd)/hooks/claude-lane-receipt.sh"
+if [ -f "$CL/repo/tracked" ]; then
+  echo "  PASS  receipt hook never deletes a marked dir outside the temp root"; pass=$((pass+1))
 else
-  echo "  FAIL  explicit claude effort must be honoured"; fail=$((fail+1))
+  echo "  FAIL  receipt hook deleted a marked dir outside the temp root"; fail=$((fail+1))
+fi
+rm -f "$CL/repo/.charles-review-box"
+
+# --- receipt hook: PostToolUse writes the end event a spawn cannot write itself
+RECEIPT="$(cd "$(dirname "$0")/.." && pwd)/hooks/claude-lane-receipt.sh"
+cl_review_prompt="charles-run: $cl_review_run
+charles-dir: $CL/repo
+charles-box: $cl_box
+
+check it"
+jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "$cl_review_prompt" \
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+if jq -se --arg r "$cl_review_run" \
+    'map(select(.run == $r and .event == "end")) | length == 1 and .[0].engine == "claude" and .[0].model == "opus" and .[0].rc == 0' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null && [ ! -e "$cl_box" ]; then
+  echo "  PASS  claude-lane-receipt.sh appends the reviewer's end event and deletes its box"; pass=$((pass+1))
+else
+  echo "  FAIL  claude-lane-receipt.sh must append a matching end event and delete the box"; fail=$((fail+1))
+fi
+if bash "$VR" "$CL/repo" --lane review --run "$cl_review_run" >/dev/null 2>&1; then
+  echo "  PASS  verify-receipt.sh accepts the hook-written review receipt"; pass=$((pass+1))
+else
+  echo "  FAIL  verify-receipt.sh must accept the hook-written review receipt"; fail=$((fail+1))
 fi
 
-printf '%s\n' "$CL/repo/tracked" > "$CL/repo/.charles/pending-ask"
-CLAUDE_TEST_RC=7 claude_run --lane implement --engine claude --allow-main-tree >/dev/null 2>&1; cl_rc=$?
-cl_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
-if [ "$cl_rc" -eq 7 ] && [ -f "$CL/state/$cl_run.last" ] && [ ! -s "$CL/state/$cl_run.last" ] \
-  && [ "$(cat "$CL/state/$cl_run.done")" = 7 ] \
-  && jq -se --arg r "$cl_run" 'map(select(.event == "end" and .run == $r)) |
-    length == 1 and .[0].engine == "claude" and .[0].model == "claude-sonnet-5" and .[0].rc == 7' \
+cl_explore_prompt="charles-run: $cl_explore_run
+charles-dir: $CL/repo
+
+find the main entrypoint"
+jq -nc --arg s "charlesdr-dev-loop:claude-explorer" --arg p "$cl_explore_prompt" \
+  '{tool_name:"Task",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+if jq -se --arg r "$cl_explore_run" \
+    'map(select(.run == $r and .event == "end")) | length == 1 and .[0].engine == "claude" and .[0].model == "haiku" and .[0].rc == 0' \
     "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
-  echo "  PASS  failed claude output leaves .last empty and records failure without fallback"; pass=$((pass+1))
+  echo "  PASS  claude-lane-receipt.sh maps claude-explorer to the haiku model"; pass=$((pass+1))
 else
-  echo "  FAIL  failed claude output must not publish or fall back (rc=$cl_rc)"; fail=$((fail+1))
-fi
-if [ "$(cat "$CL/repo/.charles/pending-ask" 2>/dev/null)" = "$CL/repo/tracked" ] \
-  && [ ! -e "$CL/repo/.charles/inline-ok" ]; then
-  echo "  PASS  a failed claude worker cannot turn pending-ask into human approval"; pass=$((pass+1))
-else
-  echo "  FAIL  mark-inline-ok must leave pending-ask untouched for a worker"; fail=$((fail+1))
+  echo "  FAIL  claude-lane-receipt.sh must map claude-explorer to haiku"; fail=$((fail+1))
 fi
 
-for cl_refusal in resume review; do
-  rm -f "$CL/claude.json" "$CL/codex.json"
-  cl_flags=(--lane explore --resume); cl_message='--resume'
-  if [ "$cl_refusal" = review ]; then cl_flags=(--lane review --plan "$CL/repo/tracked"); cl_message=sol; fi
-  cl_out="$(claude_run --engine claude "${cl_flags[@]}" 2>&1)"; cl_rc=$?
-  if [ "$cl_rc" -eq 2 ] && [[ "$cl_out" == *"$cl_message"* ]] \
-    && [ ! -e "$CL/claude.json" ] && [ ! -e "$CL/codex.json" ]; then
-    echo "  PASS  explicit claude $cl_refusal is refused before dispatch with exit 2"; pass=$((pass+1))
-  else
-    echo "  FAIL  claude $cl_refusal must be refused (rc=$cl_rc)"; fail=$((fail+1))
-  fi
-done
-
+# a claude preference (any source) now hands review off to claude-reviewer too —
+# no more silently pinning sol now that a claude review lane exists (R2).
 for cl_source in project environment global; do
   printf 'terra\n' > "$CL/state/engine"
   printf 'claude\n' > "$CL/repo/.charles/engine"
@@ -2975,18 +3023,26 @@ for cl_source in project environment global; do
     environment) printf 'terra\n' > "$CL/repo/.charles/engine"; cl_env=claude ;;
     global) rm -f "$CL/repo/.charles/engine"; printf 'claude\n' > "$CL/state/engine" ;;
   esac
-  for cl_effort in medium max; do
-    cl_flags=(); [ "$cl_effort" = max ] && cl_flags=(--effort max)
-    CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane review --plan "$CL/repo/tracked" "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
-    if [ "$cl_rc" -eq 0 ] && jq -e --arg effort "$cl_effort" \
-      '.[index("-m") + 1] == "gpt-5.6-sol" and index("model_reasoning_effort=" + $effort) != null' "$CL/codex.json" >/dev/null; then
-      echo "  PASS  $cl_source claude preference reviews on sol at $cl_effort"; pass=$((pass+1))
-    else
-      echo "  FAIL  $cl_source claude preference must review on sol at $cl_effort (rc=$cl_rc)"; fail=$((fail+1))
-    fi
-  done
+  cl_pref_out="$(CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane review --plan "$CL/repo/tracked" "check it")"; cl_pref_rc=$?
+  cl_pref_box="$(sed -n 's/^charles-box: //p' <<<"$cl_pref_out" | head -1)"
+  if [ "$cl_pref_rc" -eq 0 ] && [[ "$cl_pref_out" == "SPAWN: charlesdr-dev-loop:claude-reviewer"$'\n'* ]] && [ -d "$cl_pref_box" ]; then
+    echo "  PASS  $cl_source claude preference hands review to claude-reviewer"; pass=$((pass+1))
+  else
+    echo "  FAIL  $cl_source claude preference must hand review to claude-reviewer (rc=$cl_pref_rc)"; fail=$((fail+1))
+  fi
+  rm -rf "$cl_pref_box"
 done
 
+# --- resume is refused before any hand-off happens -----------------------------
+rm -f "$CL/codex.json"
+cl_out="$(claude_run --lane explore --engine claude --resume 2>&1)"; cl_rc=$?
+if [ "$cl_rc" -eq 2 ] && [[ "$cl_out" == *"--resume"* ]] && [ ! -e "$CL/codex.json" ]; then
+  echo "  PASS  claude --resume is refused before dispatch with exit 2"; pass=$((pass+1))
+else
+  echo "  FAIL  claude --resume must be refused (rc=$cl_rc)"; fail=$((fail+1))
+fi
+
+# --- engine precedence: flag > environment > project file > global file -------
 printf 'terra\n' > "$CL/state/engine"
 printf 'claude\n' > "$CL/repo/.charles/engine"
 for cl_source in flag environment project worktree; do
@@ -2996,46 +3052,67 @@ for cl_source in flag environment project worktree; do
     environment) cl_env=luna; cl_expected=luna ;;
     worktree) cl_dir="$CL/worktree"; cl_lane=implement ;;
   esac
+  # log_start writes to <dir>/.charles, i.e. the worktree's OWN log for the
+  # worktree case — the "shared run root" is only what the engine preference
+  # walk-up reads, not where receipts land.
+  mkdir -p "$cl_dir/.charles" 2>/dev/null || true
+  : > "$cl_dir/.charles/dispatches.jsonl"; rm -f "$CL/codex.json"
   CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane "$cl_lane" --dir "$cl_dir" "${cl_flags[@]}" >/dev/null 2>&1; cl_rc=$?
-  if [ "$cl_rc" -eq 0 ] && jq -se --arg engine "$cl_expected" \
-    'map(select(.event == "end")) | last | .engine == $engine' "$cl_dir/.charles/dispatches.jsonl" >/dev/null \
-    && [ ! -e "$CL/worktree/.charles/engine" ]; then
+  cl_ok=0
+  if [ "$cl_expected" = claude ]; then
+    [ "$cl_rc" -eq 0 ] && [ ! -s "$CL/codex.json" ] \
+      && jq -se 'map(select(.event == "start")) | last | .engine == "claude"' \
+        "$cl_dir/.charles/dispatches.jsonl" >/dev/null 2>&1 && cl_ok=1
+  else
+    [ "$cl_rc" -eq 0 ] \
+      && jq -se --arg e "$cl_expected" 'map(select(.event == "end")) | last | .engine == $e' \
+        "$cl_dir/.charles/dispatches.jsonl" >/dev/null 2>&1 && cl_ok=1
+  fi
+  if [ "$cl_ok" -eq 1 ] && [ ! -e "$CL/worktree/.charles/engine" ]; then
     echo "  PASS  $cl_source engine precedence resolves to $cl_expected at the shared run root"; pass=$((pass+1))
   else
     echo "  FAIL  $cl_source engine precedence or linked-worktree resolution is wrong (rc=$cl_rc)"; fail=$((fail+1))
   fi
 done
 
-# Doctor must resolve at the same root; use a PATH with no real claude binary.
-mkdir -p "$CL/doctor-bin"
+# --- doctor: engine=claude needs no CLI; it checks the three agent files (R6) -
+CD="$BOX/claude-doctor"; mkdir -p "$CD/bin" "$CD/repo/scripts" "$CD/repo/agents" "$CD/repo/.claude-plugin" "$CD/home/.codex"
+cp "$DOCTOR" "$REPO_ROOT/scripts/run-common.sh" "$CD/repo/scripts/"
+printf '{"version":"fixture"}\n' > "$CD/repo/.claude-plugin/plugin.json"
 for cl_tool in bash dirname readlink cat git jq grep sed date; do
-  ln -s "$(command -v "$cl_tool")" "$CL/doctor-bin/$cl_tool"
+  ln -s "$(command -v "$cl_tool")" "$CD/bin/$cl_tool"
 done
-ln -s "$CL/bin/codex" "$CL/doctor-bin/codex"
-for cl_source in project environment global; do
-  printf 'claude\n' > "$CL/repo/.charles/engine"
-  printf 'terra\n' > "$CL/state/engine"
-  cl_env=""
-  case "$cl_source" in
-    environment) cl_env=luna ;;
-    global) rm -f "$CL/repo/.charles/engine"; printf 'claude\n' > "$CL/state/engine" ;;
-  esac
-  cl_out="$(cd "$CL/worktree" && CHARLES_ENGINE="$cl_env" CHARLES_STATE_DIR="$CL/state" PATH="$CL/doctor-bin" bash "$DOCTOR" 2>&1)"; cl_rc=$?
-  if { [ "$cl_source" = environment ] && ! grep -q '^  FAIL.*claude CLI not on PATH' <<<"$cl_out"; } \
-    || { [ "$cl_source" != environment ] && [ "$cl_rc" -ne 0 ] && grep -q '^  FAIL.*claude CLI not on PATH' <<<"$cl_out"; }; then
-    echo "  PASS  doctor checks claude availability using $cl_source precedence from a worktree"; pass=$((pass+1))
-  else
-    echo "  FAIL  doctor claude availability or $cl_source precedence is wrong (rc=$cl_rc)"; fail=$((fail+1))
-  fi
+for cl_agent in claude-explorer claude-implementer claude-reviewer; do
+  cp "$REPO_ROOT/agents/$cl_agent.md" "$CD/repo/agents/$cl_agent.md"
 done
-ln -s "$CL/bin/claude" "$CL/doctor-bin/claude"
-cl_out="$(cd "$CL/worktree" && CHARLES_ENGINE=claude CHARLES_STATE_DIR="$CL/state" PATH="$CL/doctor-bin" bash "$DOCTOR" 2>&1)"
-if grep -q '^  OK.*claude CLI on PATH' <<<"$cl_out" && ! grep -q '^  FAIL.*claude CLI' <<<"$cl_out"; then
-  echo "  PASS  doctor accepts an available claude CLI"; pass=$((pass+1))
+cd_out="$(cd "$CD/repo" && HOME="$CD/home" CHARLES_ENGINE=claude PATH="$CD/bin" bash scripts/doctor.sh 2>&1)"; cd_rc=$?
+if [ "$cd_rc" -eq 0 ] \
+  && grep -q '^  OK.*agents/claude-explorer.md' <<<"$cd_out" \
+  && grep -q '^  OK.*agents/claude-implementer.md' <<<"$cd_out" \
+  && grep -q '^  OK.*agents/claude-reviewer.md' <<<"$cd_out" \
+  && grep -q '^  WARN.*codex CLI not on PATH — not needed while engine=claude' <<<"$cd_out" \
+  && grep -q '^  WARN.*luna.config.toml — not needed while engine=claude' <<<"$cd_out"; then
+  echo "  PASS  doctor checks the three agent files and downgrades codex/luna to WARN under engine=claude"; pass=$((pass+1))
 else
-  echo "  FAIL  doctor must accept claude on PATH"; fail=$((fail+1))
+  echo "  FAIL  doctor must check agent files and downgrade codex/luna under engine=claude (rc=$cd_rc)"; echo "        $cd_out"; fail=$((fail+1))
 fi
 
+rm -f "$CD/repo/agents/claude-reviewer.md"
+cd_missing_out="$(cd "$CD/repo" && HOME="$CD/home" CHARLES_ENGINE=claude PATH="$CD/bin" bash scripts/doctor.sh 2>&1)"; cd_missing_rc=$?
+if [ "$cd_missing_rc" -ne 0 ] && grep -q '^  FAIL.*missing agents/claude-reviewer.md' <<<"$cd_missing_out"; then
+  echo "  PASS  doctor fails when a claude agent file is missing"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must fail when a claude agent file is missing"; fail=$((fail+1))
+fi
+
+cp "$REPO_ROOT/agents/claude-reviewer.md" "$CD/repo/agents/claude-reviewer.md"
+ln -s "$(command -v codex)" "$CD/bin/codex"
+cd_luna_out="$(cd "$CD/repo" && HOME="$CD/home" PATH="$CD/bin" bash scripts/doctor.sh 2>&1)"; cd_luna_rc=$?
+if [ "$cd_luna_rc" -ne 0 ] && grep -q '^  FAIL.*luna.config.toml — explore AND implement dead' <<<"$cd_luna_out"; then
+  echo "  PASS  a non-claude engine still fails doctor on a missing luna profile"; pass=$((pass+1))
+else
+  echo "  FAIL  non-claude luna check must still FAIL (rc=$cd_luna_rc)"; fail=$((fail+1))
+fi
 # Execute the documented /engine command so its scope rules stay reviewable.
 ln -s "$RUN_SH" "$CL/bin/codex-run"
 awk '/^```bash$/ { block=1; next } block && /^```$/ { exit } block { print }' \
@@ -3300,7 +3377,7 @@ fi
 rm -rf "$GL_RTMP"
 rm -f "$GL/repo/change.txt"
 
-# inverse of the claude precedence test above: a grok preference DOES follow onto review
+# same shape as the claude preference test above: a grok preference follows onto review too
 rm -f "$GL/grok.json" "$GL/codex.json"
 printf 'grok\n' > "$GL/repo/.charles/engine"
 printf 'precedence change\n' > "$GL/repo/precedence.txt"
@@ -3309,7 +3386,7 @@ rm -f "$GL/repo/precedence.txt"
 if [ "$gl_rc" -eq 0 ] && [ -e "$GL/grok.json" ] && [ ! -e "$GL/codex.json" ] \
   && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "grok-4.6"' \
     "$GL/repo/.charles/dispatches.jsonl" >/dev/null; then
-  echo "  PASS  a project grok preference runs review on grok, unlike claude's sol pin"; pass=$((pass+1))
+  echo "  PASS  a project grok preference runs review on grok"; pass=$((pass+1))
 else
   echo "  FAIL  a project grok preference must run review on grok (rc=$gl_rc)"; fail=$((fail+1))
 fi

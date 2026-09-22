@@ -199,9 +199,9 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna; claude-sonnet-5 with `claude`; grok-4.6 with `grok` | luna: max; claude: medium; grok: high | read-only |
-| implement | gpt-5.6-luna; claude-sonnet-5 with `claude`; grok-4.6 with `grok` | luna: max; claude: medium; grok: high | workspace-write |
-| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine` | sol: medium; luna/terra: max; grok: high; `--effort` overrides | read-only, isolated temp dir |
+| explore | gpt-5.6-luna; grok-4.6 with `grok`; `claude-explorer` subagent with `claude` | luna: max; grok: high; claude: haiku (fixed) | read-only |
+| implement | gpt-5.6-luna; grok-4.6 with `grok`; `claude-implementer` subagent with `claude` | luna: max; grok: high; claude: sonnet (fixed) | workspace-write |
+| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
 medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
@@ -212,21 +212,28 @@ Review effort is positional: intermediate reviews use `--effort medium`; the
 final pre-close review omits `--effort` and uses the model-aware default (sol at
 medium, luna/terra at max). This is a documented rule, not a flag.
 
-Run `/charlesdr-dev-loop:engine claude` to use Claude Sonnet (`claude-sonnet-5`)
-at medium for explore and implement. Review stays on codex sol at medium;
-`--effort` overrides the default. Explicit `--engine claude --lane review` and
-`--engine claude --resume` are refused. Claude failures have no fallback.
-Read-only claude lanes block edit tools; Bash writes remain a known isolation
-ceiling.
+Run `/charlesdr-dev-loop:engine claude` to hand explore, implement AND review
+off to a Claude Code subagent instead of running a process here: `codex-run`
+runs its usual scope validation, logs the `start` event, prints a SPAWN block
+(the agent to spawn and the exact prompt) to stdout, and exits — the
+orchestrating session spawns `claude-explorer` (haiku), `claude-implementer`
+(sonnet), or `claude-reviewer` (opus). The reviewer is isolated to a temp
+review box the same way `codex-reviewer` is, enforced by a hook that denies it
+any tool but Read/Grep/Glob and any path outside the box. A `claude`
+preference is honoured on review too, the same as `grok`. `--resume` is
+refused: no session id is recorded for a subagent. Claude dispatches have no
+fallback. `claude-explorer` keeps Bash for read-only probes by instruction,
+not by tool restriction — the same Bash-can-write ceiling as the other
+read-only lanes.
 
 Run `/charlesdr-dev-loop:engine grok` to use Grok (`grok-4.6`, local `grok`
-CLI) at high effort for all three lanes — explore, implement, AND review.
-Unlike `claude`, a `grok` preference IS honoured on review: it is a different
-model family from every codex profile, which is exactly what the isolated
-review wants. `--effort max` is translated to `xhigh`, since grok has no
-`max`. `--resume` is refused: no session id is recorded. Grok failures have no
-fallback. Read-only grok lanes block `write`/`search_replace`; Bash writes
-remain the same known isolation ceiling as claude.
+CLI) at high effort for all three lanes — explore, implement, AND review. A
+`grok` preference is honoured on review too: it is a different model family
+from every codex profile, which is exactly what the isolated review wants.
+`--effort max` is translated to `xhigh`, since grok has no `max`. `--resume`
+is refused: no session id is recorded. Grok failures have no fallback.
+Read-only grok lanes block `write`/`search_replace`; Bash writes remain the
+same known isolation ceiling as claude.
 
 Engine values are `luna`, `terra`, `deepseek`, `claude`, and `grok`. `/engine <value>`
 writes `<run root>/.charles/engine` in a repo with `.charles.toml`, shared by the
@@ -437,7 +444,8 @@ instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
 language specialist in an opted-in repo asks you to make a direct Bash call with
 `run_in_background: true` running `codex-run --lane ...` instead. It is a
 denylist of agents that do repo code work — `google-drive`, `claude-code-guide`
-and the rest are none of this hook's business.
+and the rest are none of this hook's business. `CHARLES_SUBAGENTS_OK=1` turns this
+gate off (the edit gate stays on).
 
 **Unclosed runs** — a `Stop` hook warns when a run has `FAILED` items. Only
 `FAILED`: the others already resurface via `tasks-axi`, and warning twice is
