@@ -23,11 +23,13 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 # release.sh owns the checks and executes these stages in order. Record each
-# completed flow boundary with its complete output as the proof.
-"$SCRIPTS/run-state.sh" phase "$(pwd)" guard "$output" --run "$RELEASE_RUN"
-"$SCRIPTS/run-state.sh" phase "$(pwd)" green "$output" --run "$RELEASE_RUN"
-"$SCRIPTS/run-state.sh" phase "$(pwd)" version "$output" --run "$RELEASE_RUN"
-"$SCRIPTS/run-state.sh" phase "$(pwd)" ship "$output" --run "$RELEASE_RUN"
+# completed flow boundary with the output's tail as the proof: the full output
+# carries the whole selftest and overflows one argument ("Argument list too long").
+proof="$(tail -n 40 <<<"$output")"
+"$SCRIPTS/run-state.sh" phase "$(pwd)" guard "$proof" --run "$RELEASE_RUN"
+"$SCRIPTS/run-state.sh" phase "$(pwd)" green "$proof" --run "$RELEASE_RUN"
+"$SCRIPTS/run-state.sh" phase "$(pwd)" version "$proof" --run "$RELEASE_RUN"
+"$SCRIPTS/run-state.sh" phase "$(pwd)" ship "$proof" --run "$RELEASE_RUN"
 "$SCRIPTS/run-state.sh" close "$(pwd)" "released $ARGUMENTS" --run "$RELEASE_RUN"
 ```
 
@@ -40,6 +42,6 @@ and runs doctor.
 plugin root from its own location, so it always releases this plugin regardless
 of the caller's working directory.
 
-The script output is recorded as proof for the release flow's `guard`, `green`,
+The last 40 lines of the script output are recorded as proof for the release flow's `guard`, `green`,
 `version`, and `ship` phases. On failure, record the `FAILED` item above and
 leave that release run open; do not close it.
