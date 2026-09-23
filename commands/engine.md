@@ -38,11 +38,14 @@ the global preference. The echoed scope is the effective one, even after a
 global change that a project preference overrides.
 
 Precedence: `--engine` flag, `CHARLES_ENGINE`, project file, global file.
-`claude` hands explore, implement AND review off to a Claude Code subagent
-instead of running a process here: `codex-run` prints a SPAWN block (agent name
-+ prompt) and exits, and the orchestrating session spawns `claude-explorer`
-(haiku), `claude-implementer` (sonnet), or `claude-reviewer` (opus, isolated to
-a review box the same way `codex-reviewer` is). Like `grok`, a `claude`
+`claude` runs explore, implement AND review as native Claude Code subagents:
+`claude-explorer` (haiku), `claude-implementer` (sonnet), or `claude-reviewer`
+(opus, isolated to a review box the same way `codex-reviewer` is). One Agent
+call is the dispatch. Its prompt opens with header lines: `charles-dir:`, then
+`charles-plan:` (implement and review), `charles-req:` (implement) and
+`charles-base:` (review of committed work), then a blank line and the task. A hook runs
+`codex-run`'s validation and receipts behind it, and a refusal comes back as a
+denied tool call. Like `grok`, a `claude`
 preference is honoured on review too — it no longer silently pins sol.
 `--resume` is refused: no session id is recorded for a subagent. A failed
 claude dispatch has no fallback.

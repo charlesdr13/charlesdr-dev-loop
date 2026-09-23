@@ -2984,14 +2984,38 @@ charles-dir: $CL/repo
 charles-box: $cl_box
 
 check it"
+# A background spawn's PostToolUse fires at LAUNCH (isAsync): no end yet, and
+# the box must survive for the reviewer that is about to read it.
 jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "$cl_review_prompt" \
-  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p},tool_response:{isAsync:true,status:"async_launched"}}' | bash "$RECEIPT"
+if [ -f "$cl_box/.charles-review-box" ] && ! jq -se --arg r "$cl_review_run" \
+    'map(select(.run == $r and .event == "end")) | length > 0' "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  async launch writes no end event and keeps the review box"; pass=$((pass+1))
+else
+  echo "  FAIL  async launch must not write an end event or delete the review box"; fail=$((fail+1))
+fi
+# SubagentStop is real completion; the prompt comes from the first user message.
+cl_transcript="$CL/agent-transcript.jsonl"
+jq -nc '{type:"user",message:{role:"user",content:"<system-reminder>injected context</system-reminder>"}}' > "$cl_transcript"
+jq -nc '{type:"user",message:{role:"user",content:null}}' >> "$cl_transcript"
+jq -nc --arg p "$cl_review_prompt" '{type:"user",message:{role:"user",content:$p}}' >> "$cl_transcript"
+jq -nc --arg t "$cl_transcript" \
+  '{hook_event_name:"SubagentStop",agent_type:"charlesdr-dev-loop:claude-reviewer",agent_transcript_path:$t}' | bash "$RECEIPT"
 if jq -se --arg r "$cl_review_run" \
     'map(select(.run == $r and .event == "end")) | length == 1 and .[0].engine == "claude" and .[0].model == "opus" and .[0].rc == 0' \
     "$CL/repo/.charles/dispatches.jsonl" >/dev/null && [ ! -e "$cl_box" ]; then
   echo "  PASS  claude-lane-receipt.sh appends the reviewer's end event and deletes its box"; pass=$((pass+1))
 else
   echo "  FAIL  claude-lane-receipt.sh must append a matching end event and delete the box"; fail=$((fail+1))
+fi
+# a foreground call fires SubagentStop AND PostToolUse: still exactly one end.
+jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "$cl_review_prompt" \
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+if jq -se --arg r "$cl_review_run" 'map(select(.run == $r and .event == "end")) | length == 1' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  SubagentStop then PostToolUse for one call writes one end event"; pass=$((pass+1))
+else
+  echo "  FAIL  a double-fired receipt must not append a second end event"; fail=$((fail+1))
 fi
 if bash "$VR" "$CL/repo" --lane review --run "$cl_review_run" >/dev/null 2>&1; then
   echo "  PASS  verify-receipt.sh accepts the hook-written review receipt"; pass=$((pass+1))
@@ -3174,6 +3198,153 @@ if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ !
   echo "  PASS  /engine refuses invalid values without changing preferences"; pass=$((pass+1))
 else
   echo "  FAIL  /engine must validate values before writing"; fail=$((fail+1))
+fi
+
+# --- claude lane dispatch hook (R1/R2/R3): one Agent call is the dispatch -----
+DISPATCH="$(cd "$(dirname "$0")/.." && pwd)/hooks/claude-lane-dispatch.sh"
+cd_dispatch() { # cd_dispatch SUBAGENT PROMPT CWD
+  jq -nc --arg s "$1" --arg p "$2" --arg c "$3" \
+    '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p},cwd:$c}' \
+    | CHARLES_STATE_DIR="$CL/state" env "${cd_env[@]}" bash "$DISPATCH"
+}
+cd_check_silent() { # cd_check_silent NAME SUBAGENT PROMPT CWD
+  local name="$1" out; cd_env=()
+  out="$(cd_dispatch "$2" "$3" "$4" 2>/dev/null)"
+  if [ -z "$out" ]; then
+    echo "  PASS  $name"; pass=$((pass+1))
+  else
+    echo "  FAIL  $name — expected silence, got: $out"; fail=$((fail+1))
+  fi
+}
+
+# explore: the rewrite carries charles-run:, charles-dir: and the task, and
+# logs one start event (engine claude); feeding it to claude-lane-receipt.sh
+# makes verify-receipt.sh --lane explore pass (R1/R3).
+cd_env=()
+cd_explore_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "find the main entrypoint" "$CL/repo")"; cd_explore_rc=$?
+cd_explore_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_explore_out")"
+cd_explore_prompt="$(jq -r '.hookSpecificOutput.updatedInput.prompt // empty' <<<"$cd_explore_out")"
+cd_explore_run="$(sed -n 's/^charles-run: //p' <<<"$cd_explore_prompt" | head -1)"
+if [ "$cd_explore_rc" -eq 0 ] && [ "$cd_explore_decision" = allow ] \
+  && grep -qF "charles-run: $cd_explore_run" <<<"$cd_explore_prompt" \
+  && grep -qF "charles-dir: $CL/repo" <<<"$cd_explore_prompt" \
+  && grep -qF "find the main entrypoint" <<<"$cd_explore_prompt" \
+  && jq -se --arg r "$cd_explore_run" \
+    'map(select(.run == $r)) | length == 1 and .[0].event == "start" and .[0].engine == "claude" and .[0].lane == "explore"' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  dispatch hook rewrites an explore prompt and logs one start event"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook explore rewrite/start contract is wrong (rc=$cd_explore_rc)"; echo "        $cd_explore_out"; fail=$((fail+1))
+fi
+jq -nc --arg s "charlesdr-dev-loop:claude-explorer" --arg p "$cd_explore_prompt" \
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT" >/dev/null
+if bash "$VR" "$CL/repo" --lane explore --run "$cd_explore_run" >/dev/null 2>&1; then
+  echo "  PASS  the dispatch hook's rewrite satisfies verify-receipt.sh once the receipt hook fires"; pass=$((pass+1))
+else
+  echo "  FAIL  verify-receipt.sh must accept the dispatch hook's rewritten explore receipt"; fail=$((fail+1))
+fi
+
+# implement: charles-plan/charles-req carry through, resolved against the dir
+# (R1/R3). Main tree, so CHARLES_ALLOW_MAIN_TREE=1 is needed for the dispatch
+# to succeed at all — the denial-without-it case is the next assertion.
+cd_impl_prompt="charles-plan: plan.md
+charles-req: R1
+
+implement R1"
+cd_env=(CHARLES_ALLOW_MAIN_TREE=1)
+cd_impl_out="$(cd_dispatch "charlesdr-dev-loop:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_rc=$?
+cd_impl_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_impl_out")"
+cd_impl_new_prompt="$(jq -r '.hookSpecificOutput.updatedInput.prompt // empty' <<<"$cd_impl_out")"
+cd_impl_run="$(sed -n 's/^charles-run: //p' <<<"$cd_impl_new_prompt" | head -1)"
+if [ "$cd_impl_rc" -eq 0 ] && [ "$cd_impl_decision" = allow ] \
+  && grep -qF "charles-plan: $CL/repo/plan.md" <<<"$cd_impl_new_prompt" \
+  && grep -qF "charles-req: R1" <<<"$cd_impl_new_prompt" \
+  && jq -se --arg r "$cd_impl_run" \
+    'map(select(.run == $r and .event == "start")) | length == 1 and .[0].req == ["R1"]' \
+    "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  dispatch hook implement rewrite carries the resolved plan path and requirement IDs"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook implement rewrite is wrong (rc=$cd_impl_rc)"; echo "        $cd_impl_out"; fail=$((fail+1))
+fi
+
+# same prompt, no CHARLES_ALLOW_MAIN_TREE=1: codex-run refuses the main tree,
+# and the hook denies with that refusal in the reason (R1/R3).
+cd_env=()
+cd_impl_deny_out="$(cd_dispatch "charlesdr-dev-loop:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_deny_rc=$?
+cd_impl_deny_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_impl_deny_out")"
+cd_impl_deny_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_impl_deny_out")"
+if [ "$cd_impl_deny_rc" -eq 0 ] && [ "$cd_impl_deny_decision" = deny ] \
+  && grep -q "primary working tree" <<<"$cd_impl_deny_reason"; then
+  echo "  PASS  dispatch hook denies an implement dispatch on the main tree, reason names the refusal"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook must deny the main tree with codex-run's refusal (rc=$cd_impl_deny_rc)"; echo "        $cd_impl_deny_out"; fail=$((fail+1))
+fi
+
+# review: the rewrite carries charles-box:, and the box holds the marker (R1/R3).
+echo x > "$CL/repo/change.txt"
+cd_env=()
+cd_review_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-plan: tracked
+
+check it" "$CL/repo")"; cd_review_rc=$?
+cd_review_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_review_out")"
+cd_review_prompt="$(jq -r '.hookSpecificOutput.updatedInput.prompt // empty' <<<"$cd_review_out")"
+cd_review_box="$(sed -n 's/^charles-box: //p' <<<"$cd_review_prompt" | head -1)"
+if [ "$cd_review_rc" -eq 0 ] && [ "$cd_review_decision" = allow ] \
+  && [ -n "$cd_review_box" ] && [ -f "$cd_review_box/.charles-review-box" ]; then
+  echo "  PASS  dispatch hook review rewrite carries charles-box: and the box holds the marker"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook review rewrite/box contract is wrong (rc=$cd_review_rc)"; echo "        $cd_review_out"; fail=$((fail+1))
+fi
+rm -rf "$cd_review_box"
+
+# an empty diff is denied — a clean worktree, no changes since HEAD (R3).
+mkdir -p "$CL/worktree/.charles"; touch "$CL/worktree/.charles.toml"
+cd_env=()
+cd_empty_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-plan: tracked
+
+check it" "$CL/worktree")"; cd_empty_rc=$?
+cd_empty_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_empty_out")"
+cd_empty_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_empty_out")"
+if [ "$cd_empty_rc" -eq 0 ] && [ "$cd_empty_decision" = deny ] \
+  && grep -q "nothing to review" <<<"$cd_empty_reason"; then
+  echo "  PASS  dispatch hook denies a review with an empty diff"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook must deny an empty review diff (rc=$cd_empty_rc)"; echo "        $cd_empty_out"; fail=$((fail+1))
+fi
+
+# stays silent: a legacy SPAWN prompt, a non-claude agent, an un-opted-in repo (R1/R3).
+cd_check_silent "a prompt that already has charles-run: passes through silently" \
+  "charlesdr-dev-loop:claude-explorer" \
+  "charles-run: existing-run
+charles-dir: $CL/repo
+
+find the main entrypoint" "$CL/repo"
+cd_check_silent "a non-claude agent is ignored" "Explore" "find the main entrypoint" "$CL/repo"
+cd_check_silent "a repo without .charles.toml is ignored" \
+  "charlesdr-dev-loop:claude-explorer" "find the main entrypoint" "$BOX/plain"
+
+# an unknown charles-foo: header is denied, naming it (R1/R3).
+cd_env=()
+cd_unknown_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "charles-foo: bar
+
+find the main entrypoint" "$CL/repo")"
+cd_unknown_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_unknown_out")"
+cd_unknown_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_unknown_out")"
+if [ "$cd_unknown_decision" = deny ] && grep -q "charles-foo" <<<"$cd_unknown_reason"; then
+  echo "  PASS  dispatch hook denies an unknown charles-foo: header, naming it"; pass=$((pass+1))
+else
+  echo "  FAIL  dispatch hook must deny an unknown header, naming it"; echo "        $cd_unknown_out"; fail=$((fail+1))
+fi
+
+cd_hy_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "charles-dir: $CL/repo
+charles-grill-verdict: yes
+
+find the main entrypoint" "$CL/repo")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_hy_out")" = deny ] \
+  && grep -q "charles-grill-verdict" <<<"$cd_hy_out"; then
+  echo "  PASS  dispatch hook denies a hyphenated unknown header after a known one"; pass=$((pass+1))
+else
+  echo "  FAIL  a hyphenated unknown header must be denied, not passed on as task text"; echo "        $cd_hy_out"; fail=$((fail+1))
 fi
 
 # --- grok lane contracts -------------------------------------------------------

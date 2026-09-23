@@ -34,16 +34,28 @@ Route the request by its deliverable:
 | Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
 | Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
-**engine=claude:** run the `codex-run` call in the foreground, not backgrounded
-— it validates scope exactly as the codex lanes do, logs the `start` event,
-prints a SPAWN block to stdout, and exits immediately, so there is no process
-to wait on. Then spawn the SPAWN block's named agent
-(`charlesdr-dev-loop:claude-explorer`, `claude-implementer`, or
-`claude-reviewer`) with its prompt verbatim; implement subagents get the
-worktree dir named on the SPAWN's `charles-dir:` line, the same directory
-codex-run validated. A hook logs the matching `end` event once the subagent
-returns — do not write one yourself, and do not delete a reviewer's box
-yourself either.
+**engine=claude:** one Agent call is the whole dispatch, with no `codex-run` in
+Bash. Spawn `charlesdr-dev-loop:claude-explorer` (haiku),
+`claude-implementer` (sonnet) or `claude-reviewer` (opus) with header lines
+first, then a blank line, then the task:
+
+```
+charles-dir: <repo, or the worktree for implement>
+charles-plan: <spec path>        # implement and review
+charles-req: R1,R2               # implement only
+charles-base: <ref>              # review of committed work only
+```
+
+A PreToolUse hook runs `codex-run --engine claude` behind the call. It applies
+the same validation as the codex lanes (main-tree refusal, open-run `--req`,
+grill verdict, and an empty diff for review), logs `start`, builds the
+reviewer's box, and rewrites the prompt. A refusal comes back as a denied
+tool call carrying codex-run's reason; fix it and spawn again. Foreground or
+`run_in_background: true` both work. A hook logs `end` and deletes the
+reviewer's box when the subagent actually finishes (SubagentStop), not when a
+background call returns at launch. Write no receipt and delete no box yourself. A prompt that already carries
+`charles-run:` (a SPAWN block from the old two-step path) passes through
+untouched.
 
 Implement lanes never run against a main checkout by default; use a `treehouse`
 worktree. If the parallel path refuses for a machinery reason, the fallback is

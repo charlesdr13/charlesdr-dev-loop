@@ -23,6 +23,16 @@
         ]
       },
       {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/claude-lane-dispatch.sh",
+            "timeout": 60
+          }
+        ]
+      },
+      {
         "matcher": ".*",
         "hooks": [
           {
@@ -68,6 +78,17 @@
       },
       {
         "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/claude-lane-receipt.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
         "hooks": [
           {
             "type": "command",

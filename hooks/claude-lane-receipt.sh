@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-lane-receipt.sh — PostToolUse on Agent|Task.
+# claude-lane-receipt.sh — PostToolUse on Agent|Task, and SubagentStop.
 #
 # codex-run.sh's engine=claude hand-off logs a "start" event and exits before
 # any work happens (see spawn_claude_lane / run_review in codex-run.sh) — the
@@ -24,10 +24,29 @@ set -euo pipefail
 payload="$(cat)"
 command -v jq >/dev/null || exit 0
 
-tool="$(jq -r '.tool_name // empty' <<<"$payload")"
-case "$tool" in Agent|Task) ;; *) exit 0 ;; esac
+# Two ways in. PostToolUse on a foreground Agent call means the subagent
+# returned. A background call (run_in_background, or one the harness
+# backgrounds on its own) returns at LAUNCH with tool_response.isAsync, which
+# is too early: the end would be a lie and the reviewer's box would vanish
+# before it is read. Those are skipped here and caught by SubagentStop, which
+# fires on real completion and carries the prompt as the first user message
+# in agent_transcript_path. The end-event dedupe below makes firing both safe.
+if [ "$(jq -r '.hook_event_name // empty' <<<"$payload")" = "SubagentStop" ]; then
+  sub="$(jq -r '.agent_type // empty' <<<"$payload")"
+  transcript="$(jq -r '.agent_transcript_path // empty' <<<"$payload")"
+  [ -f "$transcript" ] || exit 0
+  prompt="$(jq -rs 'map(select(.type == "user") | (.message.content // "")
+        | if type == "string" then . else (map(.text? // empty) | join("\n")) end
+        | select(test("(^|\n)charles-run: ")))[0] // ""' \
+      "$transcript" 2>/dev/null)" || true
+else
+  tool="$(jq -r '.tool_name // empty' <<<"$payload")"
+  case "$tool" in Agent|Task) ;; *) exit 0 ;; esac
+  [ "$(jq -r '.tool_response.isAsync // false' <<<"$payload" 2>/dev/null)" = "true" ] && exit 0
+  sub="$(jq -r '.tool_input.subagent_type // empty' <<<"$payload")"
+  prompt="$(jq -r '.tool_input.prompt // empty' <<<"$payload")"
+fi
 
-sub="$(jq -r '.tool_input.subagent_type // empty' <<<"$payload")"
 lane="" model=""
 case "$sub" in
   *claude-explorer)    lane=explore;   model=haiku ;;
@@ -35,8 +54,6 @@ case "$sub" in
   *claude-reviewer)    lane=review;    model=opus ;;
   *) exit 0 ;;
 esac
-
-prompt="$(jq -r '.tool_input.prompt // empty' <<<"$payload")"
 
 # The reviewer's box is scratch: delete it whether or not a receipt follows.
 if [ "$lane" = "review" ]; then

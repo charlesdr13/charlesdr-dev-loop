@@ -212,12 +212,15 @@ Review effort is positional: intermediate reviews use `--effort medium`; the
 final pre-close review omits `--effort` and uses the model-aware default (sol at
 medium, luna/terra at max). This is a documented rule, not a flag.
 
-Run `/charlesdr-dev-loop:engine claude` to hand explore, implement AND review
-off to a Claude Code subagent instead of running a process here: `codex-run`
-runs its usual scope validation, logs the `start` event, prints a SPAWN block
-(the agent to spawn and the exact prompt) to stdout, and exits — the
-orchestrating session spawns `claude-explorer` (haiku), `claude-implementer`
-(sonnet), or `claude-reviewer` (opus). The reviewer is isolated to a temp
+Run `/charlesdr-dev-loop:engine claude` to run explore, implement AND review
+as native Claude Code subagents: `claude-explorer` (haiku), `claude-implementer`
+(sonnet), or `claude-reviewer` (opus). The orchestrator makes one Agent call
+whose prompt opens with `charles-dir:` (plus `charles-plan:`, `charles-req:`
+or `charles-base:` where the lane needs them). `hooks/claude-lane-dispatch.sh`
+runs `codex-run --engine claude` behind it. The validation is unchanged, and a
+refusal comes back as a denied tool call. The hook logs `start`, builds the
+review box, and rewrites the prompt. The two-step path (run `codex-run`, paste
+its SPAWN block) still works. The reviewer is isolated to a temp
 review box the same way `codex-reviewer` is, enforced by a hook that denies it
 any tool but Read/Grep/Glob and any path outside the box. A `claude`
 preference is honoured on review too, the same as `grok`. `--resume` is
