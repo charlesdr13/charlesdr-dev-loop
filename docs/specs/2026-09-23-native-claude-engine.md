@@ -103,3 +103,7 @@ Grill waived: the user fixed the direction (native subagents; haiku/sonnet/opus 
 
 Opus review round 1 (native, foreground): GAPS FOUND. Fixed: SKILL contradiction, explorer delegation guardrail, transcript parse, double-fire test, hyphenated headers, empty PROMPT, empty deny reason, relative dir, engine.md headers. Round 2 (native, background, end logged 81s after start): SATISFIES PLAN; nits fixed (null content, decoy order, no-op line).
 Green: `bash scripts/selftest.sh && bash scripts/doctor.sh` → `447 passed, 0 failed` / `19 ok, 0 failing`.
+
+## Run outcome — 2026-09-23
+
+native claude engine shipped on master
