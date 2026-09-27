@@ -164,6 +164,19 @@ bash scripts/install-skills.sh          # --copy for an independent copy
 The skill-only path gives you the two skills and `codex-run` on PATH. It does
 not give you the agents, the commands, or the hook.
 
+In [omp](https://github.com/can1357/oh-my-pi), to orchestrate from any model
+(GPT, Grok, Cursor, Claude):
+
+```bash
+omp plugin marketplace add charlesdr13/charlesdr-dev-loop
+omp plugin install charlesdr-dev-loop@charlesdr-dev-loop
+```
+
+omp loads the skills, commands and agents from the Claude manifest, and
+`hooks/pre/charles.ts` bridges the edit gate, the stop warning and the
+`codex-run` link to the same shell hooks. The Agent/Task hooks are not bridged,
+so `engine = "claude"` stays Claude Code only; the codex and grok engines work.
+
 ---
 
 ## Opting a repo in
