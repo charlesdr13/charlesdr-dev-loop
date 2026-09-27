@@ -1,5 +1,5 @@
 ---
-description: Switch the project engine (luna | terra | deepseek | claude | grok), set a global default, or show the current one
+description: Switch the project engine (luna | terra | deepseek | claude | grok | omp | omp:<provider>/<model>), set a global default, or show the current one
 ---
 
 ```bash
@@ -15,16 +15,19 @@ if [ "$GLOBAL" -eq 0 ] && [ -f "$ROOT/.charles.toml" ] \
   TARGET="$ROOT/.charles/engine"
 fi
 case "$VALUE" in
-  luna|terra|deepseek|claude|grok) mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
+  luna|terra|deepseek|claude|grok|omp) mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
+  omp:*)
+    [ -n "${VALUE#omp:}" ] || { echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|grok|omp|omp:<provider>/<model>|default; optional global prefix)" >&2; exit 2; }
+    mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
   default|clear|reset)
     rm -f "$TARGET" || exit $? ;;
   "") ;;
-  *) echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|grok|default; optional global prefix)" >&2; exit 2 ;;
+  *) echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|grok|omp|omp:<provider>/<model>|default; optional global prefix)" >&2; exit 2 ;;
 esac
 PICK="${CHARLES_ENGINE:-}"; SCOPE=environment
 if [ -z "$PICK" ]; then PICK="$(cat "$ROOT/.charles/engine" 2>/dev/null || true)"; SCOPE=project; fi
 if [ -z "$PICK" ]; then PICK="$(cat "$D/engine" 2>/dev/null || true)"; SCOPE=global; fi
-case "$PICK" in luna|terra|deepseek|claude|grok) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
+case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:*) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
 echo "engine ($SCOPE): $PICK"
 ```
 
@@ -66,3 +69,11 @@ high effort by default via the local `grok` CLI; `--effort max` means `xhigh`
 too: it is a different model family from every codex profile, which is exactly
 what the isolated review wants. `--resume` is refused: no session id is
 recorded. A failed grok dispatch has no fallback.
+
+`omp` runs all three lanes on a headless `omp` process, one model per lane by
+default: explore `xai-oauth/grok-4.7`, implement `openai-codex/gpt-5.6-luna`,
+review `openai-codex/gpt-5.6-sol`. `omp:<provider>/<model>` overrides the
+model for every lane (an unknown model exits 1 at dispatch); `omp:` with
+nothing after it is rejected. Like `grok`, an `omp` preference is honoured on
+review too, in the same isolated box every other engine gets. `--resume` is
+refused: no session id is recorded. A failed omp dispatch has no fallback.

@@ -3621,6 +3621,239 @@ else
 fi
 rm -f "$R16G/r16-change.txt"
 
+# --- omp lane contracts ---------------------------------------------------------
+OL="$BOX/omp-lane"; mkdir -p "$OL/bin" "$OL/state"
+make_unsourced_repo "$OL/repo"
+touch "$OL/repo/.charles.toml"
+cat > "$OL/bin/omp" <<'SH'
+#!/usr/bin/env bash
+jq -nc --arg cwd "$PWD" --arg stdin "$(readlink /proc/$$/fd/0)" \
+  --arg inline_ok "${CHARLES_INLINE_OK:-}" \
+  '{argv:$ARGS.positional,cwd:$cwd,stdin:$stdin,inline_ok:$inline_ok}' \
+  --args -- "$@" > "$OMP_TEST_CAPTURE"
+# no default: a fork that drops --cwd must fail the exact-listing check, not
+# silently pass because run_attempt happened to cd into the box.
+ol_cwd_arg=""; ol_prev=""
+for ol_a in "$@"; do
+  [ "$ol_prev" = "--cwd" ] && ol_cwd_arg="$ol_a"
+  ol_prev="$ol_a"
+done
+ls -A "$ol_cwd_arg" > "$OMP_TEST_LS" 2>/dev/null || true
+printf 'omp result\n'
+exit "${OMP_TEST_RC:-0}"
+SH
+cat > "$OL/bin/codex" <<'SH'
+#!/usr/bin/env bash
+jq -nc '$ARGS.positional' --args -- "$@" > "${OMP_TEST_CODEX:?}"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then printf 'codex result\n' > "$2"; break; fi
+  shift
+done
+SH
+chmod +x "$OL/bin/omp" "$OL/bin/codex"
+omp_run() {
+  PATH="$OL/bin:$PATH" CHARLES_STATE_DIR="$OL/state" CHARLES_ENGINE="${OMP_TEST_ENGINE:-}" \
+    OMP_TEST_CAPTURE="$OL/omp.json" OMP_TEST_CODEX="$OL/codex.json" OMP_TEST_LS="$OL/ls.txt" \
+    bash "$RUN_SH" --dir "$OL/repo" --timeout 10 "$@" "omp task"
+}
+
+rm -f "$OL/omp.json"
+omp_run --lane explore --engine omp >"$OL/stdout" 2>"$OL/stderr"; ol_rc=$?
+if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && jq -e --arg dir "$OL/repo" '
+    .argv[0] == "-p"
+    and (.argv[1] | contains("omp task") and contains("Git is READ-ONLY")
+      and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
+      and contains("invoke codex-run") and contains("spawn a subagent"))
+    and .argv[(.argv | index("--model")) + 1] == "xai-oauth/grok-4.7"
+    and .argv[(.argv | index("--thinking")) + 1] == "max"
+    and .argv[(.argv | index("--cwd")) + 1] == $dir
+    and (.argv | index("--no-session")) != null
+    and (.argv | index("--no-skills")) != null
+    and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
+    and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob,bash"
+    and .inline_ok == "1"
+    and .stdin == "/dev/null"' "$OL/omp.json" >/dev/null; then
+  echo "  PASS  omp explore builds --model/--thinking/--tools, yolo, and carries CHARLES_INLINE_OK=1"; pass=$((pass+1))
+else
+  echo "  FAIL  omp explore argv, posture, stdin, or env is wrong (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json"
+omp_run --lane implement --engine omp --allow-main-tree >/dev/null 2>"$OL/stderr"; ol_rc=$?
+if [ "$ol_rc" -eq 0 ] && jq -e '
+    (.argv[1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
+    and .argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.6-luna"
+    and (.argv | index("--tools")) == null
+    and .inline_ok == "1"' "$OL/omp.json" >/dev/null; then
+  echo "  PASS  omp implement defaults to gpt-5.6-luna, full tools, and carries the ladder"; pass=$((pass+1))
+else
+  echo "  FAIL  omp implement default model/tools/ladder is wrong (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+# omp:<provider>/<model> overrides the model for every lane; the '/' must
+# never leak into a .end/.child filename.
+rm -f "$OL/omp.json"
+omp_run --lane explore --engine 'omp:openai-codex/gpt-5.7-nova' >/dev/null 2>&1; ol_rc=$?
+if [ "$ol_rc" -eq 0 ] && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.7-nova"' "$OL/omp.json" >/dev/null \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "omp" and .model == "openai-codex/gpt-5.7-nova"' \
+    "$OL/repo/.charles/dispatches.jsonl" >/dev/null \
+  && [ -z "$(find "$OL/state" -maxdepth 1 -name '*openai-codex*' 2>/dev/null)" ]; then
+  echo "  PASS  omp:<model> with a '/' overrides the model without leaking into a filename"; pass=$((pass+1))
+else
+  echo "  FAIL  omp:<model> override must set the model without stray files (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json"
+omp_run --lane explore --engine omp >/dev/null 2>&1; ol_rc=$?
+ol_run="$(jq -r 'select(.event == "start") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$ol_rc" -eq 0 ] && [ "$(cat "$OL/state/$ol_run.last" 2>/dev/null)" = 'omp result' ] \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "omp" and .model == "xai-oauth/grok-4.7" and .rc == 0' \
+    "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  successful omp rc=0 publishes .last and records engine/model"; pass=$((pass+1))
+else
+  echo "  FAIL  successful omp dispatch must publish .last and record omp/xai-oauth/grok-4.7 (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+OMP_TEST_RC=7 omp_run --lane explore --engine omp >/dev/null 2>&1; ol_rc=$?
+ol_run="$(jq -r 'select(.event == "start") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$ol_rc" -eq 7 ] && [ -f "$OL/state/$ol_run.last" ] && [ ! -s "$OL/state/$ol_run.last" ] \
+  && jq -se --arg r "$ol_run" 'map(select(.event == "end" and .run == $r)) |
+    length == 1 and .[0].engine == "omp" and .[0].model == "xai-oauth/grok-4.7" and .[0].rc == 7' \
+    "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  failed omp rc leaves .last empty and records failure without fallback"; pass=$((pass+1))
+else
+  echo "  FAIL  failed omp dispatch must leave .last empty and record no fallback (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json" "$OL/codex.json"
+ol_out="$(omp_run --engine omp --lane explore --resume 2>&1)"; ol_rc=$?
+if [ "$ol_rc" -eq 2 ] && [[ "$ol_out" == *"--resume"* ]] \
+  && [ ! -e "$OL/omp.json" ] && [ ! -e "$OL/codex.json" ]; then
+  echo "  PASS  explicit omp --resume is refused before dispatch with exit 2"; pass=$((pass+1))
+else
+  echo "  FAIL  omp --resume must be refused (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+# empty "omp:" is an unknown engine, from a flag or from a preference file
+rm -f "$OL/omp.json"
+ol_out="$(omp_run --lane explore --engine 'omp:' 2>&1)"; ol_rc=$?
+if [ "$ol_rc" -eq 2 ] && [[ "$ol_out" == *"omp"* ]] && [ ! -e "$OL/omp.json" ]; then
+  echo "  PASS  empty --engine omp: is rejected before dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  empty --engine omp: must be rejected with exit 2 naming omp (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json"
+printf 'omp:\n' > "$OL/repo/.charles/engine"
+ol_out="$(omp_run --lane explore 2>&1)"; ol_rc=$?
+rm -f "$OL/repo/.charles/engine"
+if [ "$ol_rc" -eq 2 ] && [[ "$ol_out" == *"omp"* ]] && [ ! -e "$OL/omp.json" ]; then
+  echo "  PASS  an empty 'omp:' project preference is rejected before dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  an empty 'omp:' project preference must be rejected with exit 2 naming omp (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+# review runs omp, not codex, in a box holding exactly plan.md and changes.diff,
+# with the read-only --tools list (R2)
+rm -f "$OL/omp.json" "$OL/codex.json" "$OL/ls.txt"
+printf 'review change\n' > "$OL/repo/change.txt"
+ol_out="$(omp_run --engine omp --lane review --plan "$OL/repo/tracked" 2>"$OL/stderr")"; ol_rc=$?
+if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
+  && [ "$(sort "$OL/ls.txt" 2>/dev/null | paste -sd, -)" = "changes.diff,plan.md" ] \
+  && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.6-sol"
+    and .argv[(.argv | index("--thinking")) + 1] == "max"
+    and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob"
+    and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
+    and (.argv | index("--cwd")) != null
+    and (.argv | index("--no-session")) != null
+    and (.argv | index("--no-skills")) != null
+    and .argv[0] == "-p" and (.argv[1] | contains("adversarial reviewer"))
+    and .inline_ok == "1"
+    and .stdin == "/dev/null"' "$OL/omp.json" >/dev/null; then
+  echo "  PASS  --engine omp --lane review runs omp in an isolated box with read,grep,glob tools"; pass=$((pass+1))
+else
+  echo "  FAIL  omp review must run omp, not codex, in a two-file box (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+OL_RTMP="$OL/rtmp"; rm -rf "$OL_RTMP"; mkdir -p "$OL_RTMP"
+
+rm -f "$OL/omp.json"
+TMPDIR="$OL_RTMP" omp_run --engine omp --lane review --plan "$OL/repo/tracked" >/dev/null 2>&1; ol_rc=$?
+ol_run="$(jq -r 'select(.event == "start" and .lane == "review") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$ol_rc" -eq 0 ] && [ "$(cat "$OL/state/$ol_run.last" 2>/dev/null)" = 'omp result' ] \
+  && grep -q 'review change' "$OL/state/$ol_run.diff" 2>/dev/null && [ -z "$(ls -A "$OL_RTMP")" ]; then
+  echo "  PASS  successful omp review publishes .last, copies .diff, and removes the box"; pass=$((pass+1))
+else
+  echo "  FAIL  successful omp review must publish .last/.diff and remove the box (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json"
+OMP_TEST_RC=9 TMPDIR="$OL_RTMP" omp_run --engine omp --lane review --plan "$OL/repo/tracked" >/dev/null 2>&1; ol_rc=$?
+ol_run="$(jq -r 'select(.event == "start" and .lane == "review") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
+if [ "$ol_rc" -eq 9 ] && [ -f "$OL/state/$ol_run.last" ] && [ ! -s "$OL/state/$ol_run.last" ] \
+  && grep -q 'review change' "$OL/state/$ol_run.diff" 2>/dev/null && [ -z "$(ls -A "$OL_RTMP")" ]; then
+  echo "  PASS  failed omp review rc leaves .last empty, still copies .diff, and removes the box"; pass=$((pass+1))
+else
+  echo "  FAIL  failed omp review must leave .last empty and still clean up (rc=$ol_rc)"; fail=$((fail+1))
+fi
+rm -rf "$OL_RTMP"
+rm -f "$OL/repo/change.txt"
+
+# a project omp preference follows onto review too, same shape as grok's
+rm -f "$OL/omp.json" "$OL/codex.json"
+printf 'omp\n' > "$OL/repo/.charles/engine"
+printf 'precedence change\n' > "$OL/repo/precedence.txt"
+omp_run --lane review --plan "$OL/repo/tracked" >/dev/null 2>&1; ol_rc=$?
+rm -f "$OL/repo/precedence.txt"
+if [ "$ol_rc" -eq 0 ] && [ -e "$OL/omp.json" ] && [ ! -e "$OL/codex.json" ] \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "openai-codex/gpt-5.6-sol"' \
+    "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  a project omp preference runs review on omp"; pass=$((pass+1))
+else
+  echo "  FAIL  a project omp preference must run review on omp (rc=$ol_rc)"; fail=$((fail+1))
+fi
+rm -f "$OL/repo/.charles/engine"
+
+# an omp-only PATH (no codex, no grok) still runs, and other engines still
+# require their own CLI even when omp is present (R16, engine-keyed)
+ROMP="$BOX/romp-deps"; mkdir -p "$ROMP/omp-only"
+ln -s "$OL/bin/omp" "$ROMP/omp-only/omp"
+ROMP_TOOLS="bash dirname readlink cat git jq grep sed date flock timeout head tail env mktemp mkdir mv sort ls
+  awk basename kill ps rm cp setsid sleep touch tr realpath printf"
+for t in $ROMP_TOOLS; do
+  ln -s "$(command -v "$t")" "$ROMP/omp-only/$t" 2>/dev/null || true
+done
+ROMPG="$ROMP/repo-omp-only"; make_unsourced_repo "$ROMPG"
+romp_out="$(PATH="$ROMP/omp-only" CHARLES_STATE_DIR="$ROMP/state1" OMP_TEST_CAPTURE="$ROMP/o.json" \
+  bash "$RUN_SH" --lane explore --engine omp --dir "$ROMPG" --timeout 10 "t" 2>&1)"; romp_rc=$?
+if [ "$romp_rc" -eq 0 ] && [ -e "$ROMP/o.json" ]; then
+  echo "  PASS  an omp-only PATH (no codex, no grok) still runs an omp dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  an omp dispatch must not require codex or grok on PATH (rc=$romp_rc)"; fail=$((fail+1))
+fi
+
+romp_out="$(PATH="$ROMP/omp-only" CHARLES_STATE_DIR="$ROMP/state2" \
+  bash "$RUN_SH" --lane explore --engine grok --dir "$ROMPG" --timeout 10 "t" 2>&1)"; romp_rc=$?
+if [ "$romp_rc" -eq 127 ] && grep -q 'grok CLI not on PATH' <<<"$romp_out"; then
+  echo "  PASS  a grok engine still requires grok on PATH even when omp is present"; pass=$((pass+1))
+else
+  echo "  FAIL  grok must still require grok on PATH when omp is present (rc=$romp_rc)"; fail=$((fail+1))
+fi
+
+R16CX="$BOX/r16cx-deps"; mkdir -p "$R16CX/codex-only"
+ln -s "$(command -v codex 2>/dev/null || echo /bin/false)" "$R16CX/codex-only/codex" 2>/dev/null || true
+for t in $ROMP_TOOLS; do
+  ln -s "$(command -v "$t")" "$R16CX/codex-only/$t" 2>/dev/null || true
+done
+R16CXG="$R16CX/repo"; make_unsourced_repo "$R16CXG"
+r16cx_out="$(PATH="$R16CX/codex-only" CHARLES_STATE_DIR="$R16CX/state" \
+  bash "$RUN_SH" --lane explore --engine omp --dir "$R16CXG" --timeout 10 "t" 2>&1)"; r16cx_rc=$?
+if [ "$r16cx_rc" -eq 127 ] && grep -q 'omp CLI not on PATH' <<<"$r16cx_out"; then
+  echo "  PASS  an omp engine requires omp on PATH even when codex is present"; pass=$((pass+1))
+else
+  echo "  FAIL  omp must require omp on PATH (rc=$r16cx_rc)"; fail=$((fail+1))
+fi
+
 # R1: a real timeout is not rescued, but an engine that merely returns 124 is.
 R1="$BOX/r1-fallback"; mkdir -p "$R1/bin" "$R1/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\ncase "${CHARLES_R1_MODE:-}" in\n  deadline) sleep 2 ;;\n  early124) exit 124 ;;\n  failure) exit 1 ;;\nesac\n' > "$R1/bin/codex"

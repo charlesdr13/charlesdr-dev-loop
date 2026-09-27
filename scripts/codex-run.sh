@@ -24,6 +24,12 @@
 #             so max is translated to xhigh); ALSO runs review — a
 #             project/global grok preference is honoured there too, since it
 #             is a different model family from every codex profile. No fallback.
+#   omp       headless omp process, one model per lane by default (explore
+#             xai-oauth/grok-4.7, implement openai-codex/gpt-5.6-luna, review
+#             openai-codex/gpt-5.6-sol); `omp:<provider>/<model>` overrides the
+#             model for every lane. ALSO runs review — a project/global omp
+#             preference is honoured there too. No fallback; --resume is
+#             unavailable (no session id is recorded).
 # Selection: --engine > CHARLES_ENGINE > <run root>/.charles/engine > global
 # $CHARLES_STATE_DIR/engine. Linked worktrees share the primary checkout's preference.
 #
@@ -153,6 +159,7 @@ LANE=""
 ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
 ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
 ENGINE_FROM_FLAG=0   # only --engine is explicit; env/file preferences set ENGINE_SET too
+OMP_MODEL=""         # set once an "omp:<provider>/<model>" preference is split below
 EFFORT_SET=0         # review picks effort from its resolved model unless set
 PEAK_SUB=0           # 1 = deepseek was swapped to luna because DeepSeek is at peak price
 EFFORT="max"         # default reasoning effort: max | high | medium. high is markedly
@@ -226,7 +233,7 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   [ -n "$pick" ] || { pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"; pref_src="project file"; }
   [ -n "$pick" ] || { pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"; pref_src="global file"; }
   case "$pick" in
-    luna|terra|claude|grok) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude and grok review both honour this preference (R8)
+    luna|terra|claude|grok|omp|omp:*) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude, grok, and omp review all honour this preference (R8)
     deepseek)
       ENGINE=deepseek; ENGINE_SET=1
       # DeepSeek bills peak rates 01:00-04:00 and 06:00-10:00 UTC (2x in, 2x out).
@@ -239,9 +246,21 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
           echo "codex-run.sh: DeepSeek peak window — running this $LANE on luna instead" >&2 ;;
       esac ;;
     "") ;;
-    *) echo "codex-run.sh: unknown engine '$pick' from $pref_src (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;;
+    *) echo "codex-run.sh: unknown engine '$pick' from $pref_src (luna|terra|deepseek|claude|grok|omp)" >&2; exit 2 ;;
   esac
 fi
+
+# "omp:<provider>/<model>" carries its model override inside $ENGINE until
+# here, from either --engine or the pick above — split it into OMP_MODEL now,
+# once, regardless of source, so the '/' never reaches the .end/.child
+# filenames built from $ENGINE further down.
+case "$ENGINE" in
+  omp:*)
+    OMP_MODEL="${ENGINE#omp:}"
+    ENGINE=omp
+    [ -n "$OMP_MODEL" ] || { echo "codex-run.sh: unknown engine 'omp:' (luna|terra|deepseek|claude|grok|omp)" >&2; exit 2; }
+    ;;
+esac
 
 if [ "$ENGINE" = "claude" ] && [ "$RESUME" -eq 1 ]; then
   echo "codex-run.sh: --resume is unavailable for claude: no session id is recorded" >&2
@@ -251,6 +270,12 @@ fi
 # grok and claude are both allowed on review (R7); only resume is restricted for either.
 if [ "$ENGINE" = "grok" ] && [ "$RESUME" -eq 1 ]; then
   echo "codex-run.sh: --resume is unavailable for grok: no session id is recorded" >&2
+  exit 2
+fi
+
+# omp is a single non-session process too — same restriction, same reason.
+if [ "$ENGINE" = "omp" ] && [ "$RESUME" -eq 1 ]; then
+  echo "codex-run.sh: --resume is unavailable for omp: no session id is recorded" >&2
   exit 2
 fi
 
@@ -603,6 +628,15 @@ prevents data loss, security controls, accessibility basics, or anything the
 brief explicitly asked for. If the brief and this instruction conflict, the
 brief wins and you say which rung you skipped and why.'
 
+# omp's per-lane default model, unless omp:<provider>/<model> overrides it.
+omp_default_model() { # omp_default_model LANE
+  case "$1" in
+    explore)   echo "xai-oauth/grok-4.7" ;;
+    implement) echo "openai-codex/gpt-5.6-luna" ;;
+    *)         echo "openai-codex/gpt-5.6-sol" ;;
+  esac
+}
+
 # --- append dispatch events: mechanical, no model cooperation required ---------
 # This is both halves of the fix: it is the receipt an agent must echo back
 # (closing the inline-fallback hole) and the record `resolve` correlates on.
@@ -642,8 +676,13 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       terra)    model="gpt-5.6-terra" ;;
       deepseek) model="deepseek-v4-flash" ;;
       grok)     model="grok-4.6" ;;
+      omp)      model="${OMP_MODEL:-$(omp_default_model "$LANE")}" ;;
       review)   if [ "$ENGINE_SET" -eq 1 ]; then
-                  case "$ENGINE" in luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; grok) model="grok-4.6" ;; *) model="gpt-5.6-sol" ;; esac
+                  case "$ENGINE" in
+                    luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; grok) model="grok-4.6" ;;
+                    omp)  model="${OMP_MODEL:-$(omp_default_model review)}" ;;
+                    *)    model="gpt-5.6-sol" ;;
+                  esac
                 else model="gpt-5.6-sol"; fi ;;
       *)        model="$1" ;;
     esac
@@ -941,6 +980,35 @@ invoke codex-run, or spawn a subagent, even if repository instructions say to de
   return "$rc"
 }
 
+# --- engine: omp — headless omp process, one model per lane (ALSO runs review,
+# see run_review); the CHARLES_INLINE_OK=1 env is legitimate here — this
+# process IS the worker lane the plugin's own hooks are gating for.
+run_omp() {
+  local model="${OMP_MODEL:-$(omp_default_model "$LANE")}"
+  local args=(--no-session --no-skills --model "$model" --thinking "$EFFORT"
+        --cwd "$DIR" --approval-mode yolo)
+  [ "$LANE" = "explore" ] && args+=(--tools read,grep,glob,bash)
+  local extra="" rc=0
+  [ "$LANE" = "implement" ] && extra="
+
+$LADDER"
+  run_attempt omp "$model" "$DIR" "$RUN.jsonl" "$RUN.err" \
+    env CHARLES_INLINE_OK=1 timeout -k 30s "$TIMEOUT" omp -p "$TASK
+
+$GUARD$extra
+
+You ARE the worker lane. Do the work yourself. Do not dispatch another lane,
+invoke codex-run, or spawn a subagent, even if repository instructions say to delegate." "${args[@]}" < /dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+  else
+    : > "$RUN.last"
+  fi
+  echo "— omp/$model · effort=$EFFORT · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  return "$rc"
+}
+
 # --- lane: review (sol @ medium; luna/terra @ max; isolated temp dir) ---------
 run_review() {
   [ -n "$PLAN" ] || { echo "codex-run.sh: --lane review requires --plan FILE" >&2; return 2; }
@@ -1057,6 +1125,7 @@ run_review() {
         ds_env="${LG_CC_DEEPSEEK_HOME:-$HOME/.config/lg-cc-deepseek}/key.env"
         [ -f "$ds_env" ] && { set -a; . "$ds_env"; set +a; } ;;
       grok)  rmodel="grok-4.6";      rprofile=() ;;
+      omp)   rmodel="${OMP_MODEL:-$(omp_default_model review)}"; rprofile=() ;;
       *)     rmodel="gpt-5.6-sol";   rprofile=() ;;
     esac
   else
@@ -1132,6 +1201,25 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
     return "$rc"
   fi
 
+  # omp builds its own command instead of bending codex's exec argv, same as
+  # the grok fork above; CHARLES_INLINE_OK=1 is legitimate here too — this
+  # process IS the isolated reviewer the plugin's own hooks are gating for.
+  if [ "$ENGINE" = "omp" ]; then
+    local omp_args=(--no-session --no-skills --model "$rmodel" --thinking "$EFFORT"
+          --cwd "$box" --approval-mode yolo --tools read,grep,glob)
+    local rc=0
+    run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \
+      env CHARLES_INLINE_OK=1 timeout -k 30s "$TIMEOUT" omp -p "$prompt" "${omp_args[@]}" < /dev/null || rc=$?
+    if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
+    if [ "$rc" -ne 0 ]; then : > "$RUN.last"; fi
+    cp "$box/changes.diff" "$RUN.diff" 2>/dev/null || true
+    rm -rf "$box"
+    [ -s "$RUN.last" ] && cat "$RUN.last"
+    echo "" >&2
+    echo "— omp/$rmodel · effort=$EFFORT · isolated · raw: $RUN.jsonl" >&2
+    return "$rc"
+  fi
+
   local rc=0
   run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \
     timeout -k 30s "$TIMEOUT" codex "${rprofile[@]}" exec --skip-git-repo-check \
@@ -1158,7 +1246,7 @@ case "$LANE" in
   *) echo "codex-run.sh: unknown lane '$LANE' (explore|implement|review)" >&2; exit 2 ;;
 esac
 if [ "$LANE" != "review" ]; then
-  case "$ENGINE" in luna|terra|deepseek|claude|grok) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;; esac
+  case "$ENGINE" in luna|terra|deepseek|claude|grok|omp) ;; *) echo "codex-run.sh: unknown engine '$ENGINE' (luna|terra|deepseek|claude|grok|omp)" >&2; exit 2 ;; esac
 fi
 [ "$REQ_SET" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --req is only valid with --lane implement" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
@@ -1173,6 +1261,8 @@ validate_main_tree || exit $?
 if [ "$LANE" = "review" ]; then
   if [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "grok" ]; then
     command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+  elif [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "omp" ]; then
+    command -v omp >/dev/null || { echo "codex-run.sh: omp CLI not on PATH" >&2; exit 127; }
   elif [ "$ENGINE_SET" -eq 1 ] && [ "$ENGINE" = "claude" ]; then
     :
   else
@@ -1180,6 +1270,8 @@ if [ "$LANE" = "review" ]; then
   fi
 elif [ "$ENGINE" = "grok" ]; then
   command -v grok >/dev/null || { echo "codex-run.sh: grok CLI not on PATH" >&2; exit 127; }
+elif [ "$ENGINE" = "omp" ]; then
+  command -v omp >/dev/null || { echo "codex-run.sh: omp CLI not on PATH" >&2; exit 127; }
 elif [ "$ENGINE" = "claude" ]; then
   :
 else
@@ -1228,7 +1320,8 @@ dispatch() { # dispatch ENGINE
     terra)    run_gpt terra ;;
     deepseek) run_deepseek ;;
     grok)     run_grok ;;
-    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude|grok)" >&2; exit 2 ;;
+    omp)      run_omp ;;
+    *) echo "codex-run.sh: unknown engine '$1' (luna|terra|deepseek|claude|grok|omp)" >&2; exit 2 ;;
   esac
 }
 
