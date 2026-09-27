@@ -111,3 +111,7 @@ Green: `bash scripts/selftest.sh && bash scripts/doctor.sh` → `478 passed, 0 f
 - [x] **R4** — link/release/doctor — selftest: hook links this plugin's omp cache and refuses other git trees, another plugin and another marketplace; release.sh omp refresh fails on update/install/missing cache and passes on success; doctor omp WARN/FAIL matrix incl. global file (PASS)
 - [x] **R5** — docs and version — engine.md, charles-flow SKILL.md, README describe the omp engine and async/task equivalents; 2.44.0 in plugin.json and both marketplace.json fields
 - [x] **R6** — selftest coverage — 478 passed, 0 failed (up from 447 at 2.43.0)
+
+## Run outcome — 2026-09-27
+
+omp engine shipped: lanes run as headless omp on grok-4.7/gpt-5.6-luna/gpt-5.6-sol; omp-only installs link codex-run; release refreshes omp. Final review SATISFIES PLAN; 478 passed. Deferred: pre-existing selftest GIT_DIR leak (tasks-axi cdl-1790530671-24095).
