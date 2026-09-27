@@ -100,6 +100,19 @@ if [ ! -f "$TARGET" ] \
 fi
 restore_needed=0
 
+if command -v omp >/dev/null 2>&1; then
+  if ! omp plugin marketplace update charlesdr-dev-loop \
+    || ! omp plugin install charlesdr-dev-loop@charlesdr-dev-loop --force; then
+    echo "release.sh: omp plugin refresh failed" >&2
+    exit 1
+  fi
+  OMP_CACHE="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___$VERSION"
+  if [ ! -d "$OMP_CACHE" ]; then
+    echo "release.sh: omp cache directory is missing: $OMP_CACHE" >&2
+    exit 1
+  fi
+fi
+
 set +e
 bash scripts/doctor.sh
 doctor_rc=$?

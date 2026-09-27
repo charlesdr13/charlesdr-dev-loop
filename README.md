@@ -212,9 +212,9 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna; grok-4.6 with `grok`; `claude-explorer` subagent with `claude` | luna: max; grok: high; claude: haiku (fixed) | read-only |
-| implement | gpt-5.6-luna; grok-4.6 with `grok`; `claude-implementer` subagent with `claude` | luna: max; grok: high; claude: sonnet (fixed) | workspace-write |
-| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
+| explore | gpt-5.6-luna; grok-4.6 with `grok`; xai-oauth/grok-4.7 with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: max; claude: haiku (fixed) | read-only |
+| implement | gpt-5.6-luna; grok-4.6 with `grok`; openai-codex/gpt-5.6-luna with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
+| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine`; openai-codex/gpt-5.6-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
 medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
@@ -251,7 +251,18 @@ is refused: no session id is recorded. Grok failures have no fallback.
 Read-only grok lanes block `write`/`search_replace`; Bash writes remain the
 same known isolation ceiling as claude.
 
-Engine values are `luna`, `terra`, `deepseek`, `claude`, and `grok`. `/engine <value>`
+Run `/charlesdr-dev-loop:engine omp` to run all three lanes as headless `omp`
+processes, one model per lane by default: explore `xai-oauth/grok-4.7`,
+implement `openai-codex/gpt-5.6-luna`, review `openai-codex/gpt-5.6-sol`.
+`omp:<provider>/<model>` overrides the model for every lane (an unknown model
+exits 1 at dispatch); `omp:` with nothing after it is rejected. Like `grok`,
+an `omp` preference is honoured on review too, in the same isolated box.
+`--resume` is refused: no session id is recorded. Omp failures have no
+fallback. Under an omp orchestrator, `async: true` on its bash tool is the
+same thing as this repo's `run_in_background: true`, and omp's `task` tool is
+the same thing as the Agent tool.
+
+Engine values are `luna`, `terra`, `deepseek`, `claude`, `grok`, and `omp`. `/engine <value>`
 writes `<run root>/.charles/engine` in a repo with `.charles.toml`, shared by the
 primary checkout and linked worktrees; elsewhere it writes the global
 `$CHARLES_STATE_DIR/engine` (default: `~/.cache/charlesdr-dev-loop/engine`).

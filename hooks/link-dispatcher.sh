@@ -18,10 +18,17 @@ command -v git >/dev/null 2>&1 || exit 0
 git_clean=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY git)
 
 target_ok() {
-  local candidate="$1" resolved
+  local candidate="$1" resolved home_resolved
   [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
   resolved="$(readlink -f "$candidate" 2>/dev/null)" || return 1
   [ -n "$resolved" ] || return 1
+  # omp's plugin cache is a git checkout by construction (omp plugin install
+  # clones it) — but only THIS plugin's cache dirs are allowed; another
+  # plugin's checkout under the same cache root is still a git tree to refuse.
+  home_resolved="$(readlink -f "$HOME" 2>/dev/null)" || home_resolved="$HOME"
+  case "$resolved" in
+    "$home_resolved/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___"*) return 0 ;;
+  esac
   if "${git_clean[@]}" -C "$(dirname "$resolved")" rev-parse --show-toplevel >/dev/null 2>&1; then
     echo "charlesdr-dev-loop: refusing to link codex-run into a git working tree: $resolved" >&2
     return 1

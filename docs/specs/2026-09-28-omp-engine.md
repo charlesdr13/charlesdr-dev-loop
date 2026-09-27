@@ -100,3 +100,14 @@ green between them, and no `.chunks.json` is written.
 - Round 2: zero survivors. The user decided model mapping and orchestrator pinning on 2026-09-27.
 - Accepted risks: an explore lane's bash tool can still write (same ceiling as grok, codex-run.sh:917-920); the lane loads this repo's CLAUDE.md, which says to delegate, and relies on the worker-lane prompt guard plus `--no-skills` rather than a hard block; model auth failures surface only as rc=1 at dispatch time, since doctor does not probe provider login.
 - Unresolved: none
+
+## Sign-off
+
+Green: `bash scripts/selftest.sh && bash scripts/doctor.sh` → `478 passed, 0 failed` · `25 ok, 0 failing` · `GREEN`. Final isolated review (claude-reviewer, base 5849945): `SATISFIES PLAN`.
+
+- [x] **R1** — omp explore/implement lanes — selftest: "omp explore builds --model/--thinking/--tools, yolo, and carries CHARLES_INLINE_OK=1", implement default model, failed rc no fallback, --resume exit 2, omp-only PATH (all PASS)
+- [x] **R2** — omp review in isolated box — selftest: "--engine omp --lane review runs omp in an isolated box with read,grep,glob tools", box removed on rc 0 and rc 9, review effort medium for sol (PASS)
+- [x] **R3** — `omp:<provider>/<model>` grammar — selftest: flag and project-file overrides with `/` leave no stray files, empty `omp:` exits 2 (flag, file, /engine), /engine writes and reports verbatim (PASS)
+- [x] **R4** — link/release/doctor — selftest: hook links this plugin's omp cache and refuses other git trees, another plugin and another marketplace; release.sh omp refresh fails on update/install/missing cache and passes on success; doctor omp WARN/FAIL matrix incl. global file (PASS)
+- [x] **R5** — docs and version — engine.md, charles-flow SKILL.md, README describe the omp engine and async/task equivalents; 2.44.0 in plugin.json and both marketplace.json fields
+- [x] **R6** — selftest coverage — 478 passed, 0 failed (up from 447 at 2.43.0)

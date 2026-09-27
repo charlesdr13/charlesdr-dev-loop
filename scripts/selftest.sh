@@ -1807,6 +1807,84 @@ if ( cd "$BOX" && CLAUDE_PLUGIN_ROOT="" bash "$LINK" ) >/dev/null 2>&1; then
 else
   echo "  FAIL  hook errored when CLAUDE_PLUGIN_ROOT was empty"; fail=$((fail+1))
 fi
+
+# omp's plugin cache is a git checkout by construction (R4): the hook must
+# still link into it, but keep refusing every other git working tree.
+OMP_CACHE_ROOT="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___9.9.9"
+mkdir -p "$OMP_CACHE_ROOT/scripts" "$OMP_CACHE_ROOT/.claude-plugin"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_CACHE_ROOT"
+printf '{"version":"9.9.9"}\n' > "$OMP_CACHE_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho omp-cached\n' > "$OMP_CACHE_ROOT/scripts/codex-run.sh"
+chmod +x "$OMP_CACHE_ROOT/scripts/codex-run.sh"
+rm -f "$HOME/.local/bin/codex-run"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$OMP_CACHE_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-omp.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$OMP_CACHE_ROOT/scripts/codex-run.sh" ] \
+  && [ ! -s "$BOX/dispatcher-omp.err" ]; then
+  echo "  PASS  hook links a git checkout under the omp plugin cache"; pass=$((pass+1))
+else
+  echo "  FAIL  hook must allow the omp plugin cache despite being a git checkout"; fail=$((fail+1))
+fi
+
+OMP_OTHER_ROOT="$HOME/.omp/plugins/live-checkout"
+mkdir -p "$OMP_OTHER_ROOT/scripts" "$OMP_OTHER_ROOT/.claude-plugin"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_OTHER_ROOT"
+printf '{"version":"9.9.8"}\n' > "$OMP_OTHER_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho omp-other\n' > "$OMP_OTHER_ROOT/scripts/codex-run.sh"
+chmod +x "$OMP_OTHER_ROOT/scripts/codex-run.sh"
+omp_other_before="$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$OMP_OTHER_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-omp-other.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$omp_other_before" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-omp-other.err"; then
+  echo "  PASS  hook still refuses a git checkout outside the omp cache/plugins path"; pass=$((pass+1))
+else
+  echo "  FAIL  hook must still refuse a non-cache omp git checkout"; fail=$((fail+1))
+fi
+
+# another plugin's checkout under the SAME omp cache/plugins root is still a
+# git tree, not this plugin's, so it must still be refused.
+OMP_OTHERPLUGIN_ROOT="$HOME/.omp/plugins/cache/plugins/otherplugin___x"
+mkdir -p "$OMP_OTHERPLUGIN_ROOT/scripts" "$OMP_OTHERPLUGIN_ROOT/.claude-plugin"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_OTHERPLUGIN_ROOT"
+printf '{"version":"9.9.7"}\n' > "$OMP_OTHERPLUGIN_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho other-plugin\n' > "$OMP_OTHERPLUGIN_ROOT/scripts/codex-run.sh"
+chmod +x "$OMP_OTHERPLUGIN_ROOT/scripts/codex-run.sh"
+omp_otherplugin_before="$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$OMP_OTHERPLUGIN_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-omp-otherplugin.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$omp_otherplugin_before" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-omp-otherplugin.err"; then
+  echo "  PASS  hook refuses another plugin's checkout inside the omp cache/plugins root"; pass=$((pass+1))
+else
+  echo "  FAIL  hook must refuse another plugin's checkout inside the omp cache/plugins root"; fail=$((fail+1))
+fi
+# a checkout with this plugin's name but a different marketplace name is still
+# not the omp cache dir this hook trusts (`plugin___marketplace___version`),
+# so it must still be refused.
+OMP_OTHERMARKET_ROOT="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___othermarket___1.0"
+mkdir -p "$OMP_OTHERMARKET_ROOT/scripts" "$OMP_OTHERMARKET_ROOT/.claude-plugin"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_OTHERMARKET_ROOT"
+printf '{"version":"1.0"}\n' > "$OMP_OTHERMARKET_ROOT/.claude-plugin/plugin.json"
+printf '#!/usr/bin/env bash\necho other-market\n' > "$OMP_OTHERMARKET_ROOT/scripts/codex-run.sh"
+chmod +x "$OMP_OTHERMARKET_ROOT/scripts/codex-run.sh"
+omp_othermarket_before="$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)"
+(
+  cd "$BOX" && CLAUDE_PLUGIN_ROOT="$OMP_OTHERMARKET_ROOT" \
+    GIT_DIR="$BOX/not-a-git-dir" GIT_WORK_TREE="$BOX" bash "$LINK"
+) >/dev/null 2>"$BOX/dispatcher-omp-othermarket.err"
+if [ "$(readlink "$HOME/.local/bin/codex-run" 2>/dev/null)" = "$omp_othermarket_before" ] \
+  && grep -qF 'git working tree' "$BOX/dispatcher-omp-othermarket.err"; then
+  echo "  PASS  hook refuses a same-plugin, different-marketplace checkout in the omp cache"; pass=$((pass+1))
+else
+  echo "  FAIL  hook must refuse a same-plugin, different-marketplace checkout in the omp cache"; fail=$((fail+1))
+fi
 export HOME="$HOME_ORIG"
 
 # --- receipt verification -----------------------------------------------------
@@ -3137,6 +3215,149 @@ if [ "$cd_luna_rc" -ne 0 ] && grep -q '^  FAIL.*luna.config.toml — explore AND
 else
   echo "  FAIL  non-claude luna check must still FAIL (rc=$cd_luna_rc)"; fail=$((fail+1))
 fi
+
+# --- doctor: omp missing is WARN normally, FAIL when engine=omp, and softens
+# codex/luna to WARN under engine=omp the same way engine=claude does (R4) ---
+OD="$BOX/omp-doctor"; mkdir -p "$OD/bin" "$OD/repo/scripts" "$OD/repo/.claude-plugin" "$OD/home/.codex"
+cp "$DOCTOR" "$REPO_ROOT/scripts/run-common.sh" "$OD/repo/scripts/"
+printf '{"version":"fixture"}\n' > "$OD/repo/.claude-plugin/plugin.json"
+for od_tool in bash dirname readlink cat git jq grep sed date; do
+  ln -s "$(command -v "$od_tool")" "$OD/bin/$od_tool"
+done
+
+od_missing_out="$(cd "$OD/repo" && HOME="$OD/home" CHARLES_ENGINE=omp PATH="$OD/bin" bash scripts/doctor.sh 2>&1)"; od_missing_rc=$?
+if [ "$od_missing_rc" -ne 0 ] \
+  && grep -q '^  FAIL.*omp CLI not on PATH' <<<"$od_missing_out" \
+  && grep -q '^  WARN.*codex CLI not on PATH — not needed while engine=omp' <<<"$od_missing_out" \
+  && grep -q '^  WARN.*luna.config.toml — not needed while engine=omp' <<<"$od_missing_out" \
+  && ! grep -qE '^  FAIL.*(codex|luna)' <<<"$od_missing_out"; then
+  echo "  PASS  doctor fails on missing omp under engine=omp but softens codex/luna to WARN"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must fail on missing omp and soften codex/luna under engine=omp (rc=$od_missing_rc)"; fail=$((fail+1))
+fi
+
+# same engine=omp behaviour when it comes from the global engine file
+# (CHARLES_STATE_DIR/engine) rather than CHARLES_ENGINE (R4 precedence)
+mkdir -p "$OD/state"
+printf 'omp\n' > "$OD/state/engine"
+od_global_out="$(unset CHARLES_ENGINE; cd "$OD/repo" && HOME="$OD/home" CHARLES_STATE_DIR="$OD/state" PATH="$OD/bin" bash scripts/doctor.sh 2>&1)"; od_global_rc=$?
+if [ "$od_global_rc" -ne 0 ] \
+  && grep -q '^  FAIL.*omp CLI not on PATH' <<<"$od_global_out" \
+  && grep -q '^  WARN.*codex CLI not on PATH — not needed while engine=omp' <<<"$od_global_out" \
+  && grep -q '^  WARN.*luna.config.toml — not needed while engine=omp' <<<"$od_global_out" \
+  && ! grep -qE '^  FAIL.*(codex|luna)' <<<"$od_global_out"; then
+  echo "  PASS  doctor reads engine=omp from the global engine file too"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must read engine=omp from the global engine file (rc=$od_global_rc)"; fail=$((fail+1))
+fi
+
+printf '#!/usr/bin/env bash\nexit 0\n' > "$OD/bin/omp"; chmod +x "$OD/bin/omp"
+od_present_out="$(cd "$OD/repo" && HOME="$OD/home" CHARLES_ENGINE=omp PATH="$OD/bin" bash scripts/doctor.sh 2>&1)"
+if grep -q '^  OK.*omp CLI on PATH' <<<"$od_present_out"; then
+  echo "  PASS  doctor reports omp OK when it is on PATH"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must report omp OK when it is on PATH"; fail=$((fail+1))
+fi
+
+rm -f "$OD/bin/omp"
+od_default_out="$(unset CHARLES_ENGINE; cd "$OD/repo" && HOME="$OD/home" PATH="$OD/bin" bash scripts/doctor.sh 2>&1)"
+if grep -q '^  WARN.*omp CLI not on PATH' <<<"$od_default_out"; then
+  echo "  PASS  doctor warns, not fails, on missing omp under a non-omp engine"; pass=$((pass+1))
+else
+  echo "  FAIL  doctor must warn (not fail) on missing omp under a non-omp engine"; fail=$((fail+1))
+fi
+
+# --- release.sh omp refresh (R4) -----------------------------------------------
+# release.sh has no seam to unit-test the omp block in isolation, so this runs
+# the real script against a throwaway git snapshot of the current worktree
+# (a plain `git clone` would only see the last commit, missing this chunk's
+# staged scripts/release.sh) with stub claude/omp and no-op green/doctor.
+# unset in every subshell below: an inherited GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/
+# GIT_INDEX_FILE/GIT_OBJECT_DIRECTORY would point these git commands (and the
+# release.sh runs, which shell out to git) at the real repo instead of the throwaway clone.
+RS_GIT_UNSET='unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY;'
+RS_CLONE="$BOX/release-clone"; mkdir -p "$RS_CLONE"
+( eval "$RS_GIT_UNSET"; cd "$REPO_ROOT" && git ls-files -z | tar -czf - --null -T - ) | ( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && tar -xzf - )
+( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && git init -q \
+    && git config user.name tester && git config user.email tester@example.invalid \
+    && git add -A && git commit -qm snapshot ) >/dev/null 2>&1
+printf '#!/usr/bin/env bash\nexit 0\n' > "$RS_CLONE/scripts/green.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$RS_CLONE/scripts/doctor.sh"
+chmod +x "$RS_CLONE/scripts/green.sh" "$RS_CLONE/scripts/doctor.sh"
+
+RS_BIN="$BOX/release-bin"; mkdir -p "$RS_BIN"
+cat > "$RS_BIN/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = "plugin install charlesdr-dev-loop@charlesdr-dev-loop" ]; then
+  dest="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/${RS_TEST_VERSION:?}/scripts"
+  mkdir -p "$dest"
+  printf '#!/usr/bin/env bash\n' > "$dest/codex-run.sh"
+  chmod +x "$dest/codex-run.sh"
+fi
+exit 0
+SH
+cat > "$RS_BIN/omp" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "plugin marketplace update charlesdr-dev-loop")
+    [ "${RS_TEST_OMP_FAIL_MARKETPLACE:-0}" = 1 ] && exit 1 ;;
+  "plugin install charlesdr-dev-loop@charlesdr-dev-loop --force")
+    [ "${RS_TEST_OMP_FAIL_INSTALL:-0}" = 1 ] && exit 1
+    if [ "${RS_TEST_OMP_SKIP_CACHE:-0}" != 1 ]; then
+      mkdir -p "$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___${RS_TEST_VERSION:?}"
+    fi
+    ;;
+esac
+exit 0
+SH
+chmod +x "$RS_BIN/claude" "$RS_BIN/omp"
+RS_VERSION="9.5.1"
+
+RS_HOME="$BOX/release-home-mkt-fail"; mkdir -p "$RS_HOME"
+( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && git checkout -q -- .claude-plugin/
+  HOME="$RS_HOME" PATH="$RS_BIN:$PATH" RS_TEST_VERSION="$RS_VERSION" \
+    RS_TEST_OMP_FAIL_MARKETPLACE=1 bash scripts/release.sh "$RS_VERSION"
+) >"$BOX/release-mkt-fail.out" 2>&1; rs_mkt_rc=$?
+if [ "$rs_mkt_rc" -ne 0 ] && grep -qF 'omp plugin refresh failed' "$BOX/release-mkt-fail.out"; then
+  echo "  PASS  release.sh fails when omp plugin marketplace update fails"; pass=$((pass+1))
+else
+  echo "  FAIL  release.sh must fail when omp marketplace update fails (rc=$rs_mkt_rc)"; fail=$((fail+1))
+fi
+
+RS_HOME="$BOX/release-home-install-fail"; mkdir -p "$RS_HOME"
+( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && git checkout -q -- .claude-plugin/
+  HOME="$RS_HOME" PATH="$RS_BIN:$PATH" RS_TEST_VERSION="$RS_VERSION" \
+    RS_TEST_OMP_FAIL_INSTALL=1 bash scripts/release.sh "$RS_VERSION"
+) >"$BOX/release-install-fail.out" 2>&1; rs_install_rc=$?
+if [ "$rs_install_rc" -ne 0 ] && grep -qF 'omp plugin refresh failed' "$BOX/release-install-fail.out"; then
+  echo "  PASS  release.sh fails when omp plugin install --force fails"; pass=$((pass+1))
+else
+  echo "  FAIL  release.sh must fail when omp plugin install fails (rc=$rs_install_rc)"; fail=$((fail+1))
+fi
+
+RS_HOME="$BOX/release-home-cache-missing"; mkdir -p "$RS_HOME"
+( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && git checkout -q -- .claude-plugin/
+  HOME="$RS_HOME" PATH="$RS_BIN:$PATH" RS_TEST_VERSION="$RS_VERSION" \
+    RS_TEST_OMP_SKIP_CACHE=1 bash scripts/release.sh "$RS_VERSION"
+) >"$BOX/release-cache-missing.out" 2>&1; rs_cache_rc=$?
+if [ "$rs_cache_rc" -ne 0 ] && grep -qF 'omp cache directory is missing' "$BOX/release-cache-missing.out"; then
+  echo "  PASS  release.sh fails when the versioned omp cache dir is missing"; pass=$((pass+1))
+else
+  echo "  FAIL  release.sh must fail when the omp cache dir is missing (rc=$rs_cache_rc)"; fail=$((fail+1))
+fi
+
+RS_HOME="$BOX/release-home-ok"; mkdir -p "$RS_HOME"
+( eval "$RS_GIT_UNSET"; cd "$RS_CLONE" && git checkout -q -- .claude-plugin/
+  HOME="$RS_HOME" PATH="$RS_BIN:$PATH" RS_TEST_VERSION="$RS_VERSION" \
+    bash scripts/release.sh "$RS_VERSION"
+) >"$BOX/release-ok.out" 2>&1; rs_ok_rc=$?
+if [ "$rs_ok_rc" -eq 0 ] \
+  && [ -d "$RS_HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___$RS_VERSION" ]; then
+  echo "  PASS  release.sh succeeds and refreshes omp when the stub creates the cache dir"; pass=$((pass+1))
+else
+  echo "  FAIL  release.sh must succeed when omp refresh creates the cache dir (rc=$rs_ok_rc)"; fail=$((fail+1))
+fi
+
 # Execute the documented /engine command so its scope rules stay reviewable.
 ln -s "$RUN_SH" "$CL/bin/codex-run"
 awk '/^```bash$/ { block=1; next } block && /^```$/ { exit } block { print }' \
@@ -3198,6 +3419,26 @@ if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = claude ] && [ !
   echo "  PASS  /engine refuses invalid values without changing preferences"; pass=$((pass+1))
 else
   echo "  FAIL  /engine must validate values before writing"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL/repo" omp)"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = omp ] \
+  && [ "$cl_out" = 'engine (project): omp' ]; then
+  echo "  PASS  /engine accepts omp"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine must accept omp (rc=$cl_rc out=$cl_out)"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL/repo" 'omp:openai-codex/gpt-5.6-luna')"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-5.6-luna' ] \
+  && [ "$cl_out" = 'engine (project): omp:openai-codex/gpt-5.6-luna' ]; then
+  echo "  PASS  /engine writes and reports omp:<provider>/<model> verbatim"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine must write and report omp:<provider>/<model> verbatim (rc=$cl_rc out=$cl_out)"; fail=$((fail+1))
+fi
+cl_out="$(engine_command "$CL/repo" 'omp:' 2>&1)"; cl_rc=$?
+if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-5.6-luna' ]; then
+  echo "  PASS  /engine refuses an empty omp: without changing the preference"; pass=$((pass+1))
+else
+  echo "  FAIL  /engine must refuse an empty omp: (rc=$cl_rc)"; fail=$((fail+1))
 fi
 
 # --- claude lane dispatch hook (R1/R2/R3): one Agent call is the dispatch -----
@@ -3761,7 +4002,7 @@ ol_out="$(omp_run --engine omp --lane review --plan "$OL/repo/tracked" 2>"$OL/st
 if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
   && [ "$(sort "$OL/ls.txt" 2>/dev/null | paste -sd, -)" = "changes.diff,plan.md" ] \
   && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.6-sol"
-    and .argv[(.argv | index("--thinking")) + 1] == "max"
+    and .argv[(.argv | index("--thinking")) + 1] == "medium"
     and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob"
     and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
     and (.argv | index("--cwd")) != null
@@ -3770,9 +4011,9 @@ if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
     and .argv[0] == "-p" and (.argv[1] | contains("adversarial reviewer"))
     and .inline_ok == "1"
     and .stdin == "/dev/null"' "$OL/omp.json" >/dev/null; then
-  echo "  PASS  --engine omp --lane review runs omp in an isolated box with read,grep,glob tools"; pass=$((pass+1))
+  echo "  PASS  --engine omp --lane review runs omp in an isolated box with read,grep,glob tools, defaulting sol to medium effort"; pass=$((pass+1))
 else
-  echo "  FAIL  omp review must run omp, not codex, in a two-file box (rc=$ol_rc)"; fail=$((fail+1))
+  echo "  FAIL  omp review must run omp, not codex, in a two-file box and default sol to medium effort (rc=$ol_rc)"; fail=$((fail+1))
 fi
 
 OL_RTMP="$OL/rtmp"; rm -rf "$OL_RTMP"; mkdir -p "$OL_RTMP"
@@ -3811,6 +4052,24 @@ if [ "$ol_rc" -eq 0 ] && [ -e "$OL/omp.json" ] && [ ! -e "$OL/codex.json" ] \
   echo "  PASS  a project omp preference runs review on omp"; pass=$((pass+1))
 else
   echo "  FAIL  a project omp preference must run review on omp (rc=$ol_rc)"; fail=$((fail+1))
+fi
+rm -f "$OL/repo/.charles/engine"
+
+# a project 'omp:<provider>/<model>' preference (not the --engine flag) also
+# governs review, and the '/' still never leaks into a filename (R3/R6)
+rm -f "$OL/omp.json" "$OL/codex.json"
+printf 'omp:openai-codex/gpt-5.7-nova\n' > "$OL/repo/.charles/engine"
+printf 'slash preference change\n' > "$OL/repo/slash-precedence.txt"
+omp_run --lane review --plan "$OL/repo/tracked" >/dev/null 2>&1; ol_rc=$?
+rm -f "$OL/repo/slash-precedence.txt"
+if [ "$ol_rc" -eq 0 ] && [ -e "$OL/omp.json" ] && [ ! -e "$OL/codex.json" ] \
+  && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.7-nova"' "$OL/omp.json" >/dev/null \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "openai-codex/gpt-5.7-nova"' \
+    "$OL/repo/.charles/dispatches.jsonl" >/dev/null \
+  && [ -z "$(find "$OL/state" -maxdepth 1 -name '*openai-codex*' 2>/dev/null)" ]; then
+  echo "  PASS  a project 'omp:<model>' preference with a '/' runs review on that model without stray files"; pass=$((pass+1))
+else
+  echo "  FAIL  a project 'omp:<model>' preference must run review on that model without stray files (rc=$ol_rc)"; fail=$((fail+1))
 fi
 rm -f "$OL/repo/.charles/engine"
 

@@ -1141,9 +1141,11 @@ run_review() {
       return "$effort_rc"
     }
   elif [ "$EFFORT_SET" -eq 0 ]; then
+    # match on suffix: omp's rmodel carries a "provider/" prefix (e.g.
+    # openai-codex/gpt-5.6-sol) that the bare codex model name never has.
     case "$rmodel" in
-      gpt-5.6-sol)        EFFORT=medium ;;
-      gpt-5.6-luna|gpt-5.6-terra) EFFORT=max ;;
+      *gpt-5.6-sol)        EFFORT=medium ;;
+      *gpt-5.6-luna|*gpt-5.6-terra) EFFORT=max ;;
     esac
   fi
 

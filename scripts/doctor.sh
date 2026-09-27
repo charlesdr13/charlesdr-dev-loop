@@ -18,11 +18,11 @@ engine="${CHARLES_ENGINE:-}"
 # engine=claude hands explore/implement/review off to a plugin subagent instead
 # of running codex/luna, so their absence is not fatal here — only the three
 # agent files matter, checked below.
-if [ "$engine" = "claude" ]; then
-  have codex && say OK "codex CLI on PATH ($(command -v codex))" || say WARN "codex CLI not on PATH — not needed while engine=claude"
-else
-  have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead"
-fi
+case "$engine" in
+  claude) have codex && say OK "codex CLI on PATH ($(command -v codex))" || say WARN "codex CLI not on PATH — not needed while engine=claude" ;;
+  omp|omp:*) have codex && say OK "codex CLI on PATH ($(command -v codex))" || say WARN "codex CLI not on PATH — not needed while engine=omp" ;;
+  *) have codex && say OK "codex CLI on PATH ($(command -v codex))" || say FAIL "codex CLI not on PATH — all three lanes are dead" ;;
+esac
 if [ "$engine" = "claude" ]; then
   for a in claude-explorer claude-implementer claude-reviewer; do
     [ -f "$REPO_ROOT/agents/$a.md" ] && say OK "agents/$a.md present" || say FAIL "missing agents/$a.md — claude engine lane dead"
@@ -31,12 +31,19 @@ fi
 if [ "$engine" = "grok" ]; then
   have grok && say OK "grok CLI on PATH ($(command -v grok))" || say FAIL "grok CLI not on PATH — explore, implement AND review dead (grok preference governs review too)"
 fi
+case "$engine" in
+  omp|omp:*) have omp && say OK "omp CLI on PATH ($(command -v omp))" || say FAIL "omp CLI not on PATH — explore, implement AND review dead (omp preference governs review too)" ;;
+  *) have omp && say OK "omp CLI on PATH ($(command -v omp))" || say WARN "omp CLI not on PATH — no omp engine available" ;;
+esac
 if [ -f "$HOME/.codex/luna.config.toml" ]; then
   say OK "luna profile (PRIMARY engine)"
 elif [ "$engine" = "claude" ]; then
   say WARN "missing ~/.codex/luna.config.toml — not needed while engine=claude"
 else
-  say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead"
+  case "$engine" in
+    omp|omp:*) say WARN "missing ~/.codex/luna.config.toml — not needed while engine=omp" ;;
+    *) say FAIL "missing ~/.codex/luna.config.toml — explore AND implement dead" ;;
+  esac
 fi
 [ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"

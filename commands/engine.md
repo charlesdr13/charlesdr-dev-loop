@@ -16,8 +16,7 @@ if [ "$GLOBAL" -eq 0 ] && [ -f "$ROOT/.charles.toml" ] \
 fi
 case "$VALUE" in
   luna|terra|deepseek|claude|grok|omp) mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
-  omp:*)
-    [ -n "${VALUE#omp:}" ] || { echo "unknown engine '$ARGUMENTS' (luna|terra|deepseek|claude|grok|omp|omp:<provider>/<model>|default; optional global prefix)" >&2; exit 2; }
+  omp:?*)
     mkdir -p "$(dirname "$TARGET")" && printf '%s\n' "$VALUE" > "$TARGET" || exit $? ;;
   default|clear|reset)
     rm -f "$TARGET" || exit $? ;;
@@ -27,7 +26,7 @@ esac
 PICK="${CHARLES_ENGINE:-}"; SCOPE=environment
 if [ -z "$PICK" ]; then PICK="$(cat "$ROOT/.charles/engine" 2>/dev/null || true)"; SCOPE=project; fi
 if [ -z "$PICK" ]; then PICK="$(cat "$D/engine" 2>/dev/null || true)"; SCOPE=global; fi
-case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:*) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
+case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
 echo "engine ($SCOPE): $PICK"
 ```
 
@@ -77,3 +76,5 @@ model for every lane (an unknown model exits 1 at dispatch); `omp:` with
 nothing after it is rejected. Like `grok`, an `omp` preference is honoured on
 review too, in the same isolated box every other engine gets. `--resume` is
 refused: no session id is recorded. A failed omp dispatch has no fallback.
+Under an omp orchestrator, its bash tool's `async: true` is this repo's
+`run_in_background: true`, and its `task` tool is the Agent tool.

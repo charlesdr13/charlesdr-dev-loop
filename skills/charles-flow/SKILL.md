@@ -57,6 +57,14 @@ background call returns at launch. Write no receipt and delete no box yourself. 
 `charles-run:` (a SPAWN block from the old two-step path) passes through
 untouched.
 
+**engine=omp:** all three lanes run as headless `omp` processes, one model per
+lane by default: explore `xai-oauth/grok-4.7`, implement
+`openai-codex/gpt-5.6-luna`, review `openai-codex/gpt-5.6-sol` (medium
+effort; `--effort` overrides). `omp:<provider>/<model>` overrides the model
+for every lane. `--resume` is refused, and a failed omp dispatch has no
+fallback. Under an omp orchestrator, its bash tool's `async: true` is this
+repo's `run_in_background: true`, and its `task` tool is the Agent tool.
+
 Implement lanes never run against a main checkout by default; use a `treehouse`
 worktree. If the parallel path refuses for a machinery reason, the fallback is
 a hand-made worktree. An operator may deliberately waive the rule with
