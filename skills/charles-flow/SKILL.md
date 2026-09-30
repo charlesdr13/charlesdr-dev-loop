@@ -12,6 +12,18 @@ implementation go out to Codex lanes; grading goes to an isolated reviewer.
 there isn't one, say so and offer `/charlesdr-dev-loop:init` — do not silently apply
 the flow, and do not silently skip it either.
 
+**Running in omp? Dispatch every lane with the `task` tool.** If your tools
+include `task` and not `Agent`, you are an omp orchestrator. In that case, this rule
+overrides every "Bash tool call running `codex-run --lane …`" instruction in this
+skill and in the `/charlesdr-dev-loop:*` commands. An explore, implement or review
+lane is one `task` item. Use `agent: "claude-explorer"`, `"claude-implementer"` or
+`"claude-reviewer"`, and open `task` with the `charles-*:` header lines described
+under **Orchestrating from omp** below. Put a fan-out in one `tasks[]` batch, then
+take the results as they arrive, or call `wait`. Never run `codex-run --lane` in
+bash from omp, and never `nohup` or poll a lane. The `task` path is what gives each
+lane its own model and its receipts. `codex-run` stays the tool for everything that
+is not a lane: `run-state.sh`, `verify-receipt.sh`, `green.sh` and the other scripts.
+
 ## Select by work-kind
 
 Route the request by its deliverable:
