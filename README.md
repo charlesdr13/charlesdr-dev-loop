@@ -175,6 +175,33 @@ omp plugin marketplace add charlesdr13/charlesdr-dev-loop
 omp plugin install charlesdr-dev-loop@charlesdr-dev-loop
 ```
 
+Recommended `~/.omp/agent/config.yml`. It routes each lane agent through a model
+role, so a provider outage fails over instead of killing the run:
+
+```yaml
+modelRoles:
+  default: cursor/claude-opus-5-5:medium      # the orchestrator
+  explore: cursor/composer-2.5-fast
+  implement: cursor/composer-2.5
+  review: openai-codex/gpt-5.6-sol:medium
+task:
+  agentModelOverrides:
+    claude-explorer: "@explore"
+    claude-implementer: "@implement"
+    claude-reviewer: "@review"
+retry:
+  fallbackChains:
+    default: [anthropic/claude-opus-5-5:medium]
+    explore: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
+    implement: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
+    review: [openai-codex/gpt-5.6-terra]
+```
+
+A lane agent's frontmatter `model:` does not apply under omp. The overrides above
+win over the bridge's built-in defaults. `rules/omp-lane-dispatch.md` is a
+triggered rule: if the orchestrator starts typing `codex-run … --lane` into bash,
+omp interrupts it and injects the task-tool rule.
+
 omp loads the skills, commands and agents from the Claude manifest, and
 `hooks/pre/charles.ts` bridges the edit gate, the stop warning, the
 `codex-run` link and the Agent/Task hooks to the same shell hooks. Under omp,
