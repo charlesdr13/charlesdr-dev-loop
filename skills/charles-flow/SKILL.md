@@ -58,12 +58,22 @@ background call returns at launch. Write no receipt and delete no box yourself. 
 untouched.
 
 **engine=omp:** all three lanes run as headless `omp` processes, one model per
-lane by default: explore `xai-oauth/grok-4.7`, implement
-`openai-codex/gpt-5.6-luna`, review `openai-codex/gpt-5.6-sol` (medium
+lane by default: explore `cursor/composer-2.5-fast`, implement
+`cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol` (medium
 effort; `--effort` overrides). `omp:<provider>/<model>` overrides the model
 for every lane. `--resume` is refused, and a failed omp dispatch has no
-fallback. Under an omp orchestrator, its bash tool's `async: true` is this
-repo's `run_in_background: true`, and its `task` tool is the Agent tool.
+fallback. The explore lane defaults to high effort. Under an omp orchestrator,
+its bash tool's `async: true` is this repo's `run_in_background: true`, and
+its `task` tool is the Agent tool.
+
+**Orchestrating from omp:** spawn the lane agents with the `task` tool, same
+headers as above: `agent: "claude-explorer"` (or `claude-implementer`,
+`claude-reviewer`) and the `charles-*:` lines opening `task`. Several lanes go
+in one `tasks[]` batch. The bridge dispatches each item, runs explore on
+`cursor/composer-2.5-fast`, implement on `cursor/composer-2.5`, review on
+`openai-codex/gpt-5.6-sol`, confines the reviewer, and logs both receipts. Do not
+use `scout`, `task`, `sonic`, `designer` or `reviewer` for repo code work; the
+gate refuses them headless.
 
 Implement lanes never run against a main checkout by default; use a `treehouse`
 worktree. If the parallel path refuses for a machinery reason, the fallback is

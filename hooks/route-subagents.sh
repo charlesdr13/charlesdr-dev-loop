@@ -64,15 +64,23 @@ case "$sub" in
   *codex-reviewer|*claude-explorer|*claude-implementer|*claude-reviewer) exit 0 ;;
 esac
 
-# Agents that do repo code work, and therefore belong on a lane.
+# Agents that do repo code work, and therefore belong on a lane. The lowercase
+# task|scout|sonic|designer|reviewer are omp's bundled agents, reached through
+# hooks/pre/charles.ts; omp's lane is the same agent names spawned by task.
 case "$sub" in
   Explore|general-purpose|Plan|claude|feature-dev:*|python-pro|node-specialist|\
   sql-pro|api-designer|cli-developer|test-automator|docker-expert|mcp-developer|\
-  security-auditor|dashboard-modernizer) ;;
+  security-auditor|dashboard-modernizer|task|scout|sonic|designer|reviewer) ;;
   *) exit 0 ;;
 esac
 
 case "$sub" in
+  scout)
+    alt='agent "claude-explorer" (task tool, prompt opening with charles-dir: <repo>)' ;;
+  task|sonic|designer)
+    alt='agent "claude-implementer" (task tool, prompt opening with charles-dir:, charles-plan:, charles-req:)' ;;
+  reviewer)
+    alt='agent "claude-reviewer" (task tool, prompt opening with charles-dir: and charles-plan:)' ;;
   Explore|Plan|general-purpose|claude|feature-dev:code-explorer)
     alt='codex-run --lane explore --dir <repo> --timeout 2700 "<task>" (Bash with run_in_background: true)' ;;
   feature-dev:code-reviewer)

@@ -25,7 +25,7 @@
 #             project/global grok preference is honoured there too, since it
 #             is a different model family from every codex profile. No fallback.
 #   omp       headless omp process, one model per lane by default (explore
-#             xai-oauth/grok-4.7, implement openai-codex/gpt-5.6-luna, review
+#             cursor/composer-2.5-fast, implement cursor/composer-2.5, review
 #             openai-codex/gpt-5.6-sol); `omp:<provider>/<model>` overrides the
 #             model for every lane. ALSO runs review — a project/global omp
 #             preference is honoured there too. No fallback; --resume is
@@ -631,8 +631,8 @@ brief wins and you say which rung you skipped and why.'
 # omp's per-lane default model, unless omp:<provider>/<model> overrides it.
 omp_default_model() { # omp_default_model LANE
   case "$1" in
-    explore)   echo "xai-oauth/grok-4.7" ;;
-    implement) echo "openai-codex/gpt-5.6-luna" ;;
+    explore)   echo "cursor/composer-2.5-fast" ;;
+    implement) echo "cursor/composer-2.5" ;;
     *)         echo "openai-codex/gpt-5.6-sol" ;;
   esac
 }
@@ -985,9 +985,11 @@ invoke codex-run, or spawn a subagent, even if repository instructions say to de
 # process IS the worker lane the plugin's own hooks are gating for.
 run_omp() {
   local model="${OMP_MODEL:-$(omp_default_model "$LANE")}"
-  local args=(--no-session --no-skills --model "$model" --thinking "$EFFORT"
+  # Explore answers one question; max effort buys little there and costs minutes.
+  [ "$LANE" = "explore" ] && [ "$EFFORT_SET" -eq 0 ] && EFFORT=high
+  local args=(--no-session --no-skills --no-title --model "$model" --thinking "$EFFORT"
         --cwd "$DIR" --approval-mode yolo)
-  [ "$LANE" = "explore" ] && args+=(--tools read,grep,glob,bash)
+  [ "$LANE" = "explore" ] && args+=(--no-lsp --tools read,grep,glob,bash)
   local extra="" rc=0
   [ "$LANE" = "implement" ] && extra="
 
@@ -1207,7 +1209,7 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   # the grok fork above; CHARLES_INLINE_OK=1 is legitimate here too — this
   # process IS the isolated reviewer the plugin's own hooks are gating for.
   if [ "$ENGINE" = "omp" ]; then
-    local omp_args=(--no-session --no-skills --model "$rmodel" --thinking "$EFFORT"
+    local omp_args=(--no-session --no-skills --no-title --no-lsp --model "$rmodel" --thinking "$EFFORT"
           --cwd "$box" --approval-mode yolo --tools read,grep,glob)
     local rc=0
     run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \

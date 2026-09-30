@@ -70,11 +70,13 @@ what the isolated review wants. `--resume` is refused: no session id is
 recorded. A failed grok dispatch has no fallback.
 
 `omp` runs all three lanes on a headless `omp` process, one model per lane by
-default: explore `xai-oauth/grok-4.7`, implement `openai-codex/gpt-5.6-luna`,
+default: explore `cursor/composer-2.5-fast`, implement `cursor/composer-2.5`,
 review `openai-codex/gpt-5.6-sol`. `omp:<provider>/<model>` overrides the
 model for every lane (an unknown model exits 1 at dispatch); `omp:` with
 nothing after it is rejected. Like `grok`, an `omp` preference is honoured on
 review too, in the same isolated box every other engine gets. `--resume` is
 refused: no session id is recorded. A failed omp dispatch has no fallback.
 Under an omp orchestrator, its bash tool's `async: true` is this repo's
-`run_in_background: true`, and its `task` tool is the Agent tool.
+`run_in_background: true`, and its `task` tool is the Agent tool: spawning the
+`claude-<lane>` agents with it dispatches them on their omp lane models
+whatever the engine preference says.

@@ -54,6 +54,9 @@ case "$sub" in
   *claude-reviewer)    lane=review;    model=opus ;;
   *) exit 0 ;;
 esac
+# omp's bridge (hooks/pre/charles.ts) runs these agents on other providers and
+# names the model that actually ran.
+model="${CHARLES_LANE_MODEL:-$model}"
 
 # The reviewer's box is scratch: delete it whether or not a receipt follows.
 if [ "$lane" = "review" ]; then

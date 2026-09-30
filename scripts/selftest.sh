@@ -3905,11 +3905,13 @@ if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && jq -e --arg dir "$OL/repo"
     and (.argv[1] | contains("omp task") and contains("Git is READ-ONLY")
       and contains("You ARE the worker lane") and contains("Do not dispatch another lane")
       and contains("invoke codex-run") and contains("spawn a subagent"))
-    and .argv[(.argv | index("--model")) + 1] == "xai-oauth/grok-4.7"
-    and .argv[(.argv | index("--thinking")) + 1] == "max"
+    and .argv[(.argv | index("--model")) + 1] == "cursor/composer-2.5-fast"
+    and .argv[(.argv | index("--thinking")) + 1] == "high"
     and .argv[(.argv | index("--cwd")) + 1] == $dir
     and (.argv | index("--no-session")) != null
     and (.argv | index("--no-skills")) != null
+    and (.argv | index("--no-title")) != null
+    and (.argv | index("--no-lsp")) != null
     and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
     and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob,bash"
     and .inline_ok == "1"
@@ -3920,13 +3922,23 @@ else
 fi
 
 rm -f "$OL/omp.json"
+omp_run --lane explore --engine omp --effort max >/dev/null 2>&1; ol_rc=$?
+if [ "$ol_rc" -eq 0 ] && jq -e '.argv[(.argv | index("--thinking")) + 1] == "max"' "$OL/omp.json" >/dev/null; then
+  echo "  PASS  omp explore defaults to high effort but an explicit --effort max still reaches omp"; pass=$((pass+1))
+else
+  echo "  FAIL  omp explore --effort max must pass through (rc=$ol_rc)"; fail=$((fail+1))
+fi
+
+rm -f "$OL/omp.json"
 omp_run --lane implement --engine omp --allow-main-tree >/dev/null 2>"$OL/stderr"; ol_rc=$?
 if [ "$ol_rc" -eq 0 ] && jq -e '
     (.argv[1] | contains("Does this need to exist at all") and contains("Do NOT simplify away"))
-    and .argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.6-luna"
+    and .argv[(.argv | index("--model")) + 1] == "cursor/composer-2.5"
+    and .argv[(.argv | index("--thinking")) + 1] == "max"
     and (.argv | index("--tools")) == null
+    and (.argv | index("--no-lsp")) == null
     and .inline_ok == "1"' "$OL/omp.json" >/dev/null; then
-  echo "  PASS  omp implement defaults to gpt-5.6-luna, full tools, and carries the ladder"; pass=$((pass+1))
+  echo "  PASS  omp implement defaults to cursor/composer-2.5, full tools, and carries the ladder"; pass=$((pass+1))
 else
   echo "  FAIL  omp implement default model/tools/ladder is wrong (rc=$ol_rc)"; fail=$((fail+1))
 fi
@@ -3948,18 +3960,18 @@ rm -f "$OL/omp.json"
 omp_run --lane explore --engine omp >/dev/null 2>&1; ol_rc=$?
 ol_run="$(jq -r 'select(.event == "start") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
 if [ "$ol_rc" -eq 0 ] && [ "$(cat "$OL/state/$ol_run.last" 2>/dev/null)" = 'omp result' ] \
-  && jq -se 'map(select(.event == "end")) | last | .engine == "omp" and .model == "xai-oauth/grok-4.7" and .rc == 0' \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "omp" and .model == "cursor/composer-2.5-fast" and .rc == 0' \
     "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
   echo "  PASS  successful omp rc=0 publishes .last and records engine/model"; pass=$((pass+1))
 else
-  echo "  FAIL  successful omp dispatch must publish .last and record omp/xai-oauth/grok-4.7 (rc=$ol_rc)"; fail=$((fail+1))
+  echo "  FAIL  successful omp dispatch must publish .last and record omp/cursor/composer-2.5-fast (rc=$ol_rc)"; fail=$((fail+1))
 fi
 
 OMP_TEST_RC=7 omp_run --lane explore --engine omp >/dev/null 2>&1; ol_rc=$?
 ol_run="$(jq -r 'select(.event == "start") | .run' "$OL/repo/.charles/dispatches.jsonl" | tail -1)"
 if [ "$ol_rc" -eq 7 ] && [ -f "$OL/state/$ol_run.last" ] && [ ! -s "$OL/state/$ol_run.last" ] \
   && jq -se --arg r "$ol_run" 'map(select(.event == "end" and .run == $r)) |
-    length == 1 and .[0].engine == "omp" and .[0].model == "xai-oauth/grok-4.7" and .[0].rc == 7' \
+    length == 1 and .[0].engine == "omp" and .[0].model == "cursor/composer-2.5-fast" and .[0].rc == 7' \
     "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
   echo "  PASS  failed omp rc leaves .last empty and records failure without fallback"; pass=$((pass+1))
 else
@@ -4005,6 +4017,7 @@ if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
     and .argv[(.argv | index("--thinking")) + 1] == "medium"
     and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob"
     and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
+    and (.argv | index("--no-lsp")) != null
     and (.argv | index("--cwd")) != null
     and (.argv | index("--no-session")) != null
     and (.argv | index("--no-skills")) != null
@@ -4605,6 +4618,181 @@ if grep -q 'fallback_from:luna' "$FB/state/$fb_run.last" 2>/dev/null && grep -q 
   echo "  PASS  fallback result carries the same fields"; pass=$((pass+1))
 else
   echo "  FAIL  fallback result should carry the same fields"; fail=$((fail+1))
+fi
+
+# --- omp bridge (hooks/pre/charles.ts): task tool, lane models, review box, receipts
+# Runs the real module under omp's own Bun (BUN_BE_BUN=1) against a fake pi
+# that records handlers; the shell hooks and codex-run.sh underneath are real.
+OMP_BIN="$(command -v omp 2>/dev/null || true)"
+if [ -z "$OMP_BIN" ] || ! BUN_BE_BUN=1 "$OMP_BIN" --version >/dev/null 2>&1; then
+  echo "  SKIP  omp bridge: no omp binary to run charles.ts with"
+else
+OB="$BOX/omp-bridge"; mkdir -p "$OB/state"
+make_unsourced_repo "$OB/repo"; touch "$OB/repo/.charles.toml"
+make_unsourced_repo "$OB/repo2"; touch "$OB/repo2/.charles.toml"
+mkdir -p "$OB/plain"
+OB_PLUGIN="$(cd "$(dirname "$0")/.." && pwd)/hooks/pre/charles.ts"
+cat > "$OB/harness.ts" <<TS
+import plugin, { laneModel, stripSelector, splitGlob } from "$OB_PLUGIN";
+const fns: Record<string, Function> = { laneModel, stripSelector, splitGlob };
+const handlers: Record<string, Function[]> = {};
+plugin({ on: (ev: string, fn: Function) => (handlers[ev] ??= []).push(fn), pi: {} });
+const out: unknown[] = [];
+for (const s of JSON.parse(await Bun.stdin.text())) {
+  if (s.fn) { out.push(fns[s.fn](...s.args) ?? null); continue; }
+  const ctx = { cwd: s.cwd, agent: s.agent, model: s.model,
+    ui: { confirm: async () => !!s.confirm, notify() {} } };
+  let r: unknown;
+  for (const h of handlers[s.ev] ?? []) r = (await h(s.e ?? {}, ctx)) ?? r;
+  out.push(r ?? null);
+}
+console.log(JSON.stringify(out));
+TS
+ob() { CHARLES_STATE_DIR="$OB/state" BUN_BE_BUN=1 "$OMP_BIN" "$OB/harness.ts" 2>"$OB/err"; }
+ob_check() { # ob_check NAME JQ_FILTER OUTPUT
+  if jq -e "$2" <<<"$3" >/dev/null 2>&1; then
+    echo "  PASS  $1"; pass=$((pass+1))
+  else
+    echo "  FAIL  $1 — got: $3 $(tail -3 "$OB/err" 2>/dev/null)"; fail=$((fail+1))
+  fi
+}
+
+# lane models: each claude-<lane> agent gets its own provider, namespaced or
+# not; a user's task.agentModelOverrides entry wins; other agents are untouched.
+ob_out="$(jq -nc '[
+  {fn:"laneModel",args:["claude-explorer"]},
+  {fn:"laneModel",args:["charlesdr-dev-loop:claude-implementer"]},
+  {fn:"laneModel",args:["claude-reviewer"]},
+  {fn:"laneModel",args:["claude-explorer",{"claude-explorer":"x/y"}]},
+  {fn:"laneModel",args:["scout"]}]' | ob)"
+ob_check "omp bridge routes explore/implement/review to composer-2.5-fast, composer-2.5, gpt-5.6-sol:medium; overrides and other agents untouched" \
+  '. == ["cursor/composer-2.5-fast","cursor/composer-2.5","openai-codex/gpt-5.6-sol:medium",null,null]' "$ob_out"
+ob_parity="$(for l in explore implement review; do
+  bash -c 'source <(sed -n "/^omp_default_model()/,/^}/p" "$1"); omp_default_model "$2"' _ "$RUN_SH" "$l"
+done | jq -Rsc 'split("\n") | map(select(. != ""))')"
+ob_check "omp bridge lane models match codex-run.sh omp_default_model" \
+  "[.[0:3][] | split(\":\")[0]] == $ob_parity" "$ob_out"
+ob_out="$(jq -nc '[
+  {fn:"stripSelector",args:["a.txt:10-20"]}, {fn:"stripSelector",args:["a.txt"]},
+  {fn:"splitGlob",args:["/b/x/*.md","/c"]}, {fn:"splitGlob",args:["*.md","/c"]}]' | ob)"
+ob_check "omp bridge maps read selectors and glob paths onto Claude tool shapes" \
+  '. == ["a.txt","a.txt",{path:"/b/x",pattern:"*.md"},{path:"/c",pattern:"*.md"}]' "$ob_out"
+
+ob_out="$(jq -nc --arg r "$OB/repo" --arg p "$OB/plain" '[
+  {ev:"before_subagent_spawn",cwd:$r,e:{agent:"claude-explorer"}},
+  {ev:"before_subagent_spawn",cwd:$p,e:{agent:"claude-explorer"}},
+  {ev:"before_subagent_spawn",cwd:$r,e:{agent:"scout"}}]' | ob)"
+ob_check "before_subagent_spawn sets the lane model only in an opted-in repo, only for lane agents" \
+  '.[0].model == "cursor/composer-2.5-fast" and (.[0].note | contains("explore")) and .[1] == null and .[2] == null' "$ob_out"
+
+# task tool: a batch of lane items is dispatched item by item — each brief is
+# rewritten with charles-run: and each logs one start receipt; context survives.
+ob_out="$(jq -nc --arg r "$OB/repo" '[{ev:"tool_call",cwd:$r,agent:{kind:"main",name:"main"},
+  e:{toolName:"task",input:{context:"shared ctx",tasks:[
+    {name:"A",agent:"claude-explorer",task:("charles-dir: "+$r+"\n\nfind the entrypoint")},
+    {name:"B",agent:"claude-explorer",task:("charles-dir: "+$r+"\n\nsecond question")}]}}}]' | ob)"
+ob_brief1="$(jq -r '.[0].input.tasks[0].task // empty' <<<"$ob_out")"
+ob_brief2="$(jq -r '.[0].input.tasks[1].task // empty' <<<"$ob_out")"
+ob_run1="$(sed -n 's/^charles-run: //p' <<<"$ob_brief1" | head -1)"
+ob_run2="$(sed -n 's/^charles-run: //p' <<<"$ob_brief2" | head -1)"
+if [ -n "$ob_run1" ] && [ -n "$ob_run2" ] && [ "$ob_run1" != "$ob_run2" ] \
+  && jq -e '.[0].input.context == "shared ctx" and (.[0].input.tasks[0].task | contains("find the entrypoint"))
+      and .[0].input.tasks[1].name == "B"' <<<"$ob_out" >/dev/null \
+  && jq -se --arg a "$ob_run1" --arg b "$ob_run2" \
+    '[.[] | select(.event == "start" and (.run == $a or .run == $b) and .engine == "claude" and .lane == "explore")] | length == 2' \
+    "$OB/repo/.charles/dispatches.jsonl" >/dev/null; then
+  echo "  PASS  omp task batch: every lane item is dispatched, rewritten with charles-run:, and logs a start receipt"; pass=$((pass+1))
+else
+  echo "  FAIL  omp task batch dispatch is wrong — got: $ob_out $(tail -3 "$OB/err")"; fail=$((fail+1))
+fi
+ob_out="$(jq -nc --arg r "$OB/repo" '[{ev:"tool_call",cwd:$r,agent:{kind:"main",name:"main"},
+  e:{toolName:"task",input:{agent:"claude-explorer",task:("charles-dir: "+$r+"\n\nflat question")}}}]' | ob)"
+ob_check "omp task flat shape is rewritten in place" \
+  '(.[0].input.task | test("(^|\n)charles-run: ")) and (.[0].input.task | contains("flat question")) and (.[0].input | has("tasks") | not)' "$ob_out"
+ob_out="$(jq -nc --arg r "$OB/repo" '[{ev:"tool_call",cwd:$r,agent:{kind:"main",name:"main"},
+  e:{toolName:"task",input:{context:"c",tasks:[{agent:"claude-explorer",task:("charles-dir: "+$r+"\ncharles-bogus: 1\n\nq")}]}}}]' | ob)"
+ob_check "omp task with an unknown charles- header is blocked with the dispatcher's reason" \
+  '.[0].block == true and (.[0].reason | contains("unknown header"))' "$ob_out"
+
+# subagent gate: omp's own code-work agents (and the default agent) are asked
+# about; headless answers no, so the spawn is blocked. Outside a repo: silent.
+ob_out="$(jq -nc --arg r "$OB/repo" --arg p "$OB/plain" '[
+  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"map the repo"}]}}},
+  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{task:"refactor it"}]}}},
+  {ev:"tool_call",cwd:$p,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"map"}]}}}]' | ob)"
+ob_check "omp scout/default task spawns are gated toward the lane agents; outside an opted-in repo they pass" \
+  '.[0].block == true and (.[0].reason | contains("claude-explorer")) and .[1].block == true and (.[1].reason | contains("claude-implementer")) and .[2] == null' "$ob_out"
+ob_out="$(jq -nc --arg r "$OB/repo2" '[
+  {ev:"tool_call",cwd:$r,confirm:true,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"docs lookup"}]}}},
+  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"again"}]}}}]' | ob)"
+if jq -e '. == [null,null]' <<<"$ob_out" >/dev/null && [ -f "$OB/repo2/.charles/inline-ok" ]; then
+  echo "  PASS  an approved omp subagent ask is granted and remembered for the next spawn"; pass=$((pass+1))
+else
+  echo "  FAIL  an approved omp subagent ask must grant inline-ok — got: $ob_out"; fail=$((fail+1))
+fi
+
+# edit gate: the implement lane subagent is the dispatch, so its edits pass;
+# the same write from the main agent is still asked about (and blocked headless).
+ob_big="$(seq 1 120 | sed 's/^/const x = /')"
+printf 'const x = 0\n' > "$OB/repo/big.ts"   # a new file is scaffolding and always allowed
+ob_out="$(jq -nc --arg r "$OB/repo" --arg c "$ob_big" '[
+  {ev:"tool_call",cwd:$r,agent:{kind:"sub",name:"claude-implementer",id:"I1"},e:{toolName:"write",input:{path:"big.ts",content:$c}}},
+  {ev:"tool_call",cwd:$r,agent:{kind:"main",name:"main"},e:{toolName:"write",input:{path:"big.ts",content:$c}}}]' | ob)"
+ob_check "the claude-implementer subagent writes past the edit gate; the main agent is still gated" \
+  '.[0] == null and .[1].block == true' "$ob_out"
+
+# reviewer confinement: only read/grep/glob inside a marked review box (plus
+# yield to finish); the repo, bash, write and a relative glob are all denied.
+OB_BOX="$(mktemp -d "${TMPDIR:-/tmp}/charles-review.XXXXXX")"
+: > "$OB_BOX/.charles-review-box"; printf 'plan\n' > "$OB_BOX/plan.md"; printf 'diff\n' > "$OB_BOX/changes.diff"
+ob_out="$(jq -nc --arg r "$OB/repo" --arg b "$OB_BOX" '
+  {kind:"sub",name:"claude-reviewer",id:"R1"} as $a | [
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"read",input:{path:($b+"/plan.md:1")}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"grep",input:{pattern:"x",path:$b}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"glob",input:{path:($b+"/*.diff")}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"yield",input:{data:"ok"}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"read",input:{path:"tracked"}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"glob",input:{path:"*.md"}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"glob",input:{path:($b+"/../*")}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"bash",input:{command:"ls"}}},
+  {ev:"tool_call",cwd:$r,agent:$a,e:{toolName:"write",input:{path:($b+"/x"),content:"x"}}}]' | ob)"
+ob_check "the claude-reviewer subagent may read/grep/glob only inside its review box and yield; all else is blocked" \
+  '.[0:4] == [null,null,null,null] and ([.[4:][] | .block] | all)' "$ob_out"
+
+# receipts: a section yield is not the end; the final yield writes exactly one
+# end record naming the model that ran, and verify-receipt.sh accepts it.
+jq -nc --arg r "$OB/repo" --arg p "Complete assignment thoroughly:
+
+$ob_brief2" '
+  {kind:"sub",name:"claude-explorer",id:"E2"} as $a | [
+  {ev:"before_agent_start",cwd:$r,agent:$a,e:{prompt:$p}},
+  {ev:"tool_result",cwd:$r,agent:$a,e:{toolName:"yield",details:{type:"findings"}}}]' | ob >/dev/null
+jq -nc --arg r "$OB/repo" --arg p "Complete assignment thoroughly:
+
+$ob_brief1" '
+  {kind:"sub",name:"claude-explorer",id:"E1"} as $a | {provider:"cursor",id:"composer-2.5-fast"} as $m | [
+  {ev:"before_agent_start",cwd:$r,agent:$a,model:$m,e:{prompt:$p}},
+  {ev:"tool_result",cwd:$r,agent:$a,model:$m,e:{toolName:"yield",details:{type:"findings"}}},
+  {ev:"tool_result",cwd:$r,agent:$a,model:$m,e:{toolName:"yield",details:{status:"success"}}},
+  {ev:"session_shutdown",cwd:$r,agent:$a,model:$m}]' | ob >/dev/null
+if jq -se --arg a "$ob_run1" --arg b "$ob_run2" '
+    ([.[] | select(.event == "end" and .run == $a)] | length == 1 and .[0].model == "cursor/composer-2.5-fast" and .[0].engine == "claude")
+    and ([.[] | select(.event == "end" and .run == $b)] | length == 0)' \
+    "$OB/repo/.charles/dispatches.jsonl" >/dev/null \
+  && bash "$VR" "$OB/repo" --lane explore --run "$ob_run1" >/dev/null 2>&1; then
+  echo "  PASS  an omp lane's final yield writes one end receipt with the real model; a section yield writes none"; pass=$((pass+1))
+else
+  echo "  FAIL  omp lane end receipt is wrong: $(grep -F "$ob_run1" "$OB/repo/.charles/dispatches.jsonl" 2>/dev/null)"; fail=$((fail+1))
+fi
+jq -nc --arg r "$OB/repo" --arg b "$OB_BOX" '
+  {kind:"sub",name:"claude-reviewer",id:"R2"} as $a | [
+  {ev:"before_agent_start",cwd:$r,agent:$a,e:{prompt:("charles-run: ob-review\ncharles-dir: "+$r+"\ncharles-box: "+$b+"\n\ngrade it")}},
+  {ev:"tool_result",cwd:$r,agent:$a,e:{toolName:"yield",details:{}}}]' | ob >/dev/null
+if [ ! -e "$OB_BOX" ]; then
+  echo "  PASS  the claude-reviewer subagent's final yield removes its review box"; pass=$((pass+1))
+else
+  echo "  FAIL  the review box must be removed after the reviewer's final yield"; fail=$((fail+1)); rm -rf "$OB_BOX"
+fi
 fi
 
 # --- relative paths must not hang the parent walk -----------------------------

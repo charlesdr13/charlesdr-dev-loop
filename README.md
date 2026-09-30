@@ -135,7 +135,10 @@ This wraps tools it does not ship. Before installing:
   lane; `doctor` reports this as WARN rather than FAIL. Point `DS_SCRIPT` in
   `scripts/codex-run.sh` at your own wrapper if you have one.
 - **Optional — `treehouse`** (a pre-warmed git-worktree pool for parallel agents) for
-  parallel implementers. Serial implementation works without it.
+  parallel implementers. Serial implementation works without it. Install
+  [kunchenguid/treehouse](https://github.com/kunchenguid/treehouse) (needs `get --lease`,
+  v2+): `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh`.
+  Its defaults need no `treehouse init`.
 
 Run `/charlesdr-dev-loop:doctor` after install; it tells you exactly which of
 these is missing and what each one costs you.
@@ -173,9 +176,17 @@ omp plugin install charlesdr-dev-loop@charlesdr-dev-loop
 ```
 
 omp loads the skills, commands and agents from the Claude manifest, and
-`hooks/pre/charles.ts` bridges the edit gate, the stop warning and the
-`codex-run` link to the same shell hooks. The Agent/Task hooks are not bridged,
-so `engine = "claude"` stays Claude Code only; the codex and grok engines work.
+`hooks/pre/charles.ts` bridges the edit gate, the stop warning, the
+`codex-run` link and the Agent/Task hooks to the same shell hooks. Under omp,
+spawning `claude-explorer`, `claude-implementer` or `claude-reviewer` with the
+`task` tool is the dispatch, exactly as with the Agent tool in Claude Code: the
+brief is rewritten with `charles-run:`, the start and end receipts are logged,
+and the reviewer is confined to its review box. Each lane runs on its own
+provider instead of haiku/sonnet/opus: explore `cursor/composer-2.5-fast`,
+implement `cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol:medium`.
+A `task.agentModelOverrides` entry for the agent wins. The end receipt names the
+model that actually ran. omp's own code-work agents (`task`, `scout`, `sonic`,
+`designer`, `reviewer`) hit the same subagent gate as Claude's.
 
 ---
 
@@ -212,8 +223,8 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna; grok-4.6 with `grok`; xai-oauth/grok-4.7 with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: max; claude: haiku (fixed) | read-only |
-| implement | gpt-5.6-luna; grok-4.6 with `grok`; openai-codex/gpt-5.6-luna with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
+| explore | gpt-5.6-luna; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
+| implement | gpt-5.6-luna; grok-4.6 with `grok`; cursor/composer-2.5 with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
 | review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine`; openai-codex/gpt-5.6-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
@@ -252,8 +263,8 @@ Read-only grok lanes block `write`/`search_replace`; Bash writes remain the
 same known isolation ceiling as claude.
 
 Run `/charlesdr-dev-loop:engine omp` to run all three lanes as headless `omp`
-processes, one model per lane by default: explore `xai-oauth/grok-4.7`,
-implement `openai-codex/gpt-5.6-luna`, review `openai-codex/gpt-5.6-sol`.
+processes, one model per lane by default: explore `cursor/composer-2.5-fast`,
+implement `cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol`.
 `omp:<provider>/<model>` overrides the model for every lane (an unknown model
 exits 1 at dispatch); `omp:` with nothing after it is rejected. Like `grok`,
 an `omp` preference is honoured on review too, in the same isolated box.
