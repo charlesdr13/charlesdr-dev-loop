@@ -20,7 +20,7 @@ lane is one `task` item. Use `agent: "claude-explorer"`, `"claude-implementer"` 
 `"claude-reviewer"`, and open `task` with the `charles-*:` header lines described
 under **Orchestrating from omp** below. Put a fan-out in one `tasks[]` batch, then
 take the results as they arrive, or call `wait`. Never run `codex-run --lane` in
-bash from omp, and never `nohup` or poll a lane. The `task` path is what gives each
+bash from omp, and never detach or poll a lane. The `task` path is what gives each
 lane its own model and its receipts. `codex-run` stays the tool for everything that
 is not a lane: `run-state.sh`, `verify-receipt.sh`, `green.sh` and the other scripts.
 
