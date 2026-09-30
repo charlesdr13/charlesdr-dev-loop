@@ -180,7 +180,7 @@ role, so a provider outage fails over instead of killing the run:
 
 ```yaml
 modelRoles:
-  default: cursor/claude-opus-5-5:medium      # the orchestrator
+  default: anthropic/claude-opus-5-5:medium   # the orchestrator; NOT via cursor (see below)
   explore: cursor/composer-2.5-fast
   implement: cursor/composer-2.5
   review: openai-codex/gpt-5.6-sol:medium
@@ -191,12 +191,15 @@ task:
     claude-reviewer: "@review"
 retry:
   fallbackChains:
-    default: [anthropic/claude-opus-5-5:medium]
+    default: [cursor/claude-opus-5-5:medium]
     explore: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
     implement: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
     review: [openai-codex/gpt-5.6-terra]
 ```
 
+Keep the orchestrator off the Cursor provider. Cursor serves its own `Task` subagent tool
+next to omp's `task`. An orchestrator on `cursor/...` picks Cursor's tool, and omp answers
+"Subagents are not implemented by this client". Lanes on Cursor models are fine.
 A lane agent's frontmatter `model:` does not apply under omp. The overrides above
 win over the bridge's built-in defaults. `rules/omp-lane-dispatch.md` is a
 triggered rule: if the orchestrator starts typing `codex-run … --lane` into bash,

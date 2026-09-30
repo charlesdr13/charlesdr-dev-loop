@@ -87,9 +87,12 @@ start_record="$(jq -c --arg r "$run_id" --arg l "$lane" \
   'select(.event == "start" and .run == $r and .lane == $l)' "$log" 2>/dev/null | tail -1)"
 [ -n "$start_record" ] || exit 0
 
+# omp's bridge passes rc 130 for a lane that shut down without its final yield.
+rc="${CHARLES_LANE_RC:-0}"
+case "$rc" in ""|*[!0-9]*) rc=0 ;; esac
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq -c --arg ts "$now" --arg model "$model" \
-  '.ts = $ts | .event = "end" | .engine = "claude" | .model = $model | .rc = 0' \
+jq -c --arg ts "$now" --arg model "$model" --argjson rc "$rc" \
+  '.ts = $ts | .event = "end" | .engine = "claude" | .model = $model | .rc = $rc' \
   <<<"$start_record" >> "$log" 2>/dev/null || exit 0
 
 exit 0

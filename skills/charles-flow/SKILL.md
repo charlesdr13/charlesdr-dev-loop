@@ -23,6 +23,14 @@ take the results as they arrive, or call `wait`. Never run `codex-run --lane` in
 bash from omp, and never detach or poll a lane. The `task` path is what gives each
 lane its own model and its receipts. `codex-run` stays the tool for everything that
 is not a lane: `run-state.sh`, `verify-receipt.sh`, `green.sh` and the other scripts.
+The right tool is omp's own lowercase `task`, which takes `context` and `tasks[]`. If the
+orchestrator model is served through Cursor, Cursor also offers its own `Task`
+subagent tool (Composer-only, found via `GetDynamicTools`). Never call that one: omp
+does not implement it, and it fails with "Subagents are not implemented by this
+client". That error means you picked the wrong tool, not that subagents are
+unavailable. Run the orchestrator on `anthropic/claude-opus-5-5` to avoid it.
+The bridge rewrites each lane item and adds a `charles-run:` line to it. You will see
+that line in your own `task` call. It is expected: do not cancel or respawn the lane over it.
 
 ## Select by work-kind
 

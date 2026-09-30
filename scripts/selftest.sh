@@ -4767,6 +4767,13 @@ $ob_brief2" '
   {kind:"sub",name:"claude-explorer",id:"E2"} as $a | [
   {ev:"before_agent_start",cwd:$r,agent:$a,e:{prompt:$p}},
   {ev:"tool_result",cwd:$r,agent:$a,e:{toolName:"yield",details:{type:"findings"}}}]' | ob >/dev/null
+ob_before_kill="$(jq -sc --arg b "$ob_run2" '[.[] | select(.event == "end" and .run == $b)] | length' "$OB/repo/.charles/dispatches.jsonl")"
+jq -nc --arg r "$OB/repo" --arg p "Complete assignment thoroughly:
+
+$ob_brief2" '
+  {kind:"sub",name:"claude-explorer",id:"E2"} as $a | [
+  {ev:"before_agent_start",cwd:$r,agent:$a,e:{prompt:$p}},
+  {ev:"session_shutdown",cwd:$r,agent:$a}]' | ob >/dev/null
 jq -nc --arg r "$OB/repo" --arg p "Complete assignment thoroughly:
 
 $ob_brief1" '
@@ -4776,11 +4783,12 @@ $ob_brief1" '
   {ev:"tool_result",cwd:$r,agent:$a,model:$m,e:{toolName:"yield",details:{status:"success"}}},
   {ev:"session_shutdown",cwd:$r,agent:$a,model:$m}]' | ob >/dev/null
 if jq -se --arg a "$ob_run1" --arg b "$ob_run2" '
-    ([.[] | select(.event == "end" and .run == $a)] | length == 1 and .[0].model == "cursor/composer-2.5-fast" and .[0].engine == "claude")
-    and ([.[] | select(.event == "end" and .run == $b)] | length == 0)' \
+    ([.[] | select(.event == "end" and .run == $a)] | length == 1 and .[0].model == "cursor/composer-2.5-fast" and .[0].engine == "claude" and .[0].rc == 0)
+    and ([.[] | select(.event == "end" and .run == $b)] | length == 1 and .[0].rc == 130)' \
     "$OB/repo/.charles/dispatches.jsonl" >/dev/null \
+  && [ "$ob_before_kill" = 0 ] \
   && bash "$VR" "$OB/repo" --lane explore --run "$ob_run1" >/dev/null 2>&1; then
-  echo "  PASS  an omp lane's final yield writes one end receipt with the real model; a section yield writes none"; pass=$((pass+1))
+  echo "  PASS  an omp lane's final yield writes one end receipt (rc 0) with the real model; a section yield writes none; a shutdown before the final yield records rc 130"; pass=$((pass+1))
 else
   echo "  FAIL  omp lane end receipt is wrong: $(grep -F "$ob_run1" "$OB/repo/.charles/dispatches.jsonl" 2>/dev/null)"; fail=$((fail+1))
 fi

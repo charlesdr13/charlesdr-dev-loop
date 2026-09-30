@@ -153,7 +153,7 @@ export default function (pi: any) {
   const laneOf = (ctx: any) =>
     ctx?.agent?.kind === "sub" && laneAgent(ctx.agent.name) ? String(ctx.agent.id ?? ctx.agent.name) : undefined;
 
-  function receipt(ctx: any) {
+  function receipt(ctx: any, rc = 0) {
     const key = laneOf(ctx);
     const s = key ? lanes.get(key) : undefined;
     if (!s || s.done || !s.brief) return;
@@ -161,6 +161,7 @@ export default function (pi: any) {
     const env: Record<string, string> = {};
     const model = modelName(ctx.model);
     if (model) env.CHARLES_LANE_MODEL = model;
+    if (rc) env.CHARLES_LANE_RC = String(rc);
     const payload = {
       hook_event_name: "PostToolUse",
       tool_name: "Task",
@@ -215,11 +216,12 @@ export default function (pi: any) {
   });
 
   // A lane is done when it yields its final result (a section yield carries a
-  // type); session shutdown is the backstop for a lane that never yields.
+  // type); session shutdown is the backstop for a lane that never yields, and
+  // records rc 130: a lane killed or crashed before its final yield did not finish.
   pi.on("tool_result", (e: any, ctx: any) => {
     if (e.toolName === "yield" && !e.isError && !(e.details?.type ?? e.input?.type)) receipt(ctx);
   });
-  pi.on("session_shutdown", (_e: any, ctx: any) => receipt(ctx));
+  pi.on("session_shutdown", (_e: any, ctx: any) => receipt(ctx, 130));
 
   pi.on("session_stop", (_e: any, ctx: any) => {
     const out = hook("warn-open-runs.sh", {}, ctx?.cwd ?? process.cwd());
