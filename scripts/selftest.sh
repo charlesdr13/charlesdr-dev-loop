@@ -2,7 +2,7 @@
 # selftest.sh — asserts the hook allows what it should and asks on what it shouldn't.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
-unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK CHARLES_UNATTENDED FM_TASK_ID
+unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-to-codex.sh"
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
