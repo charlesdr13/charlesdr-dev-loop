@@ -2,13 +2,13 @@
 # selftest.sh — asserts the hook allows what it should and asks on what it shouldn't.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
-unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK
+unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK CHARLES_UNATTENDED FM_TASK_ID
 
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-to-codex.sh"
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
 pass=0; fail=0
 
-check() { # check NAME EXPECT(allow|ask) PAYLOAD
+check() { # check NAME EXPECT(allow|ask|deny) PAYLOAD
   local name="$1" expect="$2" payload="$3" out decision
   out="$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)"
   if [ -z "$out" ]; then decision=allow
@@ -47,6 +47,10 @@ else echo "  FAIL  CHARLES_INLINE_OK bypass — expected allow, got $bypass_out"
 
 : > "$BOX/repo/.charles/touched" 2>/dev/null || mkdir -p "$BOX/repo/.charles"
 check "big edit trips line threshold" ask \
+  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
+FM_TASK_ID=t1 check "firstmate crewmate: big edit denied, not asked" deny \
+  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
+CHARLES_UNATTENDED=1 check "CHARLES_UNATTENDED: big edit denied, not asked" deny \
   "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
 
 # 3rd distinct file trips the file threshold even though each edit is tiny.
@@ -193,6 +197,7 @@ routing_cases=(
   "python-pro must route|ask|python-pro|$BOX/repo"
   "feature-dev:code-explorer routes|ask|feature-dev:code-explorer|$BOX/repo"
 )
+FM_TASK_ID=t1 scheck_tool "firstmate crewmate: general-purpose denied, not asked" deny Agent general-purpose "$BOX/repo"
 for tool in Agent Task; do
   for test_case in "${routing_cases[@]}"; do
     IFS='|' read -r name expect sub cwd <<<"$test_case"

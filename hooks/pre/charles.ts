@@ -205,9 +205,10 @@ export default function (pi: any) {
         e.toolName === "write"
           ? { tool_name: "Write", tool_input: { file_path, content: e.input.content } }
           : { tool_name: "Edit", tool_input: { file_path, old_string: "", new_string: e.input.input } };
-      const out = hook("route-to-codex.sh", payload, cwd);
-      if (!out) continue;
-      const reason = JSON.parse(out).hookSpecificOutput?.permissionDecisionReason ?? out;
+      const v = verdict(hook("route-to-codex.sh", payload, cwd));
+      if (!v) continue;
+      const reason = v.reason;
+      if (v.decision === "deny") return { block: true, reason };
       // Headless omp (-p) answers confirm with false, so the gate blocks there.
       if (!(await ctx.ui.confirm("charlesdr-dev-loop", reason))) return { block: true, reason };
       // ponytail: grants on approval, not on landing — omp has no per-call post hook here.

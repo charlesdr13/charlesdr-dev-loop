@@ -515,6 +515,11 @@ denylist of agents that do repo code work — `google-drive`, `claude-code-guide
 and the rest are none of this hook's business. `CHARLES_SUBAGENTS_OK=1` turns this
 gate off (the edit gate stays on).
 
+**Unattended sessions.** Both gates deny instead of ask when `FM_TASK_ID` (set in
+every [firstmate](https://github.com/kunchenguid/firstmate) crewmate pane) or
+`CHARLES_UNATTENDED=1` is set. Nobody is there to answer an ask, so the session
+would hang on it. With deny, the agent reads the same reason and dispatches the lane.
+
 **Unclosed runs** — a `Stop` hook warns when a run has `FAILED` items. Only
 `FAILED`: the others already resurface via `tasks-axi`, and warning twice is
 nagging.

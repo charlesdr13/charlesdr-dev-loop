@@ -89,10 +89,15 @@ case "$sub" in
     alt='codex-run --lane implement --dir <repo> --timeout 2700 "<task>" (Bash with run_in_background: true)' ;;
 esac
 
+# Nobody can answer an ask in an unattended session (a firstmate crewmate sets
+# FM_TASK_ID), so it would hang there; deny instead and let the reason steer.
+decision=ask
+[ -z "${CHARLES_UNATTENDED:-}${FM_TASK_ID:-}" ] || decision=deny
+
 # PostToolUse turns this into inline-ok if the spawn actually happens (= approved).
 mkdir -p "$root/.charles" 2>/dev/null || true
 printf '%s\n' "agent:$sub" > "$root/.charles/pending-ask" 2>/dev/null || true
 
 jq -nc --arg r "This repo routes code work to a codex lane, and '$sub' is not one. Spawn $alt instead. Approve only if this genuinely is not repo code work — reading docs, a non-code lookup, or a one-off question. Bypass the session with CHARLES_INLINE_OK=1; turn this gate off with CHARLES_SUBAGENTS_OK=1." \
-  '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'
+  --arg d "$decision" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
 exit 0

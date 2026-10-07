@@ -102,9 +102,14 @@ elif [ "$nfiles" -ge "$max_files" ]; then
 fi
 [ -n "$reason" ] || exit 0
 
+# Nobody can answer an ask in an unattended session (a firstmate crewmate sets
+# FM_TASK_ID), so it would hang there; deny instead and let the reason steer.
+decision=ask
+[ -z "${CHARLES_UNATTENDED:-}${FM_TASK_ID:-}" ] || decision=deny
+
 # PostToolUse turns this into inline-ok if the edit actually lands (= approved).
 printf '%s\n' "$path" > "$root/.charles/pending-ask" 2>/dev/null || true
 
 jq -nc --arg r "$reason Dispatch the implement lane via a background Bash call: codex-run --lane implement --dir <repo> --timeout 2700 \"<task>\" (run_in_background: true) instead of editing inline. Approve only if this genuinely is a small local fix. Controls: inline_lines and inline_files in .charles.toml; session bypass: CHARLES_INLINE_OK=1." \
-  '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'
+  --arg d "$decision" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
 exit 0
