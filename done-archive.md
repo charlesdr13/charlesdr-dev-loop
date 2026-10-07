@@ -45,3 +45,6 @@
 ## Archived 2026-09-03
 - [x] cdl-1787588353-32395 - flow-status ISSUEs are two 2026-08-21 orphan dispatches predating HEAD 6fdfcfa, not this run's work; working tree censused, every change accounted for (6 merged files + this run's spec). Carried to tasks-axi cdl-stale-orphans; closing with --force for that reason only. (kind: deferred) (done 2026-09-03)
   Superseded. This recorded a one-off --force close rationale for the two 2026-08-21 orphans; the underlying item is cdl-stale-orphans, which remains open. R4 (5f79ace) also stopped flow-status asserting those orphans are dead — they now report liveness UNKNOWN.
+
+## Archived 2026-10-08
+- [x] cdl-1790530671-24095 - Pre-existing selftest GIT_DIR leak causes inherited Git environment to affect temporary repositories (done 2026-10-08)
