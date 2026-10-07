@@ -49,7 +49,7 @@ fi
 [ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"
 [ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say WARN "missing ~/.config/lg-cc-deepseek/key.env — no fallback if luna fails"
 [ -x "$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh" ] && say OK "codex-ds.sh wrapper" || say WARN "missing codex-ds.sh — no fallback if luna fails"
-grep -q 'model = "gpt-5.6-sol"' "$HOME/.codex/config.toml" 2>/dev/null && say OK "sol base model (review lane)" || say WARN "base model is not gpt-5.6-sol — review lane will use whatever ~/.codex/config.toml says"
+grep -q 'model = "gpt-6.1-sol"' "$HOME/.codex/config.toml" 2>/dev/null && say OK "sol base model (review lane)" || say WARN "base model is not gpt-6.1-sol — review lane will use whatever ~/.codex/config.toml says"
 
 echo
 echo "Tools:"

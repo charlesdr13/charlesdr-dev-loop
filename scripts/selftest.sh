@@ -2609,7 +2609,7 @@ for tool in codex treehouse tasks-axi; do
 done
 touch "$DD/home/.codex/luna.config.toml" "$DD/home/.codex/terra.config.toml" \
   "$DD/home/.codex/deepseek.config.toml" "$DD/home/.config/lg-cc-deepseek/key.env"
-printf 'model = "gpt-5.6-sol"\n' > "$DD/home/.codex/config.toml"
+printf 'model = "gpt-6.1-sol"\n' > "$DD/home/.codex/config.toml"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
 chmod +x "$DD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
 doctor_spec_out="$(cd "$DD/repo" && HOME="$DD/home" PATH="$DD/bin:$PATH" bash scripts/doctor.sh 2>&1)"; doctor_spec_rc=$?
@@ -3432,15 +3432,15 @@ if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = omp ] \
 else
   echo "  FAIL  /engine must accept omp (rc=$cl_rc out=$cl_out)"; fail=$((fail+1))
 fi
-cl_out="$(engine_command "$CL/repo" 'omp:openai-codex/gpt-5.6-luna')"; cl_rc=$?
-if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-5.6-luna' ] \
-  && [ "$cl_out" = 'engine (project): omp:openai-codex/gpt-5.6-luna' ]; then
+cl_out="$(engine_command "$CL/repo" 'omp:openai-codex/gpt-6-luna')"; cl_rc=$?
+if [ "$cl_rc" -eq 0 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-6-luna' ] \
+  && [ "$cl_out" = 'engine (project): omp:openai-codex/gpt-6-luna' ]; then
   echo "  PASS  /engine writes and reports omp:<provider>/<model> verbatim"; pass=$((pass+1))
 else
   echo "  FAIL  /engine must write and report omp:<provider>/<model> verbatim (rc=$cl_rc out=$cl_out)"; fail=$((fail+1))
 fi
 cl_out="$(engine_command "$CL/repo" 'omp:' 2>&1)"; cl_rc=$?
-if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-5.6-luna' ]; then
+if [ "$cl_rc" -eq 2 ] && [ "$(cat "$CL/repo/.charles/engine")" = 'omp:openai-codex/gpt-6-luna' ]; then
   echo "  PASS  /engine refuses an empty omp: without changing the preference"; pass=$((pass+1))
 else
   echo "  FAIL  /engine must refuse an empty omp: (rc=$cl_rc)"; fail=$((fail+1))
@@ -4018,7 +4018,7 @@ printf 'review change\n' > "$OL/repo/change.txt"
 ol_out="$(omp_run --engine omp --lane review --plan "$OL/repo/tracked" 2>"$OL/stderr")"; ol_rc=$?
 if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
   && [ "$(sort "$OL/ls.txt" 2>/dev/null | paste -sd, -)" = "changes.diff,plan.md" ] \
-  && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-5.6-sol"
+  && jq -e '.argv[(.argv | index("--model")) + 1] == "openai-codex/gpt-6.1-sol"
     and .argv[(.argv | index("--thinking")) + 1] == "medium"
     and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob"
     and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
@@ -4065,7 +4065,7 @@ printf 'precedence change\n' > "$OL/repo/precedence.txt"
 omp_run --lane review --plan "$OL/repo/tracked" >/dev/null 2>&1; ol_rc=$?
 rm -f "$OL/repo/precedence.txt"
 if [ "$ol_rc" -eq 0 ] && [ -e "$OL/omp.json" ] && [ ! -e "$OL/codex.json" ] \
-  && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "openai-codex/gpt-5.6-sol"' \
+  && jq -se 'map(select(.event == "end")) | last | .engine == "review" and .model == "openai-codex/gpt-6.1-sol"' \
     "$OL/repo/.charles/dispatches.jsonl" >/dev/null; then
   echo "  PASS  a project omp preference runs review on omp"; pass=$((pass+1))
 else
@@ -4670,10 +4670,10 @@ ob_out="$(jq -nc '[
   {fn:"laneModel",args:["claude-reviewer"]},
   {fn:"laneModel",args:["claude-explorer",{"claude-explorer":"x/y"}]},
   {fn:"laneModel",args:["scout"]}]' | ob)"
-ob_check "omp bridge routes explore/implement/review to composer-2.5-fast, composer-2.5, gpt-5.6-sol:medium; overrides and other agents untouched" \
-  '. == ["cursor/composer-2.5-fast","cursor/composer-2.5","openai-codex/gpt-5.6-sol:medium",null,null]' "$ob_out"
+ob_check "omp bridge routes explore/implement/review to composer-2.5-fast, composer-2.5, gpt-6.1-sol:medium; overrides and other agents untouched" \
+  '. == ["cursor/composer-2.5-fast","cursor/composer-2.5","openai-codex/gpt-6.1-sol:medium",null,null]' "$ob_out"
 ob_parity="$(for l in explore implement review; do
-  bash -c 'source <(sed -n "/^omp_default_model()/,/^}/p" "$1"); omp_default_model "$2"' _ "$RUN_SH" "$l"
+  bash -c 'source <(sed -n "/^gpt_model()/,/^}/p;/^omp_default_model()/,/^}/p" "$1"); omp_default_model "$2"' _ "$RUN_SH" "$l"
 done | jq -Rsc 'split("\n") | map(select(. != ""))')"
 ob_check "omp bridge lane models match codex-run.sh omp_default_model" \
   "[.[0:3][] | split(\":\")[0]] == $ob_parity" "$ob_out"
@@ -4924,7 +4924,7 @@ chmod +x "$RD/bin/codex"
 printf '# Plan\n' > "$RD/docs/p.md"
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-sol' "$RD/args.txt" 2>/dev/null; then
+if grep -q -- '-m gpt-6.1-sol' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  review defaults to sol even though luna is the global default"; pass=$((pass+1))
 else
   echo "  FAIL  review must default to sol"; fail=$((fail+1))
@@ -5099,7 +5099,7 @@ else
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine luna --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-luna' "$RD/args.txt" 2>/dev/null \
+if grep -q -- '-m gpt-6-luna' "$RD/args.txt" 2>/dev/null \
   && grep -q -- '-c model_reasoning_effort=max' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  review with --engine luna defaults to max"; pass=$((pass+1))
 else
@@ -5107,7 +5107,7 @@ else
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine terra --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-terra' "$RD/args.txt" 2>/dev/null \
+if grep -q -- '-m gpt-6-astra' "$RD/args.txt" 2>/dev/null \
   && grep -q -- '-c model_reasoning_effort=max' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  review with --engine terra defaults to max"; pass=$((pass+1))
 else
@@ -5115,11 +5115,29 @@ else
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine luna --effort medium --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-luna' "$RD/args.txt" 2>/dev/null \
+if grep -q -- '-m gpt-6-luna' "$RD/args.txt" 2>/dev/null \
   && grep -q -- '-c model_reasoning_effort=medium' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  explicit --effort medium overrides luna review default"; pass=$((pass+1))
 else
   echo "  FAIL  explicit --effort medium must override luna review default"; fail=$((fail+1))
+fi
+
+rm -f "$RD/args.txt"
+luna_err="$(PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane explore --engine luna --dir "$RD" --timeout 5 "t" 2>&1 >/dev/null)"
+if grep -q -- '-m gpt-6-luna' "$RD/args.txt" 2>/dev/null && grep -q -- '-p luna' "$RD/args.txt" 2>/dev/null \
+  && grep -qF 'codex/gpt-6-luna' <<<"$luna_err"; then
+  echo "  PASS  explore on luna passes -m gpt-6-luna and reports it"; pass=$((pass+1))
+else
+  echo "  FAIL  explore on luna must pass -m gpt-6-luna and report it"; fail=$((fail+1))
+fi
+
+rm -f "$RD/args.txt"
+terra_err="$(PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane explore --engine terra --dir "$RD" --timeout 5 "t" 2>&1 >/dev/null)"
+if grep -q -- '-m gpt-6-astra' "$RD/args.txt" 2>/dev/null && grep -q -- '-p terra' "$RD/args.txt" 2>/dev/null \
+  && grep -qF 'codex/gpt-6-astra' <<<"$terra_err"; then
+  echo "  PASS  explore on terra passes -m gpt-6-astra and reports it"; pass=$((pass+1))
+else
+  echo "  FAIL  explore on terra must pass -m gpt-6-astra and report it"; fail=$((fail+1))
 fi
 
 # --- global engine switch -----------------------------------------------------
@@ -5135,14 +5153,14 @@ else
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" bash "$RUN_SH" --lane review --engine terra --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-terra' "$RD/args.txt" 2>/dev/null; then
+if grep -q -- '-m gpt-6-astra' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  --engine still beats the engine file"; pass=$((pass+1))
 else
   echo "  FAIL  --engine must override the engine file"; fail=$((fail+1))
 fi
 
 PATH="$RD/bin:$PATH" CHARLES_STATE_DIR="$RD" CHARLES_ENGINE=luna bash "$RUN_SH" --lane review --dir "$RD" --plan "$RD/docs/p.md" --timeout 5 "t" >/dev/null 2>&1
-if grep -q -- '-m gpt-5.6-luna' "$RD/args.txt" 2>/dev/null; then
+if grep -q -- '-m gpt-6-luna' "$RD/args.txt" 2>/dev/null; then
   echo "  PASS  CHARLES_ENGINE beats the engine file"; pass=$((pass+1))
 else
   echo "  FAIL  CHARLES_ENGINE must beat the engine file"; fail=$((fail+1))

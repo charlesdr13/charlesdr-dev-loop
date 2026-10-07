@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: Dispatches an adversarial review to gpt-5.6-sol at medium by default, or gpt-5.6-luna/terra at max, or grok-4.6 at high, when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
+description: Dispatches an adversarial review to gpt-6.1-sol at medium by default, or gpt-6-luna/gpt-6-astra (luna/terra engines) at max, or grok-4.6 at high, when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
 model: haiku
 tools: Bash, Read
 ---
@@ -162,7 +162,7 @@ get two engines racing, which is how a tree gets corrupted.
 `codex-run.sh` prints a receipt line to stderr on every dispatch:
 
 ```
-— codex/gpt-5.6-sol · effort=medium · isolated · raw: /path/run.jsonl
+— codex/gpt-6.1-sol · effort=medium · isolated · raw: /path/run.jsonl
 ```
 
 **Return that line verbatim in your report.** A report without it is discarded

@@ -22,7 +22,7 @@ const root = resolve(import.meta.dir ?? import.meta.dirname, "../..");
 const LANES: Record<string, { lane: string; model: string }> = {
   "claude-explorer": { lane: "explore", model: "cursor/composer-2.5-fast" },
   "claude-implementer": { lane: "implement", model: "cursor/composer-2.5" },
-  "claude-reviewer": { lane: "review", model: "openai-codex/gpt-5.6-sol:medium" },
+  "claude-reviewer": { lane: "review", model: "openai-codex/gpt-6.1-sol:medium" },
 };
 
 // Plugin agents may arrive namespaced (charlesdr-dev-loop:claude-explorer).

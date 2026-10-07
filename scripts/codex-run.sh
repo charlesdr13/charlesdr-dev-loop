@@ -10,8 +10,8 @@
 #             overlapped on 1 finding out of 13.
 #
 # Engines (--engine), for explore and implement:
-#   luna      gpt-5.6-luna @ max      PRIMARY — every dispatch starts here
-#   terra     gpt-5.6-terra @ max     ESCALATION — when luna's work came back wrong
+#   luna      gpt-6-luna @ max      PRIMARY — every dispatch starts here
+#   terra     gpt-6-astra @ max     ESCALATION — when luna's work came back wrong
 #   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
 #   claude    hands off to a Claude Code subagent instead of running here: logs
 #             the start event, prints a SPAWN block (agent + prompt) to stdout,
@@ -26,7 +26,7 @@
 #             is a different model family from every codex profile. No fallback.
 #   omp       headless omp process, one model per lane by default (explore
 #             cursor/composer-2.5-fast, implement cursor/composer-2.5, review
-#             openai-codex/gpt-5.6-sol); `omp:<provider>/<model>` overrides the
+#             openai-codex/gpt-6.1-sol); `omp:<provider>/<model>` overrides the
 #             model for every lane. ALSO runs review — a project/global omp
 #             preference is honoured there too. No fallback; --resume is
 #             unavailable (no session id is recorded).
@@ -633,7 +633,7 @@ omp_default_model() { # omp_default_model LANE
   case "$1" in
     explore)   echo "cursor/composer-2.5-fast" ;;
     implement) echo "cursor/composer-2.5" ;;
-    *)         echo "openai-codex/gpt-5.6-sol" ;;
+    *)         echo "openai-codex/$(gpt_model sol)" ;;
   esac
 }
 
@@ -672,18 +672,17 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
   mkdir "$end_claim" 2>/dev/null || return 0
   if [ -z "$model" ]; then
     case "$1" in
-      luna)     model="gpt-5.6-luna" ;;
-      terra)    model="gpt-5.6-terra" ;;
+      luna|terra) model="$(gpt_model "$1")" ;;
       deepseek) model="deepseek-v4-flash" ;;
       grok)     model="grok-4.6" ;;
       omp)      model="${OMP_MODEL:-$(omp_default_model "$LANE")}" ;;
       review)   if [ "$ENGINE_SET" -eq 1 ]; then
                   case "$ENGINE" in
-                    luna) model="gpt-5.6-luna" ;; terra) model="gpt-5.6-terra" ;; grok) model="grok-4.6" ;;
+                    luna|terra) model="$(gpt_model "$ENGINE")" ;; grok) model="grok-4.6" ;;
                     omp)  model="${OMP_MODEL:-$(omp_default_model review)}" ;;
-                    *)    model="gpt-5.6-sol" ;;
+                    *)    model="$(gpt_model sol)" ;;
                   esac
-                else model="gpt-5.6-sol"; fi ;;
+                else model="$(gpt_model sol)"; fi ;;
       *)        model="$1" ;;
     esac
   fi
@@ -735,6 +734,15 @@ stop_watchdog() {
   wait "$WATCHDOG_PID" 2>/dev/null || true
   WATCHDOG_PID=""
   rm -f "$WATCHDOG_STATE_FILE" "$WATCHDOG_STOP_FILE" "$CHILD_PID_FILE" 2>/dev/null || true
+}
+
+# the one engine/profile -> GPT model mapping
+gpt_model() { # gpt_model luna|terra|sol
+  case "$1" in
+    luna)  echo gpt-6-luna ;;
+    terra) echo gpt-6-astra ;;
+    *)     echo gpt-6.1-sol ;;
+  esac
 }
 
 run_attempt() { # run_attempt ENGINE MODEL CWD STDOUT STDERR COMMAND...
@@ -851,16 +859,17 @@ weekly_quota_fast_mode() {
   printf '%s\n' "$result"
 }
 
-# --- engines: luna (primary) and terra (escalation), both gpt-5.6 @ max -------
+# --- engines: luna (primary) and terra (escalation), both GPT-6 @ max -------
 run_gpt() { # run_gpt PROFILE
-  local profile="$1" args fast
+  local profile="$1" args fast model
+  model="$(gpt_model "$profile")"
   if [ "$profile" = "terra" ]; then fast="--disable"; else fast="$(weekly_quota_fast_mode)"; fi
   if [ "$RESUME" -eq 1 ]; then
-    args=(-p "$profile" exec resume --last --skip-git-repo-check "$fast" fast_mode --json -o "$RUN.last")
+    args=(-p "$profile" -m "$model" exec resume --last --skip-git-repo-check "$fast" fast_mode --json -o "$RUN.last")
   else
     # fast_mode is globally default-on; state it here so "fast on luna only" is
     # literally true rather than inherited, and pin effort explicitly.
-    args=(-p "$profile" exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
+    args=(-p "$profile" -m "$model" exec --skip-git-repo-check -s "$SANDBOX" -C "$DIR"
           "$fast" fast_mode -c model_reasoning_effort="$EFFORT"
           --json -o "$RUN.last")
   fi
@@ -873,12 +882,12 @@ $LADDER"
   # -k: GNU timeout sends only TERM. A child that ignores it would hang forever,
   # holding the writer lock and never falling back.
   local rc=0
-  run_attempt "$profile" "gpt-5.6-$profile" "$DIR" "$RUN.jsonl" "$RUN.err" \
+  run_attempt "$profile" "$model" "$DIR" "$RUN.jsonl" "$RUN.err" \
     timeout -k 30s "$TIMEOUT" codex "${args[@]}" "$TASK
 
 $GUARD$extra" < /dev/null || rc=$?
   [ -s "$RUN.last" ] && cat "$RUN.last"
-  echo "— codex/gpt-5.6-$profile · effort=$EFFORT · fast_mode=${fast#--}d · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
+  echo "— codex/$model · effort=$EFFORT · fast_mode=${fast#--}d · sandbox=$SANDBOX · raw: $RUN.jsonl" >&2
   return $rc
 }
 
@@ -1119,8 +1128,7 @@ run_review() {
   local rmodel rprofile
   if [ "$ENGINE_SET" -eq 1 ]; then
     case "$ENGINE" in
-      luna)  rmodel="gpt-5.6-luna";  rprofile=(-p luna) ;;
-      terra) rmodel="gpt-5.6-terra"; rprofile=(-p terra) ;;
+      luna|terra) rmodel="$(gpt_model "$ENGINE")"; rprofile=(-p "$ENGINE") ;;
       deepseek)
         rmodel="deepseek-v4-flash"; rprofile=(-p deepseek)
         # the deepseek profile resolves its key from the environment
@@ -1128,10 +1136,10 @@ run_review() {
         [ -f "$ds_env" ] && { set -a; . "$ds_env"; set +a; } ;;
       grok)  rmodel="grok-4.6";      rprofile=() ;;
       omp)   rmodel="${OMP_MODEL:-$(omp_default_model review)}"; rprofile=() ;;
-      *)     rmodel="gpt-5.6-sol";   rprofile=() ;;
+      *)     rmodel="$(gpt_model sol)"; rprofile=() ;;
     esac
   else
-    rmodel="gpt-5.6-sol"; rprofile=()
+    rmodel="$(gpt_model sol)"; rprofile=()
   fi
 
   if [ "$rmodel" = "grok-4.6" ]; then
@@ -1144,15 +1152,15 @@ run_review() {
     }
   elif [ "$EFFORT_SET" -eq 0 ]; then
     # match on suffix: omp's rmodel carries a "provider/" prefix (e.g.
-    # openai-codex/gpt-5.6-sol) that the bare codex model name never has.
+    # openai-codex/gpt-6.1-sol) that the bare codex model name never has.
     case "$rmodel" in
-      *gpt-5.6-sol)        EFFORT=medium ;;
-      *gpt-5.6-luna|*gpt-5.6-terra) EFFORT=max ;;
+      *"$(gpt_model sol)")  EFFORT=medium ;;
+      *"$(gpt_model luna)"|*"$(gpt_model terra)") EFFORT=max ;;
     esac
   fi
 
   local review_fast="--disable"
-  [ "$rmodel" = "gpt-5.6-luna" ] && review_fast="$(weekly_quota_fast_mode)"
+  [ "$rmodel" = "$(gpt_model luna)" ] && review_fast="$(weekly_quota_fast_mode)"
 
   local prompt="You are an adversarial reviewer. You can see exactly two files: plan.md
 (what was supposed to be built) and changes.diff (what was actually built). You cannot

@@ -124,7 +124,7 @@ This wraps tools it does not ship. Before installing:
   primary engine, and without it nothing dispatches:
 
   ```toml
-  model = "gpt-5.6-luna"
+  model = "gpt-6-luna"
   model_reasoning_effort = "max"
   ```
 
@@ -183,7 +183,7 @@ modelRoles:
   default: anthropic/claude-opus-5-5:medium   # the orchestrator; NOT via cursor (see below)
   explore: cursor/composer-2.5-fast
   implement: cursor/composer-2.5
-  review: openai-codex/gpt-5.6-sol:medium
+  review: openai-codex/gpt-6.1-sol:medium
 task:
   agentModelOverrides:
     claude-explorer: "@explore"
@@ -192,9 +192,9 @@ task:
 retry:
   fallbackChains:
     default: [cursor/claude-opus-5-5:medium]
-    explore: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
-    implement: [xai-oauth/grok-4.7, openai-codex/gpt-5.6-luna]
-    review: [openai-codex/gpt-5.6-terra]
+    explore: [xai-oauth/grok-4.7, openai-codex/gpt-6-luna]
+    implement: [xai-oauth/grok-4.7, openai-codex/gpt-6-luna]
+    review: [openai-codex/gpt-6-astra]
 ```
 
 Keep the orchestrator off the Cursor provider. Cursor serves its own `Task` subagent tool
@@ -213,7 +213,7 @@ spawning `claude-explorer`, `claude-implementer` or `claude-reviewer` with the
 brief is rewritten with `charles-run:`, the start and end receipts are logged,
 and the reviewer is confined to its review box. Each lane runs on its own
 provider instead of haiku/sonnet/opus: explore `cursor/composer-2.5-fast`,
-implement `cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol:medium`.
+implement `cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol:medium`.
 A `task.agentModelOverrides` entry for the agent wins. The end receipt names the
 model that actually ran. omp's own code-work agents (`task`, `scout`, `sonic`,
 `designer`, `reviewer`) hit the same subagent gate as Claude's.
@@ -253,9 +253,9 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-5.6-luna; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
-| implement | gpt-5.6-luna; grok-4.6 with `grok`; cursor/composer-2.5 with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
-| review | gpt-5.6-sol by default; gpt-5.6-luna/terra or grok-4.6 with `--engine`; openai-codex/gpt-5.6-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
+| explore | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
+| implement | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5 with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
+| review | gpt-6.1-sol by default; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
 medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
@@ -294,7 +294,7 @@ same known isolation ceiling as claude.
 
 Run `/charlesdr-dev-loop:engine omp` to run all three lanes as headless `omp`
 processes, one model per lane by default: explore `cursor/composer-2.5-fast`,
-implement `cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol`.
+implement `cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol`.
 `omp:<provider>/<model>` overrides the model for every lane (an unknown model
 exits 1 at dispatch); `omp:` with nothing after it is rejected. Like `grok`,
 an `omp` preference is honoured on review too, in the same isolated box.

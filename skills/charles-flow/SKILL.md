@@ -50,8 +50,8 @@ Route the request by its deliverable:
 
 | Role | Lane | Engine | Sandbox |
 |---|---|---|---|
-| Explore | `--lane explore` | gpt-5.6-luna @ max | read-only |
-| Implement | `--lane implement` | gpt-5.6-luna @ max | workspace-write |
+| Explore | `--lane explore` | gpt-6-luna @ max | read-only |
+| Implement | `--lane implement` | gpt-6-luna @ max | workspace-write |
 | Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
 
 **engine=claude:** one Agent call is the whole dispatch, with no `codex-run` in
@@ -79,7 +79,7 @@ untouched.
 
 **engine=omp:** all three lanes run as headless `omp` processes, one model per
 lane by default: explore `cursor/composer-2.5-fast`, implement
-`cursor/composer-2.5`, review `openai-codex/gpt-5.6-sol` (medium
+`cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol` (medium
 effort; `--effort` overrides). `omp:<provider>/<model>` overrides the model
 for every lane. `--resume` is refused, and a failed omp dispatch has no
 fallback. The explore lane defaults to high effort. Under an omp orchestrator,
@@ -91,7 +91,7 @@ headers as above: `agent: "claude-explorer"` (or `claude-implementer`,
 `claude-reviewer`) and the `charles-*:` lines opening `task`. Several lanes go
 in one `tasks[]` batch. The bridge dispatches each item, runs explore on
 `cursor/composer-2.5-fast`, implement on `cursor/composer-2.5`, review on
-`openai-codex/gpt-5.6-sol`, confines the reviewer, and logs both receipts. Do not
+`openai-codex/gpt-6.1-sol`, confines the reviewer, and logs both receipts. Do not
 use `scout`, `task`, `sonic`, `designer` or `reviewer` for repo code work; the
 gate refuses them headless.
 
