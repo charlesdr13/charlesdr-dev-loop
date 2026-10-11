@@ -1268,6 +1268,8 @@ fi
 mkdir -p "$RUN_DIR/.charles" 2>/dev/null || true
 if { exec 8>"$RUN_DIR/.charles/run-state.lock"; } 2>/dev/null; then
   flock 8 || { echo "codex-run.sh: FAILED to acquire the run-state lock" >&2; exit 6; }
+else
+  echo "codex-run.sh: WARNING — cannot open the run-state lock; validating unserialised" >&2
 fi
 validate_dispatch_scope || exit $?
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0

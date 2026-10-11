@@ -1499,7 +1499,8 @@ rm -f "$REQMATCH/scope-ready" "$REQMATCH/scope-release" "$REQMATCH/scope.done"
   while [ ! -e "$REQMATCH/scope-release" ]; do sleep 0.02; done
 ) 9>"$REQMATCH/.charles/run-state.lock" &
 scope_holder=$!
-for _ in $(seq 1 100); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; done
+for _ in $(seq 1 250); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; done
+[ -e "$REQMATCH/scope-ready" ] || echo "  FAIL  run-state lock holder never became ready"
 (
   PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
     bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --validate-only --no-fallback --timeout 2 "scope" \
@@ -1508,7 +1509,7 @@ for _ in $(seq 1 100); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; d
   : > "$REQMATCH/scope.done"
 ) &
 scope_pid=$!
-sleep 0.3
+sleep 0.5
 scope_waited=1
 [ ! -e "$REQMATCH/scope.done" ] || scope_waited=0
 touch "$REQMATCH/scope-release"
@@ -1518,6 +1519,20 @@ if [ "$scope_waited" -eq 1 ] && [ "$(cat "$REQMATCH/scope.rc" 2>/dev/null)" = 0 
   echo "  PASS  requirement validation waits on the run-state lock"; pass=$((pass+1))
 else
   echo "  FAIL  requirement validation must wait on the run-state lock (waited=$scope_waited rc=$(cat "$REQMATCH/scope.rc" 2>/dev/null))"; fail=$((fail+1))
+fi
+# A full dispatch takes and releases the same lock around the start event, and
+# the engine must not inherit it: the stub probes the lock by path.
+mkdir -p "$REQMATCH/bin-inh"
+printf '#!/usr/bin/env bash\nif flock -n "$LOCKPROBE" true; then echo free > "$LOCKPROBE.result"; else echo held > "$LOCKPROBE.result"; fi\nexit 0\n' \
+  > "$REQMATCH/bin-inh/codex"; chmod +x "$REQMATCH/bin-inh/codex"
+rm -f "$REQMATCH/.charles/run-state.lock.result"
+inh_out="$(LOCKPROBE="$REQMATCH/.charles/run-state.lock" PATH="$REQMATCH/bin-inh:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --no-fallback --timeout 5 "scope" 2>&1)"; inh_rc=$?
+if [ "$inh_rc" -eq 0 ] && [ "$(cat "$REQMATCH/.charles/run-state.lock.result" 2>/dev/null)" = free ] \
+  && jq -e 'select(.event == "start")' "$REQMATCH/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  full dispatch releases the run-state lock before the engine runs"; pass=$((pass+1))
+else
+  echo "  FAIL  engine must not inherit the run-state lock (rc=$inh_rc result=$(cat "$REQMATCH/.charles/run-state.lock.result" 2>/dev/null)): $inh_out"; fail=$((fail+1))
 fi
 malformed_ok=1
 REQMAL="$BOX/req-malformed"; mkdir -p "$REQMAL"
