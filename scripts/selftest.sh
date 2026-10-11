@@ -1489,6 +1489,36 @@ if [ "$matcher_rc" -eq 2 ] && grep -qF 'requirement A9 is not in docs/specs/matc
 else
   echo "  FAIL  absent requirement must name its id and plan (rc=$matcher_rc)"; fail=$((fail+1))
 fi
+# Validation reads run and spec state, so it must wait on the run-state lock a
+# concurrent close or spec bind holds; otherwise it can validate a stale spec.
+mkdir -p "$REQMATCH/.charles"
+rm -f "$REQMATCH/scope-ready" "$REQMATCH/scope-release" "$REQMATCH/scope.done"
+(
+  flock 9
+  : > "$REQMATCH/scope-ready"
+  while [ ! -e "$REQMATCH/scope-release" ]; do sleep 0.02; done
+) 9>"$REQMATCH/.charles/run-state.lock" &
+scope_holder=$!
+for _ in $(seq 1 100); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; done
+(
+  PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+    bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --validate-only --no-fallback --timeout 2 "scope" \
+    > "$REQMATCH/scope.out" 2>&1
+  printf '%s\n' "$?" > "$REQMATCH/scope.rc"
+  : > "$REQMATCH/scope.done"
+) &
+scope_pid=$!
+sleep 0.3
+scope_waited=1
+[ ! -e "$REQMATCH/scope.done" ] || scope_waited=0
+touch "$REQMATCH/scope-release"
+wait "$scope_holder" 2>/dev/null
+wait "$scope_pid" 2>/dev/null
+if [ "$scope_waited" -eq 1 ] && [ "$(cat "$REQMATCH/scope.rc" 2>/dev/null)" = 0 ]; then
+  echo "  PASS  requirement validation waits on the run-state lock"; pass=$((pass+1))
+else
+  echo "  FAIL  requirement validation must wait on the run-state lock (waited=$scope_waited rc=$(cat "$REQMATCH/scope.rc" 2>/dev/null))"; fail=$((fail+1))
+fi
 malformed_ok=1
 REQMAL="$BOX/req-malformed"; mkdir -p "$REQMAL"
 for bad_id in lowercase1 1A R; do

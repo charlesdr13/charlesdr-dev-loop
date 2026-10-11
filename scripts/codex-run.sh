@@ -1262,6 +1262,13 @@ if [ "$LANE" != "review" ]; then
 fi
 [ "$REQ_SET" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --req is only valid with --lane implement" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || [ "$LANE" = "implement" ] || { echo "codex-run.sh: --validate-only is only valid with --lane implement" >&2; exit 2; }
+# Validation reads run and spec state, and log_start records what it resolved, so
+# both run under the run-state lock a concurrent close or spec bind takes. fd 8,
+# not 9: implement.lock below owns fd 9 and exec 9> would silently drop this lock.
+mkdir -p "$RUN_DIR/.charles" 2>/dev/null || true
+if { exec 8>"$RUN_DIR/.charles/run-state.lock"; } 2>/dev/null; then
+  flock 8 || { echo "codex-run.sh: FAILED to acquire the run-state lock" >&2; exit 6; }
+fi
 validate_dispatch_scope || exit $?
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
 validate_main_tree || exit $?
@@ -1324,6 +1331,7 @@ if ! log_start; then
   fi
   echo "codex-run.sh: WARNING — failed to write $LANE start event; continuing without receipt" >&2
 fi
+exec 8>&- # release the run-state lock; the engine must not inherit it
 DISPATCH_STARTED_US="${EPOCHREALTIME/./}"
 
 dispatch() { # dispatch ENGINE
