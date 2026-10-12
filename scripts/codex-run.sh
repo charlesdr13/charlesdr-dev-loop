@@ -1267,13 +1267,14 @@ fi
 # not 9: implement.lock below owns fd 9 and exec 9> would silently drop this lock.
 # implement.lock is taken with flock -n, so holding this lock across it can never
 # wait on another dispatch; nothing here calls run-state.sh, so no self-wait.
-# ponytail: if the lock file cannot be opened we warn and validate unserialised.
 mkdir -p "$RUN_DIR/.charles" 2>/dev/null || true
-if { exec 8>"$RUN_DIR/.charles/run-state.lock"; } 2>/dev/null; then
-  flock 8 || { echo "codex-run.sh: FAILED to acquire the run-state lock" >&2; exit 6; }
-else
-  echo "codex-run.sh: WARNING — cannot open the run-state lock; validating unserialised" >&2
-fi
+# Fail closed, like run-state.sh lock_run_state: an unserialised validation is
+# the race this lock exists to close.
+{ exec 8>"$RUN_DIR/.charles/run-state.lock"; } 2>/dev/null || {
+  echo "codex-run.sh: REFUSING — cannot open the run-state lock $RUN_DIR/.charles/run-state.lock" >&2
+  exit 6
+}
+flock 8 || { echo "codex-run.sh: FAILED to acquire the run-state lock" >&2; exit 6; }
 validate_dispatch_scope || exit $?
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
 validate_main_tree || exit $?
