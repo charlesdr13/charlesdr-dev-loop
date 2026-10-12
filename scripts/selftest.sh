@@ -1489,6 +1489,138 @@ if [ "$matcher_rc" -eq 2 ] && grep -qF 'requirement A9 is not in docs/specs/matc
 else
   echo "  FAIL  absent requirement must name its id and plan (rc=$matcher_rc)"; fail=$((fail+1))
 fi
+# Validation reads run and spec state, so it must wait on the run-state lock a
+# concurrent close or spec bind holds; otherwise it can validate a stale spec.
+mkdir -p "$REQMATCH/.charles"
+rm -f "$REQMATCH/scope-ready" "$REQMATCH/scope-release" "$REQMATCH/scope.done"
+(
+  flock 9
+  : > "$REQMATCH/scope-ready"
+  while [ ! -e "$REQMATCH/scope-release" ]; do sleep 0.02; done
+) 9>"$REQMATCH/.charles/run-state.lock" &
+scope_holder=$!
+for _ in $(seq 1 250); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; done
+[ -e "$REQMATCH/scope-ready" ] || { echo "  FAIL  run-state lock holder never became ready"; fail=$((fail+1)); }
+(
+  PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+    bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --validate-only --no-fallback --timeout 2 "scope" \
+    > "$REQMATCH/scope.out" 2>&1
+  printf '%s\n' "$?" > "$REQMATCH/scope.rc"
+  : > "$REQMATCH/scope.done"
+) &
+scope_pid=$!
+scope_waited=1
+for _ in $(seq 1 100); do # 2s of holding the lock; unlocked validation finishes well inside it
+  [ ! -e "$REQMATCH/scope.done" ] || { scope_waited=0; break; }
+  sleep 0.02
+done
+touch "$REQMATCH/scope-release"
+wait "$scope_holder" 2>/dev/null
+wait "$scope_pid" 2>/dev/null
+if [ "$scope_waited" -eq 1 ] && [ "$(cat "$REQMATCH/scope.rc" 2>/dev/null)" = 0 ]; then
+  echo "  PASS  requirement validation waits on the run-state lock"; pass=$((pass+1))
+else
+  echo "  FAIL  requirement validation must wait on the run-state lock (waited=$scope_waited rc=$(cat "$REQMATCH/scope.rc" 2>/dev/null))"; fail=$((fail+1))
+fi
+# A full dispatch takes and releases the same lock around the start event, and
+# the engine must not inherit it: the stub probes the lock by path.
+mkdir -p "$REQMATCH/bin-inh"
+printf '#!/usr/bin/env bash\nif flock -n "$LOCKPROBE" true; then echo free > "$LOCKPROBE.result"; else echo held > "$LOCKPROBE.result"; fi\nexit 0\n' \
+  > "$REQMATCH/bin-inh/codex"; chmod +x "$REQMATCH/bin-inh/codex"
+rm -f "$REQMATCH/.charles/run-state.lock.result"
+inh_out="$(LOCKPROBE="$REQMATCH/.charles/run-state.lock" PATH="$REQMATCH/bin-inh:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --no-fallback --timeout 5 "scope" 2>&1)"; inh_rc=$?
+if [ "$inh_rc" -eq 0 ] && [ "$(cat "$REQMATCH/.charles/run-state.lock.result" 2>/dev/null)" = free ] \
+  && jq -e 'select(.event == "start")' "$REQMATCH/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  full dispatch releases the run-state lock before the engine runs"; pass=$((pass+1))
+else
+  echo "  FAIL  engine must not inherit the run-state lock (rc=$inh_rc result=$(cat "$REQMATCH/.charles/run-state.lock.result" 2>/dev/null)): $inh_out"; fail=$((fail+1))
+fi
+# Run-state lock span: fail closed, held across log_start, correct path from a
+# subdirectory and a linked worktree, and not inherited by any child.
+SPANBIN="$REQMATCH/bin-span"; mkdir -p "$SPANBIN"
+real_jq="$(command -v jq)"
+# Wrapper probes the lock at the moment log_start builds the start event.
+cat > "$SPANBIN/jq" <<EOS
+#!/usr/bin/env bash
+case " \$* " in *" --arg lane "*) [ -e "\$LOCKPROBE.logstart" ] || if flock -n "\$LOCKPROBE" true; then printf free; else printf held; fi > "\$LOCKPROBE.logstart" ;; esac
+exec "$real_jq" "\$@"
+EOS
+cat > "$SPANBIN/codex" <<'EOS'
+#!/usr/bin/env bash
+# Any process still holding the run-state lock open after release is an inherited fd.
+n="$(ls -l /proc/[0-9]*/fd/* 2>/dev/null | grep -cF -- "-> $LOCKPROBE")"
+printf '%s' "$n" > "$LOCKPROBE.holders"
+exit 0
+EOS
+chmod +x "$SPANBIN/jq" "$SPANBIN/codex"
+rm -f "$REQMATCH/.charles/run-state.lock".logstart "$REQMATCH/.charles/run-state.lock".holders
+: > "$REQMATCH/.charles/dispatches.jsonl"
+span_out="$(LOCKPROBE="$REQMATCH/.charles/run-state.lock" PATH="$SPANBIN:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
+  timeout 60 bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --no-fallback --timeout 30 "scope" 2>&1)"; span_rc=$?
+span_logstart="$(cat "$REQMATCH/.charles/run-state.lock.logstart" 2>/dev/null)"
+span_holders="$(cat "$REQMATCH/.charles/run-state.lock.holders" 2>/dev/null)"
+if [ "$span_rc" -eq 0 ] && [ "$span_logstart" = held ] && [ "$span_holders" = 0 ]; then
+  echo "  PASS  lock is held at log_start and no process holds it once the engine runs"; pass=$((pass+1))
+else
+  echo "  FAIL  lock must be held at log_start and not inherited (rc=$span_rc logstart=$span_logstart holders=$span_holders): $span_out"; fail=$((fail+1))
+fi
+# No run-state.sh call may sit inside the locked span (it would wait on our own lock).
+if ! grep -v '^[[:space:]]*#' "$RUN_SH" | grep -q 'run-state\.sh'; then
+  echo "  PASS  codex-run never calls run-state.sh inside the locked span"; pass=$((pass+1))
+else
+  echo "  FAIL  codex-run.sh must not call run-state.sh while holding the run-state lock"; fail=$((fail+1))
+fi
+
+# Unopenable lock file: refuse, do not validate unserialised.
+LOCKFAIL="$BOX/lock-fail"; mkdir -p "$LOCKFAIL/.charles/run-state.lock"
+lockfail_out="$(PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$LOCKFAIL/state" \
+  bash "$RUN_SH" --lane implement --dir "$LOCKFAIL" --req R1 --validate-only --no-fallback "scope" 2>&1)"; lockfail_rc=$?
+if [ "$lockfail_rc" -eq 6 ] && grep -qF 'cannot open the run-state lock' <<<"$lockfail_out"; then
+  echo "  PASS  unopenable run-state lock refuses the dispatch"; pass=$((pass+1))
+else
+  echo "  FAIL  unopenable run-state lock must refuse (rc=$lockfail_rc): $lockfail_out"; fail=$((fail+1))
+fi
+
+# The lock file is the repo-root one from a subdirectory and from a linked worktree.
+LOCKGIT="$BOX/lock-git"; mkdir -p "$LOCKGIT/docs/specs" "$LOCKGIT/sub" "$LOCKGIT/.charles/runs/open-run"
+cp "$REQMATCH/docs/specs/matcher.md" "$LOCKGIT/docs/specs/matcher.md"
+printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/matcher.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
+  > "$LOCKGIT/.charles/runs/open-run/RUN.md"
+printf '.charles/\n' > "$LOCKGIT/.gitignore"; : > "$LOCKGIT/sub/keep"
+( cd "$LOCKGIT" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
+  && git worktree add -q "$BOX/lock-git-wt" -b lockwt ) >/dev/null 2>&1
+for lock_dir in "$LOCKGIT/sub" "$BOX/lock-git-wt"; do
+  rm -f "$LOCKGIT/scope-ready" "$LOCKGIT/scope-release" "$LOCKGIT/scope.done" "$LOCKGIT/scope.rc"
+  (
+    flock 9
+    : > "$LOCKGIT/scope-ready"
+    while [ ! -e "$LOCKGIT/scope-release" ]; do sleep 0.02; done
+  ) 9>"$LOCKGIT/.charles/run-state.lock" &
+  lock_holder=$!
+  for _ in $(seq 1 250); do [ -e "$LOCKGIT/scope-ready" ] && break; sleep 0.02; done
+  (
+    PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$LOCKGIT/state" \
+      timeout 60 bash "$RUN_SH" --lane implement --dir "$lock_dir" --req R1 --validate-only --no-fallback "scope" >/dev/null 2>&1
+    printf '%s\n' "$?" > "$LOCKGIT/scope.rc"
+    : > "$LOCKGIT/scope.done"
+  ) &
+  lock_pid=$!
+  lock_waited=1
+  for _ in $(seq 1 100); do
+    [ ! -e "$LOCKGIT/scope.done" ] || { lock_waited=0; break; }
+    sleep 0.02
+  done
+  touch "$LOCKGIT/scope-release"
+  wait "$lock_holder" 2>/dev/null; wait "$lock_pid" 2>/dev/null
+  lock_rc="$(cat "$LOCKGIT/scope.rc" 2>/dev/null)"
+  if [ "$lock_waited" -eq 1 ] && [ "$lock_rc" = 0 ]; then
+    echo "  PASS  validation from ${lock_dir#$BOX/} waits on the repo-root run-state lock"; pass=$((pass+1))
+  else
+    echo "  FAIL  validation from ${lock_dir#$BOX/} must wait on the repo-root lock (waited=$lock_waited rc=$lock_rc)"; fail=$((fail+1))
+  fi
+done
+
 malformed_ok=1
 REQMAL="$BOX/req-malformed"; mkdir -p "$REQMAL"
 for bad_id in lowercase1 1A R; do
