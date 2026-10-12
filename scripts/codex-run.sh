@@ -1265,6 +1265,9 @@ fi
 # Validation reads run and spec state, and log_start records what it resolved, so
 # both run under the run-state lock a concurrent close or spec bind takes. fd 8,
 # not 9: implement.lock below owns fd 9 and exec 9> would silently drop this lock.
+# implement.lock is taken with flock -n, so holding this lock across it can never
+# wait on another dispatch; nothing here calls run-state.sh, so no self-wait.
+# ponytail: if the lock file cannot be opened we warn and validate unserialised.
 mkdir -p "$RUN_DIR/.charles" 2>/dev/null || true
 if { exec 8>"$RUN_DIR/.charles/run-state.lock"; } 2>/dev/null; then
   flock 8 || { echo "codex-run.sh: FAILED to acquire the run-state lock" >&2; exit 6; }

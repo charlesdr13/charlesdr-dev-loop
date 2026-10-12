@@ -1500,7 +1500,7 @@ rm -f "$REQMATCH/scope-ready" "$REQMATCH/scope-release" "$REQMATCH/scope.done"
 ) 9>"$REQMATCH/.charles/run-state.lock" &
 scope_holder=$!
 for _ in $(seq 1 250); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; done
-[ -e "$REQMATCH/scope-ready" ] || echo "  FAIL  run-state lock holder never became ready"
+[ -e "$REQMATCH/scope-ready" ] || { echo "  FAIL  run-state lock holder never became ready"; fail=$((fail+1)); }
 (
   PATH="$REQMATCH/bin:$PATH" CHARLES_STATE_DIR="$REQMATCH/state" \
     bash "$RUN_SH" --lane implement --dir "$REQMATCH" --req R1 --validate-only --no-fallback --timeout 2 "scope" \
@@ -1509,9 +1509,11 @@ for _ in $(seq 1 250); do [ -e "$REQMATCH/scope-ready" ] && break; sleep 0.02; d
   : > "$REQMATCH/scope.done"
 ) &
 scope_pid=$!
-sleep 0.5
 scope_waited=1
-[ ! -e "$REQMATCH/scope.done" ] || scope_waited=0
+for _ in $(seq 1 100); do # 2s of holding the lock; unlocked validation finishes well inside it
+  [ ! -e "$REQMATCH/scope.done" ] || { scope_waited=0; break; }
+  sleep 0.02
+done
 touch "$REQMATCH/scope-release"
 wait "$scope_holder" 2>/dev/null
 wait "$scope_pid" 2>/dev/null
