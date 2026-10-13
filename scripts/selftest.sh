@@ -3719,7 +3719,8 @@ for cd_hdr in "charles-req: R1" "charles-base: main"; do  # any one header asks 
   cd_hdr_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "$cd_hdr
 
 grade it" "$BOX/plain")"
-  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_hdr_out")" = deny ]; then
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_hdr_out")" = deny ] \
+    && jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_hdr_out" | grep -q charles-optin-local; then
     echo "  PASS  a lone '${cd_hdr%%:*}' header at an un-opted-in dir is denied"; pass=$((pass+1))
   else
     echo "  FAIL  a lone '${cd_hdr%%:*}' header at an un-opted-in dir must be denied, got: $cd_hdr_out"; fail=$((fail+1))
