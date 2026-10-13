@@ -3701,6 +3701,21 @@ cd_check_silent "a non-claude agent is ignored" "Explore" "find the main entrypo
 cd_check_silent "a repo without .charles.toml is ignored" \
   "charlesdr-dev-loop:claude-explorer" "find the main entrypoint" "$BOX/plain"
 
+# explicit charles-* headers at a dir that never opted in: deny and name the fix, never spawn a lane
+# agent with no box (it would find every read blocked and return CANNOT TELL).
+cd_env=()
+cd_noopt_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-dir: $BOX/plain
+charles-plan: $BOX/plain/plan.md
+
+grade it" "$CL/repo")"
+cd_noopt_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_noopt_out")"
+if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_noopt_out")" = deny ] \
+  && grep -q "charles-optin-local" <<<"$cd_noopt_reason"; then
+  echo "  PASS  explicit headers at an un-opted-in dir are denied with the opt-in fix"; pass=$((pass+1))
+else
+  echo "  FAIL  explicit headers at an un-opted-in dir must be denied naming charles-optin-local, got: $cd_noopt_out"; fail=$((fail+1))
+fi
+
 # an unknown charles-foo: header is denied, naming it (R1/R3).
 cd_env=()
 cd_unknown_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "charles-foo: bar

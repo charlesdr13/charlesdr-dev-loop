@@ -76,7 +76,14 @@ while [ -n "$d" ] && [ "$d" != "/" ]; do
   [ "$parent" = "$d" ] && break     # no progress: stop rather than spin
   d="$parent"
 done
-[ -n "$root" ] || exit 0
+if [ -z "$root" ]; then
+  # No charles-* headers: an ordinary agent in a repo that never opted in, not ours. With headers, the
+  # caller asked for a lane: passing through would spawn the agent with no box, every read blocked.
+  [ -n "$cl_dir$cl_plan$cl_req$cl_base" ] || exit 0
+  jq -nc --arg r "$dir is not opted in to charlesdr-dev-loop (no .charles.toml at or above it), so no $lane lane can be dispatched there. Run charles-optin-local in that directory first, then spawn again." \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+fi
 
 if [ -n "$cl_unknown" ]; then
   jq -nc --arg r "unknown header '$cl_unknown:' — recognised: charles-dir, charles-plan, charles-req, charles-base" \
