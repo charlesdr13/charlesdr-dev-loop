@@ -3715,6 +3715,16 @@ if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_noopt_ou
 else
   echo "  FAIL  explicit headers at an un-opted-in dir must be denied naming charles-optin-local, got: $cd_noopt_out"; fail=$((fail+1))
 fi
+for cd_hdr in "charles-req: R1" "charles-base: main"; do  # any one header asks for a lane, not just dir/plan
+  cd_hdr_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "$cd_hdr
+
+grade it" "$BOX/plain")"
+  if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_hdr_out")" = deny ]; then
+    echo "  PASS  a lone '${cd_hdr%%:*}' header at an un-opted-in dir is denied"; pass=$((pass+1))
+  else
+    echo "  FAIL  a lone '${cd_hdr%%:*}' header at an un-opted-in dir must be denied, got: $cd_hdr_out"; fail=$((fail+1))
+  fi
+done
 
 # an unknown charles-foo: header is denied, naming it (R1/R3).
 cd_env=()
