@@ -254,9 +254,9 @@ cannot verify itself cannot honestly say it is finished.
 
 | Role | Engine | Effort | Sandbox |
 |---|---|---|---|
-| explore | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
-| implement | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5 with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
-| review | gpt-6.1-sol with a codex engine; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
+| explore | `claude-explorer` subagent (default); gpt-6-luna with `luna`; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
+| implement | `claude-implementer` subagent (default); gpt-6-luna with `luna`; grok-4.6 with `grok`; cursor/composer-2.5 with `omp` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
+| review | `claude-reviewer` subagent (default); gpt-6.1-sol with a codex engine; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 With no `--engine` or `/engine` preference every lane is a claude subagent
 (`CHARLES_DEFAULT_ENGINE` overrides the built-in default). When codex is chosen, luna at max

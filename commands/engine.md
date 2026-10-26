@@ -26,7 +26,7 @@ esac
 PICK="${CHARLES_ENGINE:-}"; SCOPE=environment
 if [ -z "$PICK" ]; then PICK="$(cat "$ROOT/.charles/engine" 2>/dev/null || true)"; SCOPE=project; fi
 if [ -z "$PICK" ]; then PICK="$(cat "$D/engine" 2>/dev/null || true)"; SCOPE=global; fi
-case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK='default (claude subagents)'; SCOPE=default ;; esac
+case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK="${CHARLES_DEFAULT_ENGINE-claude}"; PICK="default (${PICK:-luna; review on sol})"; SCOPE=default ;; esac
 echo "engine ($SCOPE): $PICK"
 ```
 

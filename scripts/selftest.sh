@@ -4693,11 +4693,25 @@ git -C "$DEF/repo" init -q; printf -- '- [ ] **R1** — x\n' > "$DEF/repo/plan.m
 git -C "$DEF/repo" add -A; git -C "$DEF/repo" -c user.email=t@t -c user.name=t commit -qm init; echo b >> "$DEF/repo/f"
 def_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" "default engine" 2>&1)"; def_rc=$?
 defr_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane review --plan "$DEF/repo/plan.md" --dir "$DEF/repo" "default review" 2>&1)"; defr_rc=$?
-if [ "$def_rc" -eq 0 ] && grep -q 'claude-explorer' <<<"$def_out" && grep -q 'claude-reviewer' <<<"$defr_out"; then
+if [ "$def_rc" -eq 0 ] && [ "$defr_rc" -eq 0 ] && grep -q '^SPAWN: charlesdr-dev-loop:claude-explorer' <<<"$def_out" \
+  && grep -q '^SPAWN: charlesdr-dev-loop:claude-reviewer' <<<"$defr_out"; then
   echo "  PASS  unconfigured lanes default to claude subagents"; pass=$((pass+1))
 else
   echo "  FAIL  unconfigured lanes must default to claude (rc=$def_rc/$defr_rc): $def_out | $defr_out"; fail=$((fail+1))
 fi
+mkdir -p "$DEF/bin"; printf '#!/usr/bin/env bash\nprintf "luna ran\\n"\n' > "$DEF/bin/codex"; chmod +x "$DEF/bin/codex"
+for defp in global project; do
+  rm -f "$DEF/state/engine" "$DEF/repo/.charles/engine"
+  if [ "$defp" = global ]; then mkdir -p "$DEF/state"; printf 'luna\n' > "$DEF/state/engine"
+  else mkdir -p "$DEF/repo/.charles"; printf 'luna\n' > "$DEF/repo/.charles/engine"; fi
+  defp_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE PATH="$DEF/bin:$PATH" CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" --timeout 5 "pref beats default" 2>&1)"
+  if ! grep -q '^SPAWN:' <<<"$defp_out" && grep -q 'codex/gpt-6-luna' <<<"$defp_out"; then
+    echo "  PASS  a $defp engine preference beats the claude default"; pass=$((pass+1))
+  else
+    echo "  FAIL  a $defp preference must beat the claude default: $defp_out"; fail=$((fail+1))
+  fi
+done
+rm -f "$DEF/state/engine" "$DEF/repo/.charles/engine"
 FBD="$BOX/fallback-no-deepseek"; mkdir -p "$FBD/bin" "$FBD/repo" "$FBD/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/codex"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/grok"
 printf '#!/usr/bin/env bash\n: > "%s/ds-ran"\n' "$FBD" > "$FBD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"

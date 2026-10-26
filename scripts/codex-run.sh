@@ -157,7 +157,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 
 LANE=""
 ENGINE="luna"        # used only when CHARLES_DEFAULT_ENGINE is empty; claude is the default below
-ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
+ENGINE_SET=0         # 0 only with an empty CHARLES_DEFAULT_ENGINE: review then falls back to sol
 ENGINE_FROM_FLAG=0   # only --engine is explicit; env/file preferences set ENGINE_SET too
 OMP_MODEL=""         # set once an "omp:<provider>/<model>" preference is split below
 EFFORT_SET=0         # review picks effort from its resolved model unless set

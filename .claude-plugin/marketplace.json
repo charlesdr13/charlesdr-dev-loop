@@ -4,14 +4,14 @@
     "name": "charlesdr13"
   },
   "metadata": {
-    "description": "charlesdr-dev-loop: personal dev-loop plugin — codex lanes, grilling, adversarial review.",
+    "description": "charlesdr-dev-loop: personal dev-loop plugin — Claude subagent lanes (codex or grok on request), isolated review.",
     "version": "2.49.1"
   },
   "plugins": [
     {
       "name": "charlesdr-dev-loop",
       "source": "./",
-      "description": "Orchestrator-only Claude Code: codex explore/implement lanes, bounded grilling, isolated adversarial review",
+      "description": "Claude Code orchestrates its own explore/implement subagents (codex or grok on request), isolated adversarial review",
       "version": "2.49.1",
       "category": "productivity"
     }
