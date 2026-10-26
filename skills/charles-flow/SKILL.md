@@ -48,6 +48,11 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
    third round only for money, auth/security or data-loss changes. Verify each
    finding against source before acting; never feed the reviewer the implementer's
    output.
+   In a no-mistakes repo (`git remote get-url no-mistakes` succeeds) skip this
+   review: run `green.sh` first, then commit on a feature branch and push through
+   `/no-mistakes` with the plan's goal and requirements as `--intent`; its review,
+   tests and CI are the gate, and any later fix goes back through it. Then
+   `run-state.sh phase "$(pwd)" review "no-mistakes: passed, <PR url>"`.
 6. **Green, sign off, close.** `green.sh`, complete `## Sign-off`, `run-state.sh close`.
 
 Record `run-state.sh phase` at implement, review and green, with real output
