@@ -4957,6 +4957,9 @@ else
   echo "  FAIL  flow status should list the orphan (rc=$orphan_flow_rc)"; fail=$((fail+1))
 fi
 bash "$RS" init "$OR" feature "orphan close" >/dev/null 2>&1
+# re-stamp after init: close only attributes dispatches at or after "- started:", and the
+# checks above can cross a second boundary on a loaded machine.
+sed -i "s/$OR_NOW/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" "$OR/.charles/dispatches.jsonl"
 orphan_close="$(CHARLES_STATE_DIR="$OR_STATE" bash "$RS" close "$OR" done 2>&1)"; orphan_close_rc=$?
 if [ "$orphan_close_rc" -eq 5 ] && grep -q 'orphan' <<<"$orphan_close"; then
   echo "  PASS  close refuses while an orphan exists"; pass=$((pass+1))
