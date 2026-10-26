@@ -4675,6 +4675,17 @@ if [ "$fbg_rc" -eq 0 ] && grep -q 'fallback_from:grok primary_rc:3' <<<"$fbg_out
 else
   echo "  FAIL  grok must fall back to luna (rc=$fbg_rc): $fbg_out"; fail=$((fail+1))
 fi
+FBU="$BOX/fallback-usage"; mkdir -p "$FBU/bin" "$FBU/repo"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$FBU/bin/grok"
+printf '#!/usr/bin/env bash\n: > "%s/luna-ran"\n' "$FBU" > "$FBU/bin/codex"
+chmod +x "$FBU/bin/grok" "$FBU/bin/codex"
+fbu_out="$(CHARLES_STATE_DIR="$FBU/state" PATH="$FBU/bin:$PATH" bash "$RUN_SH" --lane explore --engine grok --dir "$FBU/repo" --timeout 5 "usage error" 2>&1)"; fbu_rc=$?
+if [ "$fbu_rc" -eq 2 ] && [ ! -e "$FBU/luna-ran" ] && ! grep -q 'fallback_from' <<<"$fbu_out" \
+  && [ "$(jq -s '[.[] | select(.event == "end")] | length' "$FBU/repo/.charles/dispatches.jsonl" 2>/dev/null)" = 1 ]; then
+  echo "  PASS  a grok usage error (rc 2) does not fall back"; pass=$((pass+1))
+else
+  echo "  FAIL  rc 2 must not fall back (rc=$fbu_rc): $fbu_out"; fail=$((fail+1))
+fi
 FBD="$BOX/fallback-no-deepseek"; mkdir -p "$FBD/bin" "$FBD/repo" "$FBD/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/codex"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/grok"
 printf '#!/usr/bin/env bash\n: > "%s/ds-ran"\n' "$FBD" > "$FBD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
@@ -5580,7 +5591,8 @@ printf '# Run r5-parallel\n\n- flow: feature\n- spec: docs/specs/parallel-ungril
 r5_parallel_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" \
   bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/parallel-ungrilled.chunks.json" \
   --run r5-parallel --no-green 2>&1)"; r5_parallel_rc=$?
-if ! grep -qF 'was refused' <<<"$r5_parallel_out" && ! grep -qF 'invalid manifest' <<<"$r5_parallel_out"; then
+# Reaching dispatch proves preflight accepted the ungrilled spec; the fixture's chunks are rejected later on purpose.
+if grep -qF 'dispatching 2 chunks in parallel' <<<"$r5_parallel_out" && ! grep -qF 'was refused' <<<"$r5_parallel_out"; then
   echo "  PASS  parallel-chunks does not refuse an ungrilled spec"; pass=$((pass+1))
 else
   echo "  FAIL  parallel-chunks must not refuse an ungrilled spec (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))

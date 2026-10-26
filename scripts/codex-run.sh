@@ -695,7 +695,7 @@ log_start() {
       | if $flow_run_id == "" then . else . + {flow_run_id:$flow_run_id} end
       | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
-        + (if $grill == "" then {} else {grill:$grill} end) else . end' \
+        + (if $grill == "" then {} else {grill:$grill} end) else . end' 2>/dev/null \
      | append_receipt "$f" 2>/dev/null
 }
 
@@ -738,7 +738,7 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
         + (if $grill == "" then {} else {grill:$grill} end) else . end
-      | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
+      | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' 2>/dev/null \
      | append_receipt "$f" 2>/dev/null || true
 }
 
