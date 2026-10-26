@@ -90,8 +90,24 @@ start_record="$(jq -c --arg r "$run_id" --arg l "$lane" \
 rc="${CHARLES_LANE_RC:-0}"
 case "$rc" in ""|*[!0-9]*) rc=0 ;; esac
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq -c --arg ts "$now" --arg model "$model" --argjson rc "$rc" \
+end_record="$(jq -c --arg ts "$now" --arg model "$model" --argjson rc "$rc" \
   '.ts = $ts | .event = "end" | .engine = "claude" | .model = $model | .rc = $rc' \
-  <<<"$start_record" >> "$log" 2>/dev/null || exit 0
+  <<<"$start_record" 2>/dev/null)" || exit 0
+printf '%s\n' "$end_record" >> "$log" 2>/dev/null || exit 0
+
+# In a linked worktree codex-run mirrored the start to the main checkout's log
+# (append_receipt); mirror the end too, or close in the main checkout reports
+# an orphan once the worktree is gone.
+g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git -C "$dir")
+common="$("${g[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+gitdir="$("${g[@]}" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || exit 0
+[ "$gitdir" != "$common" ] && [ "$(basename "$common")" = ".git" ] || exit 0
+main="$(dirname "$common")/.charles/dispatches.jsonl"
+[ -s "$main" ] && [ "$(realpath -m "$main")" != "$(realpath -m "$log")" ] || exit 0
+# Only into a log that already holds this run's start and no end yet. jq prints
+# matches before any malformed line stops it, so read its output, not its status.
+seen="$(jq -r --arg r "$run_id" 'select(.run == $r) | .event' "$main" 2>/dev/null || true)"
+grep -qx start <<<"$seen" && ! grep -qx end <<<"$seen" || exit 0
+printf '%s\n' "$end_record" >> "$main" 2>/dev/null || true
 
 exit 0

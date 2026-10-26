@@ -3139,6 +3139,43 @@ else
   echo "  FAIL  claude-lane-receipt.sh must map claude-explorer to haiku"; fail=$((fail+1))
 fi
 
+# A worktree implementer: codex-run logs the start in the worktree and mirrors it
+# to the main checkout; the end must reach the main log too, exactly once.
+WTM="$BOX/wt-main"; WTL="$BOX/wt-lane"; wt_run="20260101-000000-1-implement"
+( unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE; cd "$BOX" && git init -q wt-main && cd wt-main && git config user.name tester \
+    && git config user.email tester@example.invalid && git commit -q --allow-empty -m init \
+    && git worktree add -q "$WTL" -b wt-lane ) >/dev/null 2>&1
+mkdir -p "$WTM/.charles" "$WTL/.charles"
+jq -nc --arg r "$wt_run" --arg d "$WTL" '{ts:"2026-01-01T00:00:00Z",event:"start",lane:"implement",engine:"claude",run:$r,dir:$d,task:"t"}' \
+  | tee -a "$WTL/.charles/dispatches.jsonl" >> "$WTM/.charles/dispatches.jsonl"
+wt_prompt="charles-run: $wt_run
+charles-dir: $WTL
+
+implement R1"
+wt_ends() { jq -s --arg r "$2" 'map(select(.run == $r and .event == "end")) | length' "$1"; }
+# PostToolUse, then SubagentStop for the same call
+jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "$wt_prompt" \
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+jq -nc --arg p "$wt_prompt" '{type:"user",message:{role:"user",content:$p}}' > "$BOX/wt-transcript.jsonl"
+jq -nc --arg t "$BOX/wt-transcript.jsonl" \
+  '{hook_event_name:"SubagentStop",agent_type:"charlesdr-dev-loop:claude-implementer",agent_transcript_path:$t}' | bash "$RECEIPT"
+# the main-log guard alone must stop a second mirror: drop the worktree's end and fire again
+grep -v '"event":"end"' "$WTL/.charles/dispatches.jsonl" > "$BOX/wt-log" && cp "$BOX/wt-log" "$WTL/.charles/dispatches.jsonl"
+jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "$wt_prompt" \
+  '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+# a run whose start never reached the main log is not mirrored there
+wt_run2="20260101-000001-2-implement"
+jq -nc --arg r "$wt_run2" --arg d "$WTL" '{ts:"2026-01-01T00:00:01Z",event:"start",lane:"implement",engine:"claude",run:$r,dir:$d,task:"t"}' \
+  >> "$WTL/.charles/dispatches.jsonl"
+jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "charles-run: $wt_run2
+charles-dir: $WTL" '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
+if [ "$(wt_ends "$WTM/.charles/dispatches.jsonl" "$wt_run")" = 1 ] && [ "$(wt_ends "$WTL/.charles/dispatches.jsonl" "$wt_run")" = 1 ] \
+  && [ "$(wt_ends "$WTM/.charles/dispatches.jsonl" "$wt_run2")" = 0 ] && [ "$(wt_ends "$WTL/.charles/dispatches.jsonl" "$wt_run2")" = 1 ]; then
+  echo "  PASS  a worktree lane's end event reaches the main checkout's log once, only where its start is"; pass=$((pass+1))
+else
+  echo "  FAIL  a worktree lane's end event must be mirrored once, and only to a main log holding its start"; fail=$((fail+1))
+fi
+
 # a claude preference (any source) now hands review off to claude-reviewer too —
 # no more silently pinning sol now that a claude review lane exists (R2).
 for cl_source in project environment global; do
