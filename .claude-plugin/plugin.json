@@ -1,7 +1,7 @@
 {
   "name": "charlesdr-dev-loop",
-  "version": "2.49.0",
-  "description": "Charles's development loop: Claude Code orchestrates, Codex lanes explore and implement, an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Opt-in per repo via .charles.toml.",
+  "version": "2.49.1",
+  "description": "Charles's development loop: Claude Code orchestrates, its own subagents explore and implement (codex or grok when asked), an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Opt-in per repo via .charles.toml.",
   "author": {
     "name": "charlesdr-dev-loop"
   },

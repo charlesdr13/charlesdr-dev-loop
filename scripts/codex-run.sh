@@ -156,8 +156,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 . "$SCRIPT_DIR/run-common.sh"
 
 LANE=""
-ENGINE="luna"        # primary for every dispatch; grok is its fallback
-ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
+ENGINE="luna"        # used only when CHARLES_DEFAULT_ENGINE is empty; claude is the default below
+ENGINE_SET=0         # 0 only with an empty CHARLES_DEFAULT_ENGINE: review then falls back to sol
 ENGINE_FROM_FLAG=0   # only --engine is explicit; env/file preferences set ENGINE_SET too
 OMP_MODEL=""         # set once an "omp:<provider>/<model>" preference is split below
 EFFORT_SET=0         # review picks effort from its resolved model unless set
@@ -232,6 +232,9 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   pref_src=env
   [ -n "$pick" ] || { pick="$(cat "$RUN_DIR/.charles/engine" 2>/dev/null || true)"; pref_src="project file"; }
   [ -n "$pick" ] || { pick="$(cat "$STATE_DIR/engine" 2>/dev/null || true)"; pref_src="global file"; }
+  # Charles 2026-10-26: own subagents unless codex or grok is asked for. Empty
+  # CHARLES_DEFAULT_ENGINE keeps the old luna lanes with sol review (the selftest's stubs).
+  [ -n "$pick" ] || { pick="${CHARLES_DEFAULT_ENGINE-claude}"; pref_src="built-in default"; }
   case "$pick" in
     luna|terra|claude|grok|omp|omp:*) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude, grok, and omp review all honour this preference (R8)
     deepseek)

@@ -1,6 +1,6 @@
 ---
 name: charles-flow
-description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a repo with a .charles.toml. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. Claude orchestrates; lanes (codex, claude, grok, omp engines) explore and implement; an isolated reviewer grades the diff against the plan. Not for repos without a .charles.toml.
+description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a repo with a .charles.toml. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. Claude orchestrates; its own subagents explore and implement by default (codex, grok or omp only when asked); an isolated reviewer grades the diff against the plan. Not for repos without a .charles.toml.
 ---
 
 # The flow
@@ -33,7 +33,10 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
    background. Baseline green before changing anything:
    `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`. Never attribute an
    existing red to your change.
-2. **Plan.** One plan, `docs/specs/YYYY-MM-DD-<topic>.md`, written as checkable
+2. **Anchor, then plan.** If the ask leaves a real fork (scope, user-visible
+   behaviour, an irreversible choice), ask at most 3 questions in one message, each
+   with your recommended default, then carry on with the defaults without waiting;
+   fold late answers into the plan. One plan, `docs/specs/YYYY-MM-DD-<topic>.md`, written as checkable
    requirements, not steps (see Plans). Do not also write an implementation plan.
 3. **Open the run.** `run-state.sh init "$(pwd)" <flow> "<goal>" --spec docs/specs/<plan>.md`.
 4. **Implement.** Small, obvious edits: do them yourself. Anything bigger goes to
@@ -78,12 +81,12 @@ No manifest for a single slice.
 
 | Role | Lane | Default engine | Sandbox |
 |---|---|---|---|
-| Explore | `--lane explore` | gpt-6-luna @ max | read-only |
-| Implement | `--lane implement` | gpt-6-luna @ max | workspace-write |
-| Review | `--lane review` | sol @ medium; luna/terra @ max; `--effort` overrides | read-only, isolated temp dir |
+| Explore | `--lane explore` | `claude-explorer` (haiku); luna @ max when asked | read-only |
+| Implement | `--lane implement` | `claude-implementer` (sonnet); luna @ max when asked | workspace-write |
+| Review | `--lane review` | `claude-reviewer` (opus); sol @ medium when asked | read-only, isolated temp dir |
 
-Engines: `luna`, `terra`, `grok`, `claude`, `omp`, `deepseek` (only when chosen
-explicitly with `--engine deepseek`). Failed luna/terra lanes fall back to grok,
+Default engine: `claude`, your own subagents. Use `luna`, `terra`, `grok`, `omp` or
+`deepseek` only when the user asks (`--engine`, or an `/engine` preference). Failed luna/terra lanes fall back to grok,
 failed grok to luna, with a `fallback_from:<engine> primary_rc:<n>` receipt.
 
 **engine=claude:** one Agent call is the whole dispatch, no `codex-run` in Bash.
@@ -117,7 +120,7 @@ Never call Cursor's own `Task` tool ("Subagents are not implemented by this
 client" means wrong tool; run the orchestrator on `anthropic/claude-opus-5-5`).
 `codex-run` stays the tool for `run-state.sh`, `verify-receipt.sh`, `green.sh`.
 
-## Dispatching
+## Dispatching codex, grok or omp lanes
 
 The Bash tool caps a call at 600s, but over half of real lane runs take longer.
 Explore and implement therefore run as a Bash call with `run_in_background: true`:

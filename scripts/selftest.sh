@@ -2,6 +2,8 @@
 # selftest.sh — asserts the plugin's scripts and hooks behave as specified.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
+# The stubs below exercise the codex/grok lanes; the claude default is tested explicitly.
+export CHARLES_DEFAULT_ENGINE=
 unset CHARLES_FAST_MODE CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
@@ -4686,6 +4688,30 @@ if [ "$fbu_rc" -eq 2 ] && [ ! -e "$FBU/luna-ran" ] && ! grep -q 'fallback_from' 
 else
   echo "  FAIL  rc 2 must not fall back (rc=$fbu_rc): $fbu_out"; fail=$((fail+1))
 fi
+DEF="$BOX/default-claude"; mkdir -p "$DEF/repo"
+git -C "$DEF/repo" init -q; printf -- '- [ ] **R1** — x\n' > "$DEF/repo/plan.md"; echo a > "$DEF/repo/f"
+git -C "$DEF/repo" add -A; git -C "$DEF/repo" -c user.email=t@t -c user.name=t commit -qm init; echo b >> "$DEF/repo/f"
+def_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" "default engine" 2>&1)"; def_rc=$?
+defr_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane review --plan "$DEF/repo/plan.md" --dir "$DEF/repo" "default review" 2>&1)"; defr_rc=$?
+if [ "$def_rc" -eq 0 ] && [ "$defr_rc" -eq 0 ] && grep -q '^SPAWN: charlesdr-dev-loop:claude-explorer' <<<"$def_out" \
+  && grep -q '^SPAWN: charlesdr-dev-loop:claude-reviewer' <<<"$defr_out"; then
+  echo "  PASS  unconfigured lanes default to claude subagents"; pass=$((pass+1))
+else
+  echo "  FAIL  unconfigured lanes must default to claude (rc=$def_rc/$defr_rc): $def_out | $defr_out"; fail=$((fail+1))
+fi
+mkdir -p "$DEF/bin"; printf '#!/usr/bin/env bash\nprintf "luna ran\\n"\n' > "$DEF/bin/codex"; chmod +x "$DEF/bin/codex"
+for defp in global project; do
+  rm -f "$DEF/state/engine" "$DEF/repo/.charles/engine"
+  if [ "$defp" = global ]; then mkdir -p "$DEF/state"; printf 'luna\n' > "$DEF/state/engine"
+  else mkdir -p "$DEF/repo/.charles"; printf 'luna\n' > "$DEF/repo/.charles/engine"; fi
+  defp_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE PATH="$DEF/bin:$PATH" CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" --timeout 5 "pref beats default" 2>&1)"
+  if ! grep -q '^SPAWN:' <<<"$defp_out" && grep -q 'codex/gpt-6-luna' <<<"$defp_out"; then
+    echo "  PASS  a $defp engine preference beats the claude default"; pass=$((pass+1))
+  else
+    echo "  FAIL  a $defp preference must beat the claude default: $defp_out"; fail=$((fail+1))
+  fi
+done
+rm -f "$DEF/state/engine" "$DEF/repo/.charles/engine"
 FBD="$BOX/fallback-no-deepseek"; mkdir -p "$FBD/bin" "$FBD/repo" "$FBD/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/codex"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/grok"
 printf '#!/usr/bin/env bash\n: > "%s/ds-ran"\n' "$FBD" > "$FBD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
@@ -4931,6 +4957,9 @@ else
   echo "  FAIL  flow status should list the orphan (rc=$orphan_flow_rc)"; fail=$((fail+1))
 fi
 bash "$RS" init "$OR" feature "orphan close" >/dev/null 2>&1
+# re-stamp after init: close only attributes dispatches at or after "- started:", and the
+# checks above can cross a second boundary on a loaded machine.
+sed -i "s/$OR_NOW/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" "$OR/.charles/dispatches.jsonl"
 orphan_close="$(CHARLES_STATE_DIR="$OR_STATE" bash "$RS" close "$OR" done 2>&1)"; orphan_close_rc=$?
 if [ "$orphan_close_rc" -eq 5 ] && grep -q 'orphan' <<<"$orphan_close"; then
   echo "  PASS  close refuses while an orphan exists"; pass=$((pass+1))
