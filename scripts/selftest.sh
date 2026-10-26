@@ -2,6 +2,8 @@
 # selftest.sh — asserts the plugin's scripts and hooks behave as specified.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
+# The stubs below exercise the codex/grok lanes; the claude default is tested explicitly.
+export CHARLES_DEFAULT_ENGINE=
 unset CHARLES_FAST_MODE CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
@@ -4685,6 +4687,16 @@ if [ "$fbu_rc" -eq 2 ] && [ ! -e "$FBU/luna-ran" ] && ! grep -q 'fallback_from' 
   echo "  PASS  a grok usage error (rc 2) does not fall back"; pass=$((pass+1))
 else
   echo "  FAIL  rc 2 must not fall back (rc=$fbu_rc): $fbu_out"; fail=$((fail+1))
+fi
+DEF="$BOX/default-claude"; mkdir -p "$DEF/repo"
+git -C "$DEF/repo" init -q; printf -- '- [ ] **R1** — x\n' > "$DEF/repo/plan.md"; echo a > "$DEF/repo/f"
+git -C "$DEF/repo" add -A; git -C "$DEF/repo" -c user.email=t@t -c user.name=t commit -qm init; echo b >> "$DEF/repo/f"
+def_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" "default engine" 2>&1)"; def_rc=$?
+defr_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane review --plan "$DEF/repo/plan.md" --dir "$DEF/repo" "default review" 2>&1)"; defr_rc=$?
+if [ "$def_rc" -eq 0 ] && grep -q 'claude-explorer' <<<"$def_out" && grep -q 'claude-reviewer' <<<"$defr_out"; then
+  echo "  PASS  unconfigured lanes default to claude subagents"; pass=$((pass+1))
+else
+  echo "  FAIL  unconfigured lanes must default to claude (rc=$def_rc/$defr_rc): $def_out | $defr_out"; fail=$((fail+1))
 fi
 FBD="$BOX/fallback-no-deepseek"; mkdir -p "$FBD/bin" "$FBD/repo" "$FBD/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/codex"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/grok"

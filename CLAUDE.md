@@ -1,7 +1,7 @@
 # charlesdr-dev-loop
 
-A Claude Code plugin. Claude orchestrates; Codex lanes (luna explore/implement,
-sol review, terra escalation) do the work; an isolated reviewer grades the diff
+A Claude Code plugin. Claude orchestrates; its own subagents (claude-explorer,
+claude-implementer, claude-reviewer) do the work by default, codex or grok lanes when asked; an isolated reviewer grades the diff
 against the plan. Consumer repos opt in by having a `.charles.toml`.
 
 ## Hooks

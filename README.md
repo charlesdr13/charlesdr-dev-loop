@@ -1,8 +1,9 @@
 # charlesdr-dev-loop
 
-Claude Code stops writing your code and starts running the shop. Exploration and
-implementation go out to Codex models at max reasoning; review uses sol at medium,
-luna/terra at max, and `--effort` overrides.
+Claude Code stops writing your code and starts running the shop. Exploration,
+implementation and review go to Claude's own subagents by default (haiku explorer,
+sonnet implementer, opus reviewer). Codex (luna/terra/sol) or grok lanes run when
+you ask for them with `--engine` or `/engine`.
 
 ```bash
 cd your-repo
@@ -255,10 +256,11 @@ cannot verify itself cannot honestly say it is finished.
 |---|---|---|---|
 | explore | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5-fast with `omp`; `claude-explorer` subagent with `claude` | luna: max; grok: high; omp: high; claude: haiku (fixed) | read-only |
 | implement | gpt-6-luna; grok-4.6 with `grok`; cursor/composer-2.5 with `omp`; `claude-implementer` subagent with `claude` | luna: max; grok: high; omp: max; claude: sonnet (fixed) | workspace-write |
-| review | gpt-6.1-sol by default; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
+| review | gpt-6.1-sol with a codex engine; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
-luna at max is the primary engine for explore and implement. Review uses sol at
-medium by default, luna/terra at max, and `--effort` overrides. Automatic
+With no `--engine` or `/engine` preference every lane is a claude subagent
+(`CHARLES_DEFAULT_ENGINE` overrides the built-in default). When codex is chosen, luna at max
+runs explore and implement, and review uses sol at medium, luna/terra at max, and `--effort` overrides. Automatic
 fallback: luna and terra fall back to grok, and grok falls back to luna.
 deepseek-v4-flash runs only when forced with `--engine deepseek`, for a
 deliberately wide, cheap sweep.
@@ -311,7 +313,7 @@ primary checkout and linked worktrees; elsewhere it writes the global
 `/engine global <value>` always writes global. `/engine default` clears the
 project preference; `/engine global default` clears global. The command reports
 the effective scope and engine. Precedence: `--engine`, `CHARLES_ENGINE`,
-project file, global file. Changes take effect on the next dispatch. `deepseek`
+project file, global file, built-in `claude`. Changes take effect on the next dispatch. `deepseek`
 bills a separate key when codex quota is short.
 
 **Older all-lane timing baseline** (179 runs; predates the implement

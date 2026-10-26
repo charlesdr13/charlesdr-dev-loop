@@ -26,7 +26,7 @@ esac
 PICK="${CHARLES_ENGINE:-}"; SCOPE=environment
 if [ -z "$PICK" ]; then PICK="$(cat "$ROOT/.charles/engine" 2>/dev/null || true)"; SCOPE=project; fi
 if [ -z "$PICK" ]; then PICK="$(cat "$D/engine" 2>/dev/null || true)"; SCOPE=global; fi
-case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK='default (luna; review on sol)'; SCOPE=default ;; esac
+case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK='default (claude subagents)'; SCOPE=default ;; esac
 echo "engine ($SCOPE): $PICK"
 ```
 
@@ -39,7 +39,9 @@ checkout's preference. `/engine global <value>` always writes global.
 the global preference. The echoed scope is the effective one, even after a
 global change that a project preference overrides.
 
-Precedence: `--engine` flag, `CHARLES_ENGINE`, project file, global file.
+Precedence: `--engine` flag, `CHARLES_ENGINE`, project file, global file, then the
+built-in default `claude`. Codex (luna/terra/sol) and grok run only when asked for:
+`--engine` on a dispatch, or an `/engine` preference.
 `claude` runs explore, implement AND review as native Claude Code subagents:
 `claude-explorer` (haiku), `claude-implementer` (sonnet), or `claude-reviewer`
 (opus, isolated to a review box the same way `codex-reviewer` is). One Agent
@@ -53,8 +55,7 @@ preference is honoured on review too — it no longer silently pins sol.
 claude dispatch has no fallback.
 
 `deepseek` is the free-of-codex-quota lane (deepseek-v4-flash @ max, via
-`~/.codex/deepseek.config.toml`). With no preference, explore and implement use
-luna (falling back to grok), and review uses sol.
+`~/.codex/deepseek.config.toml`). With no preference, every lane is a claude subagent.
 
 `deepseek` is peak-aware. DeepSeek bills roughly double between 01:00-04:00 and
 06:00-10:00 UTC, so dispatches inside those windows run on luna instead — at max
