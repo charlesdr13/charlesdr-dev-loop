@@ -11,8 +11,8 @@ SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 Report what came back. For each issue, say what closes it:
 
 - **ungraded implements** → `codex-reviewer` against the plan in `docs/specs/`
-- **plans with no grill verdict** → `grill-rounds` on that plan
-- **unsourced working-tree changes** → resolve or commit them before close; they remain blocking
+- **plans with no grill verdict** → a NOTE only; `grill-rounds` if the plan is risky
+- **unsourced working-tree changes** → a NOTE at close (inline edits are legitimate); commit or resolve them
 - **open runs** → `/charlesdr-dev-loop:resolve`
 
 Do not offer to `--force` a close unless the user asks. The point of the check

@@ -278,7 +278,8 @@ cleanup() {
           echo "  ${CH_NAME[$i]}: FAILED — no terminal record after bounded wait; retaining worktree $wt with unaggregated receipt $receipt" >&2
           CH_KEEP[$i]=1
           cleanup_rc=3
-        elif ! mkdir -p -- "$REPO/.charles" || ! cat "$receipt" >> "$REPO/.charles/dispatches.jsonl"; then
+        elif ! mkdir -p -- "$REPO/.charles" || ! touch "$REPO/.charles/dispatches.jsonl" \
+          || ! { grep -vxF -f "$REPO/.charles/dispatches.jsonl" "$receipt" >> "$REPO/.charles/dispatches.jsonl" || [ "$?" -eq 1 ]; }; then
           echo "  ${CH_NAME[$i]}: FAILED — could not aggregate $receipt" >&2
           CH_KEEP[$i]=1
           cleanup_rc=3

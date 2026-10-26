@@ -13,8 +13,7 @@
 # charles-run: header is that path's output (or this hook's own, met twice)
 # and passes through untouched, silently.
 #
-# Matched by SUFFIX, not exact name, same reason route-subagents.sh and
-# claude-lane-receipt.sh do: plugin agents spawn namespaced
+# Matched by SUFFIX, not exact name, plugin agents spawn namespaced
 # (charlesdr-dev-loop:claude-explorer).
 #
 # Contract: JSON on stdout, exit 0. Silence = no opinion.

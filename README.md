@@ -10,9 +10,11 @@ cd your-repo
 /charlesdr-dev-loop:feature add rate limiting to the API
 ```
 
-That single command runs the whole loop: brainstorm, three direct Codex explore
-calls with `run_in_background: true`, an adversarial grill of the plan, a ground-truth gate,
-implementation, isolated review, then your test command until it passes.
+That single command runs the lean loop: read the code (explore lanes with
+`run_in_background: true` only for broad unfamiliar areas), one plan with checkable
+requirements, implementation (small edits by the orchestrator, bigger slices on
+lanes, in parallel worktrees when there are 2+), one isolated review, then your
+test command until it passes. A grill is added only for risky plans.
 
 ---
 
@@ -23,21 +25,18 @@ flowchart TD
     REQ(["add rate limiting to the API"]) --> GATE{".charles.toml<br/>in this repo?"}
     GATE -->|no| INIT["/init — opt in, infer green"]
     INIT --> GATE
-    GATE -->|yes| BRAIN["brainstorm<br/><i>superpowers</i>"]
+    GATE -->|yes| READ["read the code · baseline green<br/>explore lanes only if broad<br/><i>run_in_background: true</i>"]
 
-    BRAIN --> EXP["explore fleet — 3x Bash calls<br/><i>run_in_background: true</i> · <b>luna @ max</b> · read-only"]
-    EXP --> GRILL["grill-rounds<br/>round 1 codex adversary → then you"]
-    GRILL --> TRUTH{"ground-truth gate<br/>sourced · baseline green · prior art"}
-    TRUTH -->|any fails| GRILL
-    TRUTH -->|all pass| PLAN["settled plan → docs/specs/<br/>(manifest written/re-written after grill settles)"]
-
-    PLAN --> IMPL["implement<br/><b>luna @ max</b> · workspace-write"]
-    IMPL --> REV["review<br/><b>sol @ medium · luna/terra @ max</b><br/>--effort overrides · isolated"]
+    READ --> PLAN["one plan → docs/specs/<br/>checkable requirement IDs"]
+    PLAN -.->|"risky: money · auth · migrations · 10+ reqs"| GRILL["grill-rounds"]
+    GRILL -.-> IMPL
+    PLAN --> IMPL["implement<br/>small edits inline · bigger slices on lanes<br/>parallel worktrees at 2+ slices"]
+    IMPL --> REV["one isolated review, max 2 rounds<br/><b>sol @ medium · luna/terra @ max</b>"]
     REV --> GREEN{"green.sh<br/>real exit code"}
 
     GREEN -->|"red, under 3 cycles"| IMPL
     GREEN -->|"red, 3 cycles"| FAILED["FAILED item"]
-    GREEN -->|green| CLOSE["close run<br/>outcome → the committed plan"]
+    GREEN -->|green| CLOSE["sign-off · close run<br/>outcome → the committed plan"]
 
     FAILED --> RESOLVE["/resolve<br/>next session picks up here"]
     RESOLVE --> IMPL
@@ -45,13 +44,13 @@ flowchart TD
     classDef lane fill:#2d6a9f,stroke:#1b4368,color:#fff
     classDef gate fill:#8a6d1f,stroke:#5c4813,color:#fff
     classDef term fill:#2f6b45,stroke:#1c4029,color:#fff
-    class EXP,IMPL,REV lane
-    class GATE,TRUTH,GREEN gate
+    class READ,IMPL,REV lane
+    class GATE,GREEN gate
     class CLOSE,RESOLVE term
 ```
 
-Blue is a Codex lane, amber is a gate that can send you backwards, green is an
-exit. Claude Code owns the arrows and none of the boxes.
+Blue may run on a lane, amber is a gate that can send you backwards, green is an
+exit. The reviewer is always isolated; everything else is the orchestrator's call.
 
 ---
 
@@ -68,9 +67,9 @@ are asking the biased party to correct for its own bias.
 The fix here is structural. Three separations, none of which rely on a model
 choosing to behave:
 
-**The orchestrator does not implement.** Claude Code plans, routes, and judges.
-The typing goes to a Codex lane. A `PreToolUse` hook enforces this: an edit over
-the threshold gets stopped and told to dispatch instead.
+**The orchestrator plans, routes, and judges.** It may make small edits itself;
+bigger slices go to implement lanes, one per disjoint slice. Nothing gates its
+edits or its subagents.
 
 **The reviewer cannot see the implementer.** The review lane runs in a
 `mktemp -d` containing exactly two files, `plan.md` and `changes.diff`,
@@ -109,9 +108,10 @@ flowchart LR
 The dotted edges are not policy. There is no path from the implementer's
 reasoning to the reviewer's working directory, so there is nothing to enforce.
 
-**The grill happens before the code, not after.** A plan gets attacked by an
-adversary whose job is to find the reason it fails, and every attack must be
-answered from source before implementation starts.
+**Risky plans get a grill before the code.** For money, auth/security,
+migrations or destructive changes, or 10+ requirements, an adversary attacks the
+plan and every attack is answered from source before implementation starts. A
+missing grill verdict only warns.
 
 ---
 
@@ -128,11 +128,13 @@ This wraps tools it does not ship. Before installing:
   model_reasoning_effort = "max"
   ```
 
-- **`jq`**, or both hooks fail open and silently allow everything.
-- **Optional — the deepseek fallback.** It shells out to a `codex-ds.sh`
+- **`jq`**, or the hooks fail open and silently allow everything.
+- **Optional — the deepseek engine.** Used only with an explicit
+  `--engine deepseek`. It shells out to a `codex-ds.sh`
   wrapper at `~/.claude/skills/codex-deepseek/scripts/codex-ds.sh`, which is
-  **not included in this repo**. Without it you lose the fallback engine, not a
-  lane; `doctor` reports this as WARN rather than FAIL. Point `DS_SCRIPT` in
+  **not included in this repo**. Without it you lose only that explicit
+  engine, not a lane; it is not an automatic fallback (luna and terra fall back to
+  grok, grok to luna). Point `DS_SCRIPT` in
   `scripts/codex-run.sh` at your own wrapper if you have one.
 - **Optional — `treehouse`** (a pre-warmed git-worktree pool for parallel agents) for
   parallel implementers. Serial implementation works without it. Install
@@ -206,8 +208,8 @@ triggered rule: if the orchestrator starts typing `codex-run … --lane` into ba
 omp interrupts it and injects the task-tool rule.
 
 omp loads the skills, commands and agents from the Claude manifest, and
-`hooks/pre/charles.ts` bridges the edit gate, the stop warning, the
-`codex-run` link and the Agent/Task hooks to the same shell hooks. Under omp,
+`hooks/pre/charles.ts` bridges the stop warning, the
+`codex-run` link and the Agent/Task lane hooks to the same shell hooks. Under omp,
 spawning `claude-explorer`, `claude-implementer` or `claude-reviewer` with the
 `task` tool is the dispatch, exactly as with the Agent tool in Claude Code: the
 brief is rewritten with `charles-run:`, the start and end receipts are logged,
@@ -216,7 +218,7 @@ provider instead of haiku/sonnet/opus: explore `cursor/composer-2.5-fast`,
 implement `cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol:medium`.
 A `task.agentModelOverrides` entry for the agent wins. The end receipt names the
 model that actually ran. omp's own code-work agents (`task`, `scout`, `sonic`,
-`designer`, `reviewer`) hit the same subagent gate as Claude's.
+`designer`, `reviewer`) are unrestricted, as in Claude Code.
 
 ---
 
@@ -230,14 +232,12 @@ Writes `.charles.toml`, committed on purpose:
 
 ```toml
 green = "bun test && bun run typecheck"   # what "all green" means here
-inline_lines = 40
-inline_files  = 3
 parallel_min_chunks = 2                    # raise to keep smaller sets serial
 ```
 
-Nothing in this plugin does anything in a repo without that file. No hook, no
-auto-routing. One switch, per repo, deliberately: enforcement you did not opt
-into in *this* repo is just friction.
+Nothing in this plugin does anything in a repo without that file. One switch,
+per repo, deliberately: behaviour you did not opt into in *this* repo is just
+friction.
 
 `green` is inferred from the repo at init time. Check it. A wrong green command
 makes the debug loop confidently meaningless.
@@ -258,9 +258,10 @@ cannot verify itself cannot honestly say it is finished.
 | review | gpt-6.1-sol by default; gpt-6-luna/gpt-6-astra (luna/terra engines) or grok-4.6 with `--engine`; openai-codex/gpt-6.1-sol with `omp`; `claude-reviewer` subagent with `--engine claude` | sol: medium; luna/terra: max; grok: high; omp: medium (sol) or max (luna/terra); claude: opus (fixed); `--effort` overrides the non-claude engines | read-only, isolated temp dir |
 
 luna at max is the primary engine for explore and implement. Review uses sol at
-medium by default, luna/terra at max, and `--effort` overrides. deepseek-v4-flash
-is the fallback, tried automatically when luna fails, or forced with `--engine
-deepseek` for a deliberately wide, cheap sweep.
+medium by default, luna/terra at max, and `--effort` overrides. Automatic
+fallback: luna and terra fall back to grok, and grok falls back to luna.
+deepseek-v4-flash runs only when forced with `--engine deepseek`, for a
+deliberately wide, cheap sweep.
 
 Review effort is positional: intermediate reviews use `--effort medium`; the
 final pre-close review omits `--effort` and uses the model-aware default (sol at
@@ -381,9 +382,10 @@ on the view that a wrong exploration is more expensive than an expensive one.
 The tradeoff is real: a five-wide luna sweep is not cheap, so size fleets to the
 question rather than to the ceiling — and note that nothing enforces it, so it's judgment.
 
-A dispatch that fails on luna gets one deepseek rescue. The wrapper prints a
-loud `fallback_from:<engine> primary_rc:<n>` receipt; if the rescue also fails,
-the dispatch stops. It never falls back to Claude doing the work inline. A
+A dispatch that fails on luna or terra gets one grok rescue, and one that fails
+on grok gets one luna rescue (never deepseek, unless chosen explicitly). The
+wrapper prints a loud `fallback_from:<engine> primary_rc:<n>` receipt; if the
+rescue also fails, the dispatch stops. It never falls back to Claude doing the work inline. A
 fallback that fires on any error turns "always dispatch" into "dispatch when
 convenient", which is the same as not having the system.
 
@@ -461,6 +463,8 @@ everything downstream waits on them), confirms before re-dispatching a `FAILED`
 lane, and closes only when every item is resolved *and* the flow reached its
 final phase. A run that died at phase 3 is not finished; use
 `run-state.sh abandon <dir> "<reason>"` to record it as terminal `ABANDONED`.
+Runs whose `RUN.md` has not changed for 7 days (`CHARLES_STALE_DAYS`) are
+abandoned automatically at session start.
 
 Where `tasks-axi` is installed it owns the items, since it already resurfaces
 them at session start; otherwise they live in `RUN.md`.
@@ -497,37 +501,17 @@ needing an eye becomes a `BLOCKED-HUMAN` item rather than a guess.
 
 ## The hooks
 
-**Edits** — `PreToolUse` on `Edit|Write|MultiEdit`. In an opted-in repo, on a code file, it
-asks you to dispatch instead when an edit touches at least `inline_lines`, or
-when you have touched at least `inline_files` distinct files since the last
-dispatch. The file counter matters more than the line counter: a three-file
-change is a feature, even when each edit is small.
+- **`SessionStart` `link-dispatcher.sh`** links `codex-run` onto PATH and
+  auto-abandons runs idle for `CHARLES_STALE_DAYS` (default 7).
+- **`Stop` `warn-open-runs.sh`** warns about `FAILED` items in a run touched in
+  the last 24 hours. Only `FAILED`: the others already resurface via `tasks-axi`.
+- **engine=claude lane hooks** (`claude-lane-dispatch.sh`, `claude-review-box.sh`,
+  `claude-lane-receipt.sh`) dispatch a `claude-*` subagent through `codex-run`,
+  confine the reviewer to its box, and log the receipts.
 
-Always allowed: new files, non-code extensions, repos without `.charles.toml`,
-and everything when `CHARLES_INLINE_OK=1`.
-
-**Subagents** — `PreToolUse` on `Agent|Task`. Stopping Claude from typing the
-code achieves nothing if it can hand the same work to one of its own subagents
-instead. So spawning `Explore`, `general-purpose`, `Plan`, `feature-dev:*` or a
-language specialist in an opted-in repo asks you to make a direct Bash call with
-`run_in_background: true` running `codex-run --lane ...` instead. It is a
-denylist of agents that do repo code work — `google-drive`, `claude-code-guide`
-and the rest are none of this hook's business. `CHARLES_SUBAGENTS_OK=1` turns this
-gate off (the edit gate stays on).
-
-**Unattended sessions.** Both gates deny instead of ask when `FM_TASK_ID` (set in
-every [firstmate](https://github.com/kunchenguid/firstmate) crewmate pane) or
-`CHARLES_UNATTENDED=1` is set. Nobody is there to answer an ask, so the session
-would hang on it. With deny, the agent reads the same reason and dispatches the lane.
-
-**Unclosed runs** — a `Stop` hook warns when a run has `FAILED` items. Only
-`FAILED`: the others already resurface via `tasks-axi`, and warning twice is
-nagging.
-
-**Known hole, on purpose.** Writes through Bash (`sed -i`, heredocs, `tee`) are
-not intercepted. Matching those would fire on every `bun test > out.log` and the
-hook would be switched off within a day. The hook is a backstop. The `charles-flow`
-skill is what actually keeps the work routed.
+There is no edit gate and no subagent gate: the orchestrator may edit inline and
+spawn any subagent. Lane receipts are mirrored to the main checkout's
+`.charles/dispatches.jsonl` when a dispatch runs in a linked worktree.
 
 ---
 
@@ -543,6 +527,10 @@ harmless one: **plausible code with no provenance**.
 ```bash
 scripts/unsourced.sh .        # 0 accounted for · 1 nothing produced this
 ```
+
+Since 2.49.0 this is informational: `flow-status.sh` and `close` report it as a NOTE,
+never a blocker, because the orchestrator may now edit inline and other sessions
+share the main checkout. Run it yourself when a lane's report and the tree disagree.
 
 It compares the working tree against the dispatch log, ignoring what the
 orchestrator legitimately authors itself (plans in `docs/specs/`, `.charles/`).
@@ -575,7 +563,8 @@ scripts/flow-status.sh .      # 0 clean · 1 outstanding
 ```
 
 `run-state.sh close` refuses (exit 5) while anything is outstanding, since
-closing is where you declare the work done. `--force` overrides. While a run is
+closing is where you declare the work done. `--force` overrides. A missing grill
+verdict and changes no lane produced are NOTEs, not blockers. While a run is
 open, `doctor` keeps installed-content drift at WARN but FAILs on an unreviewed
 implement; report that expected mid-flow failure rather than reinstalling or
 trying to bypass the review.
@@ -665,29 +654,19 @@ offset. That happened in Chunk A: the dispatcher died with `syntax error near
 unexpected token )` after its work completed. Every chunk in an open run carries
 `req`; the runner validates it against the plan and passes it to the child.
 
-## The ground-truth gate
+## Baseline and proof
 
-Four checks, before any implementation, none of them optional:
-
-1. **Claims are sourced.** Every factual claim in the plan cites `file:line`.
-   Extrapolating from a package name is not verification.
-2. **Baseline is green.** Run `green` *before* touching anything, or you will
-   attribute an existing failure to your change.
-3. **Prior art checked.** If the thing already exists, building it again is the
-   most expensive available outcome.
-4. **Manifest scope matches.** When present, a companion manifest's declared
-   files match the plan's stated scope.
-
-And the proof protocol throughout: `"47 passed, 0 failed"`, not "tests pass".
-`"312 lines"`, not "file written". Assertions without output are how a loop
-convinces itself it is finished.
+Run `green` *before* touching anything, or you will attribute an existing
+failure to your change. Throughout, proof is output: `"47 passed, 0 failed"`,
+not "tests pass"; `"312 lines"`, not "file written". Phases are recorded at
+implement, review and green.
 
 ---
 
 ## Test
 
 ```bash
-bash scripts/selftest.sh   # selftests for both PreToolUse hooks, run state, Stop hook
+bash scripts/selftest.sh   # selftests for the hooks, run state, dispatcher, docs contracts
 bash scripts/doctor.sh     # every lane, every dependency, this repo's config
 ```
 
@@ -708,9 +687,9 @@ this solves the supervised one, and borrows without depending. No runtime link
 between them — the ideas travelled, the code did not.
 
 [**superpowers**](https://github.com/obra/superpowers) by Jesse Vincent (MIT)
-provides the brainstorming discipline the feature flow opens with. The flow
-overrides its terminal state — brainstorming here hands off to the grill rather
-than to `writing-plans` — which is a deviation from its design, not a defect in it.
+provides the brainstorming discipline for genuinely open asks. The flow
+overrides its terminal state — brainstorming here hands off to the plan (and a
+grill for risky plans) rather than to `writing-plans` — which is a deviation from its design, not a defect in it.
 
 [**mattpocock/skills**](https://github.com/mattpocock/skills) by Matt Pocock
 (MIT) is the origin of `grill-me`, which `grill-rounds` forks: same relentless

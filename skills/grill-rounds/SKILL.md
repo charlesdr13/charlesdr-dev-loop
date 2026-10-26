@@ -1,6 +1,6 @@
 ---
 name: grill-rounds
-description: Bounded adversarial grilling of a written plan — round 1 is a codex adversary attacking the plan while Claude answers from source, remaining contradictions come back as one batched human round. Use before implementing any plan produced by brainstorming, or when the user says "grill the plan", "stress-test this", "grill-rounds". Fork of grill-me, bounded to 2-3 rounds and usable unattended.
+description: Bounded adversarial grilling of a written plan, invoked by charles-flow for risky plans (money, auth/security, migrations or destructive changes, 10+ requirements). Round 1 is a codex adversary attacking the plan while Claude answers from source; remaining contradictions come back as one batched human round. Usable unattended. User requests to grill a plan belong to lg-dev:lg-grill, not this skill.
 ---
 
 # grill-rounds

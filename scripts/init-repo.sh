@@ -41,11 +41,6 @@ cat > "$CFG" <<EOF
 # What "all green" means. The debug loop runs this and stops when it passes.
 # Empty means the flow will ask you to set it before it will start a debug loop.
 green = "${green}"
-
-# Inline-edit thresholds. Over either one, the hook asks you to dispatch codex
-# instead. Bypass a session with CHARLES_INLINE_OK=1.
-inline_lines = 40
-inline_files = 3
 EOF
 
 # --- gitignore .charles/ ------------------------------------------------------

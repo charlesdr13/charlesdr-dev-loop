@@ -12,7 +12,7 @@
 # Engines (--engine), for explore and implement:
 #   luna      gpt-6-luna @ max      PRIMARY — every dispatch starts here
 #   terra     gpt-6-astra @ max     ESCALATION — when luna's work came back wrong
-#   deepseek  deepseek-v4-flash @ max FALLBACK — when luna failed to run at all
+#   deepseek  deepseek-v4-flash @ max — explicit --engine only; never an automatic fallback
 #   claude    hands off to a Claude Code subagent instead of running here: logs
 #             the start event, prints a SPAWN block (agent + prompt) to stdout,
 #             and exits — the orchestrating session spawns claude-explorer
@@ -23,7 +23,7 @@
 #   grok      grok-4.6 @ high (local grok CLI, --reasoning-effort has no "max",
 #             so max is translated to xhigh); ALSO runs review — a
 #             project/global grok preference is honoured there too, since it
-#             is a different model family from every codex profile. No fallback.
+#             is a different model family from every codex profile. Falls back to luna.
 #   omp       headless omp process, one model per lane by default (explore
 #             cursor/composer-2.5-fast, implement cursor/composer-2.5, review
 #             openai-codex/gpt-6.1-sol); `omp:<provider>/<model>` overrides the
@@ -34,7 +34,7 @@
 # $CHARLES_STATE_DIR/engine. Linked worktrees share the primary checkout's preference.
 #
 # Availability and capability are different problems. A dispatch that DIED falls
-# back to deepseek. Work that RAN and was wrong escalates to terra. Difficulty is
+# back: luna and terra to grok, grok to luna. Work that RAN and was wrong escalates to terra. Difficulty is
 # never predicted from the task text — it is demonstrated by a failed check.
 #
 # The review lane runs in a temp dir containing ONLY plan.md + changes.diff.
@@ -156,7 +156,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 . "$SCRIPT_DIR/run-common.sh"
 
 LANE=""
-ENGINE="luna"        # primary for every dispatch; deepseek is the fallback only
+ENGINE="luna"        # primary for every dispatch; grok is its fallback
 ENGINE_SET=0         # review defaults to sol, so it must know if you chose one
 ENGINE_FROM_FLAG=0   # only --engine is explicit; env/file preferences set ENGINE_SET too
 OMP_MODEL=""         # set once an "omp:<provider>/<model>" preference is split below
@@ -365,6 +365,29 @@ validate_dispatch_scope() {
   local -a open_runs=()
   [ -z "$open_listing" ] || mapfile -t open_runs <<<"$open_listing"
   local run_dir="" plan_path=""
+  # No selector and several open runs: runs idle over a day are not the live one,
+  # and a run whose spec is --plan wins outright. Only then is it ambiguous.
+  if [ "$RUN_SELECTOR_SET" -eq 0 ] && [ "${#open_runs[@]}" -gt 1 ]; then
+    local want="" cand cand_spec
+    [ -z "$PLAN" ] || want="$(resolve_plan_path "$PLAN")" || want=""
+    local -a fresh=() matched=()
+    for cand in "${open_runs[@]}"; do
+      if [ -n "$want" ]; then
+        cand_spec="$(sed -n 's/^- spec: //p' "$cand/RUN.md" | head -1)"
+        [ -z "$cand_spec" ] || [ "$(resolve_plan_path "$cand_spec" 2>/dev/null)" != "$want" ] || matched+=("$cand")
+      fi
+      [ -z "$(find "$cand/RUN.md" -mmin +1440 2>/dev/null)" ] && fresh+=("$cand")
+    done
+    if [ "${#matched[@]}" -gt 1 ]; then
+      local -a both=()
+      for cand in "${matched[@]}"; do
+        [ -n "$(find "$cand/RUN.md" -mmin +1440 2>/dev/null)" ] || both+=("$cand")
+      done
+      [ "${#both[@]}" -eq 0 ] || matched=("${both[@]}")
+    fi
+    # Nothing matched and nothing fresh: keep them all so the ambiguity refusal still fires.
+    if [ "${#matched[@]}" -ge 1 ]; then open_runs=("${matched[@]}"); elif [ "${#fresh[@]}" -ge 1 ]; then open_runs=("${fresh[@]}"); fi
+  fi
   # Abandoned runs stay open for /resolve; choose one instead of blocking the repo.
   if [ "$RUN_SELECTOR_SET" -eq 1 ]; then
     local all_listing
@@ -482,8 +505,7 @@ validate_dispatch_scope() {
   elif grep -qE '^Grill waived:[[:space:]]*[^[:space:]].*$' <<<"$grill_section"; then
     grill_basis="waived"
   else
-    echo "codex-run.sh: REFUSING — spec $plan_label is missing '- Rounds:' or 'Grill waived: <reason>' in its Grill verdict section" >&2
-    return 5
+    echo "codex-run.sh: WARN — spec $plan_label has no '- Rounds:' or 'Grill waived: <reason>' in its Grill verdict section; dispatching anyway" >&2
   fi
   GRILL_BASIS="$grill_basis"
   # Sign-off is proof, not scope: ranged bullets there must not satisfy --req.
@@ -637,6 +659,24 @@ omp_default_model() { # omp_default_model LANE
   esac
 }
 
+# Append one record to the dispatch log. In a linked worktree the same line also
+# goes to the main checkout's log, so receipts outlive the worktree.
+append_receipt() { # append_receipt FILE < record
+  local rec common gitdir main
+  rec="$(cat)" || return 1
+  [ -n "$rec" ] || return 0
+  printf '%s\n' "$rec" >> "$1" || return 1
+  command -v git >/dev/null 2>&1 || return 0
+  local -a g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git -C "$DIR")
+  common="$("${g[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  gitdir="$("${g[@]}" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 0
+  # Only a linked worktree of a normal repo has a separate main checkout to mirror to.
+  [ "$gitdir" != "$common" ] && [ "$(basename "$common")" = ".git" ] || return 0
+  main="$(dirname "$common")/.charles/dispatches.jsonl"
+  [ "$(realpath -m "$main")" = "$(realpath -m "$1")" ] && return 0
+  mkdir -p "$(dirname "$main")" 2>/dev/null && printf '%s\n' "$rec" >> "$main" 2>/dev/null || true
+}
+
 # --- append dispatch events: mechanical, no model cooperation required ---------
 # This is both halves of the fix: it is the receipt an agent must echo back
 # (closing the inline-fallback hole) and the record `resolve` correlates on.
@@ -655,8 +695,8 @@ log_start() {
       | if $flow_run_id == "" then . else . + {flow_run_id:$flow_run_id} end
       | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
-        + (if $grill == "" then {} else {grill:$grill} end) else . end' \
-     >> "$f" 2>/dev/null
+        + (if $grill == "" then {} else {grill:$grill} end) else . end' 2>/dev/null \
+     | append_receipt "$f" 2>/dev/null
 }
 
 log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
@@ -698,8 +738,8 @@ log_dispatch() { # log_dispatch ENGINE RC [FALLBACK_FROM PRIMARY_RC MODEL]
       | if $spec_path == "" then . else . + {spec_path:$spec_path} end
       | if $lane == "implement" then . + {req:($req | if . == "" then [] else split(",") end),allow_main_tree:($allow_main_tree == "1")}
         + (if $grill == "" then {} else {grill:$grill} end) else . end
-      | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' \
-     >> "$f" 2>/dev/null || true
+      | if $fallback_from != "" then . + {fallback_from:$fallback_from,primary_rc:($primary_rc|tonumber)} else . end' 2>/dev/null \
+     | append_receipt "$f" 2>/dev/null || true
 }
 
 write_watchdog_state() { # write_watchdog_state ACTIVE ENGINE MODEL FALLBACK_FROM PRIMARY_RC PID_FILE
@@ -776,15 +816,6 @@ dispatch_timed_out() {
   timeout_us=$((10#$TIMEOUT * 1000000))
   # Allow a quarter-second of scheduler/receipt slack without treating an early 124 as a timeout.
   [ "$elapsed_us" -ge "$((timeout_us - 250000))" ]
-}
-
-# --- clear the hook'"'"'s touched-files counter on a successful dispatch --------------
-clear_touched() {
-  local root="$1"
-  [ -f "$root/.charles/touched" ] && : > "$root/.charles/touched"
-  # the work moved to a lane, so the "you already approved inline" grant is spent
-  rm -f "$root/.charles/inline-ok" "$root/.charles/pending-ask" 2>/dev/null || true
-  return 0
 }
 
 # --- local weekly quota probe for luna fast_mode ------------------------------
@@ -990,8 +1021,7 @@ invoke codex-run, or spawn a subagent, even if repository instructions say to de
 }
 
 # --- engine: omp — headless omp process, one model per lane (ALSO runs review,
-# see run_review); the CHARLES_INLINE_OK=1 env is legitimate here — this
-# process IS the worker lane the plugin's own hooks are gating for.
+# see run_review).
 run_omp() {
   local model="${OMP_MODEL:-$(omp_default_model "$LANE")}"
   # Explore answers one question; max effort buys little there and costs minutes.
@@ -1004,7 +1034,7 @@ run_omp() {
 
 $LADDER"
   run_attempt omp "$model" "$DIR" "$RUN.jsonl" "$RUN.err" \
-    env CHARLES_INLINE_OK=1 timeout -k 30s "$TIMEOUT" omp -p "$TASK
+    timeout -k 30s "$TIMEOUT" omp -p "$TASK
 
 $GUARD$extra
 
@@ -1214,14 +1244,13 @@ Do not praise. Do not summarise the diff back. If you find nothing, say so plain
   fi
 
   # omp builds its own command instead of bending codex's exec argv, same as
-  # the grok fork above; CHARLES_INLINE_OK=1 is legitimate here too — this
-  # process IS the isolated reviewer the plugin's own hooks are gating for.
+  # the grok fork above.
   if [ "$ENGINE" = "omp" ]; then
     local omp_args=(--no-session --no-skills --no-title --no-lsp --model "$rmodel" --thinking "$EFFORT"
           --cwd "$box" --approval-mode yolo --tools read,grep,glob)
     local rc=0
     run_attempt review "$rmodel" "$box" "$RUN.jsonl" "$RUN.err" \
-      env CHARLES_INLINE_OK=1 timeout -k 30s "$TIMEOUT" omp -p "$prompt" "${omp_args[@]}" < /dev/null || rc=$?
+      timeout -k 30s "$TIMEOUT" omp -p "$prompt" "${omp_args[@]}" < /dev/null || rc=$?
     if [ "$rc" -eq 0 ]; then cp "$RUN.jsonl" "$RUN.last" || rc=$?; fi
     if [ "$rc" -ne 0 ]; then : > "$RUN.last"; fi
     cp "$box/changes.diff" "$RUN.diff" 2>/dev/null || true
@@ -1358,21 +1387,26 @@ elif [ "$ENGINE" = "claude" ]; then
   # dispatch. The orchestrating session spawns the subagent after this exits.
   spawn_claude_lane; RC=0
 else
+  orig_effort="$EFFORT"
   set +e; dispatch "$ENGINE"; RC=$?; set -e
 
-  # Engine fallback: luna is primary, deepseek catches a broken luna profile or
-  # a transient failure. Same role, same sandbox — only the model changes.
-  # There is deliberately NO fallback to inline editing: that would defeat the
-  # entire point of routing this work out in the first place.
-  if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && { [ "$ENGINE" = "luna" ] || [ "$ENGINE" = "terra" ]; }; then
+  # Engine fallback: luna/terra fall back to grok, grok to luna (a different
+  # model family, so one provider outage rarely takes out both). Same role, same
+  # sandbox — only the model changes. There is deliberately NO fallback to
+  # inline editing: that would defeat the entire point of routing this work out.
+  fb_engine=""
+  case "$ENGINE" in luna|terra) fb_engine=grok ;; grok) fb_engine=luna ;; esac
+  # rc 2 is a usage error: a different engine would not fix it.
+  if [ $RC -ne 0 ] && [ $RC -ne 2 ] && [ "$FALLBACK" -eq 1 ] && [ -n "$fb_engine" ]; then
     primary_rc="$RC"
     if [ "$primary_rc" -eq 124 ] && dispatch_timed_out; then
       echo "codex-run.sh: fallback was skipped because the task timed out" >&2
     else
       ATTEMPT_FALLBACK_FROM="$ENGINE"
       ATTEMPT_PRIMARY_RC="$primary_rc"
-      echo "codex-run.sh: $ENGINE failed (exit $primary_rc) — falling back to deepseek for this $LANE" >&2
-      set +e; dispatch deepseek; RC=$?; set -e
+      echo "codex-run.sh: $ENGINE failed (exit $primary_rc) — falling back to $fb_engine for this $LANE" >&2
+      EFFORT="$orig_effort"   # the primary may have rewritten it (grok: max -> xhigh)
+      set +e; dispatch "$fb_engine"; RC=$?; set -e
       if [ "$RC" -eq 0 ]; then
         if [ -s "$RUN.last" ]; then
           printf '\nfallback_from:%s primary_rc:%s\n' "$ENGINE" "$primary_rc" >> "$RUN.last"
@@ -1396,5 +1430,4 @@ if [ $RC -ne 0 ]; then
   exit $RC
 fi
 
-clear_touched "$DIR"
 exit 0

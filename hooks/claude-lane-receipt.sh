@@ -9,8 +9,7 @@
 # flow-status.sh and lane-status.sh keep working unchanged.
 #
 # Matched by SUFFIX, not exact name: plugin agents spawn namespaced
-# (charlesdr-dev-loop:claude-explorer), same reason route-subagents.sh walks
-# suffixes instead of comparing names directly.
+# (charlesdr-dev-loop:claude-explorer).
 #
 # rc is always 0 here: PostToolUse firing means the tool call itself completed,
 # not that the lane's own work succeeded — that judgment is the review's job.
