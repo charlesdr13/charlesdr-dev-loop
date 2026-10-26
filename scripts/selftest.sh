@@ -4968,31 +4968,35 @@ else
 fi
 
 # no-mistakes as the final gate: an ungraded implement closes only with the remote AND a no-mistakes review phase
-nm_case() { # <name> <with_remote> <with_phase> <expect_rc>
-  local d="$BOX/nm-$1" st="$BOX/nm-$1-state" out rc
+nm_case() { # <name> <with_remote> <review proof, empty = no review phase> <verify proof> <expect_rc>
+  local d="$BOX/nm-$1" st="$BOX/nm-$1-state" fs_out close_out rc
   mkdir -p "$d/.charles" "$st"
   ( cd "$d" && git init -q && git config user.name tester && git config user.email tester@example.invalid
     mkdir -p docs/specs && printf '# plan\n' > docs/specs/p.md
     printf 'x\n' > a.ts && git add -A && git commit -qm init
     [ "$2" = 1 ] && git remote add no-mistakes https://example.invalid/x.git ) >/dev/null 2>&1
-  bash "$RS" init "$d" feature "nm $1" >/dev/null 2>&1
+  CHARLES_STATE_DIR="$st" bash "$RS" init "$d" feature "nm $1" >/dev/null 2>&1
   CHARLES_STATE_DIR="$st" bash "$RS" phase "$d" implement "1 file changed" >/dev/null 2>&1
-  [ "$3" = 1 ] && CHARLES_STATE_DIR="$st" bash "$RS" phase "$d" review "no-mistakes: passed, https://example.invalid/pr/1" >/dev/null 2>&1
-  CHARLES_STATE_DIR="$st" bash "$RS" phase "$d" verify "1 passed, 0 failed" >/dev/null 2>&1
+  [ -n "$3" ] && CHARLES_STATE_DIR="$st" bash "$RS" phase "$d" review "$3" >/dev/null 2>&1
+  CHARLES_STATE_DIR="$st" bash "$RS" phase "$d" verify "$4" >/dev/null 2>&1
   printf '{"ts":"%s","lane":"implement","engine":"luna","model":"m","rc":0,"run":"/nm","task":"t"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$d/.charles/dispatches.jsonl"
-  out="$(bash "$FS" "$d" --closing "$(ls -d "$d"/.charles/runs/*/ | head -1)" 2>&1)"
-  out="$out$(CHARLES_STATE_DIR="$st" bash "$RS" close "$d" done 2>&1)"; rc=$?
-  if [ "$rc" -eq "$4" ] && { [ "$4" -ne 0 ] || grep -q 'graded by no-mistakes' <<<"$out"; } \
-     && { [ "$4" -eq 0 ] || grep -q 'ISSUE.*never reviewed' <<<"$out"; }; then
+  # a successful close prints no flow-status lines, so the NOTE is read from flow-status itself
+  fs_out="$(CHARLES_STATE_DIR="$st" bash "$FS" "$d" --closing "$(ls -d "$d"/.charles/runs/*/ | head -1)" 2>&1)"
+  close_out="$(CHARLES_STATE_DIR="$st" bash "$RS" close "$d" done 2>&1)"; rc=$?
+  if [ "$rc" -eq "$5" ] && { [ "$5" -ne 0 ] || grep -q 'NOTE.*graded by no-mistakes' <<<"$fs_out"; } \
+     && { [ "$5" -eq 0 ] || grep -q 'ISSUE.*never reviewed' <<<"$close_out"; }; then
     echo "  PASS  no-mistakes close: $1 (rc=$rc)"; pass=$((pass+1))
   else
-    echo "  FAIL  no-mistakes close: $1 expected rc=$4 got $rc"; fail=$((fail+1))
+    echo "  FAIL  no-mistakes close: $1 expected rc=$5 got $rc"; fail=$((fail+1))
   fi
 }
-nm_case graded 1 1 0
-nm_case no-remote 0 1 5
-nm_case no-phase 1 0 5
+NM_OK="no-mistakes: passed, https://example.invalid/pr/1"
+nm_case graded 1 "$NM_OK" "1 passed, 0 failed" 0
+nm_case no-remote 0 "$NM_OK" "1 passed, 0 failed" 5
+nm_case no-phase 1 "" "1 passed, 0 failed" 5
+nm_case failed 1 "no-mistakes: failed, https://example.invalid/pr/1" "1 passed, 0 failed" 5
+nm_case later-phase 1 "PASS" "1 passed, 0 failed; $NM_OK" 5
 
 # The orphan census must fail closed when it cannot inspect the dispatch log.
 CF="$BOX/census-fail"; mkdir -p "$CF"

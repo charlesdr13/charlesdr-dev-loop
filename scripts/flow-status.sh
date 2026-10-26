@@ -301,10 +301,15 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     | [(.ts // ""), (flow_id(.flow_run_id) | if . == "" then "__NO_FLOW_RUN_ID__" else . end), text(.spec_path)] | @tsv
   ')
   ungraded=$((ungraded_close + ungraded_repo))
-  # A no-mistakes repo whose closing run recorded a no-mistakes review phase was graded by that pipeline.
+  # A no-mistakes repo whose closing run recorded a passed no-mistakes review was graded by that pipeline.
+  # Only the proof block of the `review` phase itself counts (run-state.sh fences it with "  ```").
   nm_graded=0
   if [ -n "$CLOSING" ] && git -C "$DIR" remote get-url no-mistakes >/dev/null 2>&1 &&
-     awk '/^- \[[^]]*\] review/ {on=1; next} /^- \[|^## / {on=0} on && /no-mistakes/ {f=1} END {exit !f}' "$CLOSING/RUN.md" 2>/dev/null; then
+     awk '/^- \[[^]]*\] review$/ {on=1; fence=0; next}
+          on && /^  ```$/ {if (++fence == 2) on=0; next}
+          on && fence == 0 {on=0}
+          on && /no-mistakes: pass/ {f=1}
+          END {exit !f}' "$CLOSING/RUN.md" 2>/dev/null; then
     nm_graded=1
   fi
   if [ "${ungraded:-0}" -gt 0 ]; then
