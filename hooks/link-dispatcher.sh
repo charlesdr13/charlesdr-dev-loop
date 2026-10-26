@@ -68,11 +68,12 @@ done
 
 stale_days="${CHARLES_STALE_DAYS:-7}"
 case "$stale_days" in ''|*[!0-9]*) stale_days=7 ;; esac
+stale_days=$((10#$stale_days))   # 0 disables auto-abandon
 open_n=0; items=0; newest=""; stale_n=0
 for d in "$repo"/.charles/runs/*/; do
   [ -f "$d/RUN.md" ] || continue
   grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
-  if [ -n "$(find "$d/RUN.md" -mmin +$((stale_days * 1440)) 2>/dev/null)" ] \
+  if [ "$stale_days" -gt 0 ] && [ -n "$(find "$d/RUN.md" -mmin +$((stale_days * 1440)) 2>/dev/null)" ] \
     && bash "$root/scripts/run-state.sh" abandon "$repo" --run "$(basename "${d%/}")" \
       "stale: no activity for $stale_days days" >/dev/null 2>&1; then
     stale_n=$((stale_n + 1))

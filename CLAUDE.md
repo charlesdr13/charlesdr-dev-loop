@@ -37,4 +37,4 @@ the `claude-lane-*` / `claude-review-box.sh` lane hooks. Fallback order: luna/te
 to grok, grok to luna; deepseek only when chosen explicitly.
 
 Prove hook changes with `scripts/selftest.sh`, which feeds real payloads and
-asserts allow/ask. A change that only looks right in the diff is unverified.
+asserts the hook output. A change that only looks right in the diff is unverified.

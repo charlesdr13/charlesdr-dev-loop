@@ -132,8 +132,9 @@ This wraps tools it does not ship. Before installing:
 - **Optional — the deepseek engine.** Used only with an explicit
   `--engine deepseek`. It shells out to a `codex-ds.sh`
   wrapper at `~/.claude/skills/codex-deepseek/scripts/codex-ds.sh`, which is
-  **not included in this repo**. Without it you lose the fallback engine, not a
-  lane; `doctor` reports this as WARN rather than FAIL. Point `DS_SCRIPT` in
+  **not included in this repo**. Without it you lose only that explicit
+  engine, not a lane; it is not an automatic fallback (luna and terra fall back to
+  grok, grok to luna). Point `DS_SCRIPT` in
   `scripts/codex-run.sh` at your own wrapper if you have one.
 - **Optional — `treehouse`** (a pre-warmed git-worktree pool for parallel agents) for
   parallel implementers. Serial implementation works without it. Install

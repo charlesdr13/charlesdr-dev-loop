@@ -1,7 +1,7 @@
 {
   "name": "charlesdr-dev-loop",
   "version": "2.49.0",
-  "description": "Charles's development loop: Claude Code orchestrates, Codex lanes explore and implement, an isolated reviewer grades. A PreToolUse hook routes non-trivial edits out to codex instead of letting Claude type them inline. Opt-in per repo via .charles.toml.",
+  "description": "Charles's development loop: Claude Code orchestrates, Codex lanes explore and implement, an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Opt-in per repo via .charles.toml.",
   "author": {
     "name": "charlesdr-dev-loop"
   },

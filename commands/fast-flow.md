@@ -29,8 +29,7 @@ SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
    `git worktree add .claude/worktrees/fast-<ts> HEAD`), via a Bash call with
    `run_in_background: true`, no `--run` (the worktree has no run directory):
    `CHARLES_FAST_MODE=1 codex-run --lane implement --dir "$WT" --plan "$(pwd)/<plan>" --req <all R IDs> --timeout 2700 "<brief naming ponytail>"`.
-   Then `"$SCRIPTS/verify-receipt.sh" "$WT" --lane implement --since 2700`, append
-   `$WT/.charles/dispatches.jsonl` to the root's, and merge:
+   Then `"$SCRIPTS/verify-receipt.sh" "$WT" --lane implement --since 2700`, and merge:
    `git -C "$WT" add -A && git -C "$WT" diff --cached HEAD | git apply --index`.
    The root must be clean first (apart from the plan); a dirty root or failed
    `apply` is a `FAILED` item and the diff stays in the worktree. Keep the

@@ -371,7 +371,7 @@ if [ -x "$us" ]; then
     0) ;;
     2) note "changes from a lane that was cut short — verify with green.sh and codex-reviewer, then keep or revert" ;;
     3) note "an orphaned implement lane may own working-tree changes — census before discarding" ;;
-    *) note "working-tree changes that no dispatch produced — discard them whole" ;;
+    *) note "working-tree changes no dispatch produced — keep or commit after green.sh" ;;
   esac
   [ "$urc" -ne 0 ] && echo "$out" | sed -n '1,2p' | sed 's/^/         /'
   true

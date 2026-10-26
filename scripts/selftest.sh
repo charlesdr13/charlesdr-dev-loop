@@ -1527,6 +1527,21 @@ else
   echo "  FAIL  --run must take precedence over CHARLES_RUN (rc=$req_rc)"; fail=$((fail+1))
 fi
 
+# R4 edges: every run stale and no plan -> still ambiguous; --plan beats staleness.
+touch -d '3 days ago' "$REQAMB/.charles/runs/run-alpha-20260821/RUN.md" "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
+r4_all_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; r4_all_rc=$?
+: > "$REQAMB/.charles/dispatches.jsonl"
+r4_sp_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --plan docs/specs/plan-beta.md --req A3 --no-fallback --timeout 2 "scope" 2>&1)"; r4_sp_rc=$?
+if [ "$r4_all_rc" -eq 2 ] && grep -qF 'multiple open runs' <<<"$r4_all_out" && [ "$r4_sp_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .flow_run_id == "run-beta-20260821")' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  all-stale runs stay ambiguous; --plan wins even against a stale run"; pass=$((pass+1))
+else
+  echo "  FAIL  all-stale / stale-plan selection is wrong (rc=$r4_all_rc/$r4_sp_rc): $r4_all_out $r4_sp_out"; fail=$((fail+1))
+fi
+touch "$REQAMB/.charles/runs/run-alpha-20260821/RUN.md" "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
+
 # R4: runs idle over a day are ignored without a selector; --plan picks its run.
 touch -d '3 days ago' "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
 : > "$REQAMB/.charles/dispatches.jsonl"
@@ -2547,6 +2562,30 @@ if grep -qF 'charlesdr-dev-loop: auto-abandoned 1 stale run(s)' <<<"$r2_out" \
   echo "  PASS  SessionStart abandons an 8-day-old run and leaves a fresh one open"; pass=$((pass+1))
 else
   echo "  FAIL  stale-run abandon is wrong (output: $r2_out)"; fail=$((fail+1))
+fi
+
+# R2 edges: zero disables, a leading-zero value still works, closed/abandoned runs are untouched.
+R2B="$BOX/r2b-stale"; mkdir -p "$R2B/docs/specs"; touch "$R2B/.charles.toml" "$R2B/docs/specs/a.md" "$R2B/docs/specs/b.md" "$R2B/docs/specs/c.md"
+r2b_old="$(bash "$RS" init "$R2B" feature "old" --spec docs/specs/a.md 2>/dev/null)"
+r2b_closed="$(bash "$RS" init "$R2B" feature "closed" --spec docs/specs/b.md 2>/dev/null)"
+printf '# Plan\n\n## Grill verdict\n\n- Rounds: 1\n\n## Sign-off\n\n- [x] shipped\n' > "$R2B/docs/specs/b.md"
+bash "$RS" close "$R2B" "done" --run "$r2b_closed" --spec docs/specs/b.md >/dev/null 2>&1
+r2b_abn="$(bash "$RS" init "$R2B" feature "abn" --spec docs/specs/c.md 2>/dev/null)"
+bash "$RS" abandon "$R2B" --run "$r2b_abn" "earlier" >/dev/null 2>&1
+for r2b_id in "$r2b_old" "$r2b_closed" "$r2b_abn"; do touch -d '30 days ago' "$R2B/.charles/runs/$r2b_id/RUN.md"; done
+r2b_sum_before="$(cat "$R2B/.charles/runs/$r2b_closed/RUN.md" "$R2B/.charles/runs/$r2b_abn/RUN.md" | md5sum)"
+r2b_zero="$(cd "$R2B" && CHARLES_STALE_DAYS=0 HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8/plugin" bash "$LINK" 2>&1)"
+if ! grep -q '^## Outcome' "$R2B/.charles/runs/$r2b_old/RUN.md" && ! grep -qF 'auto-abandoned' <<<"$r2b_zero"; then
+  echo "  PASS  CHARLES_STALE_DAYS=0 abandons nothing"; pass=$((pass+1))
+else
+  echo "  FAIL  CHARLES_STALE_DAYS=0 must disable auto-abandon: $r2b_zero"; fail=$((fail+1))
+fi
+r2b_08="$(cd "$R2B" && CHARLES_STALE_DAYS=08 HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8/plugin" bash "$LINK" 2>&1)"; r2b_08_rc=$?
+r2b_sum_after="$(cat "$R2B/.charles/runs/$r2b_closed/RUN.md" "$R2B/.charles/runs/$r2b_abn/RUN.md" | md5sum)"
+if [ "$r2b_08_rc" -eq 0 ] && grep -qF 'auto-abandoned 1 stale run(s)' <<<"$r2b_08" && [ "$r2b_sum_before" = "$r2b_sum_after" ]; then
+  echo "  PASS  CHARLES_STALE_DAYS=08 works; closed and abandoned runs are untouched"; pass=$((pass+1))
+else
+  echo "  FAIL  STALE_DAYS=08 / closed-run handling is wrong (rc=$r2b_08_rc): $r2b_08"; fail=$((fail+1))
 fi
 
 # R3: the Stop hook warns only for FAILED items in a run touched in the last 24 hours.
@@ -3690,7 +3729,7 @@ else
 fi
 
 rm -f "$GL/grok.json"
-gl_out="$(grok_run --lane explore --engine grok --effort bogus --no-fallback 2>&1)"; gl_rc=$?
+gl_out="$(grok_run --lane explore --engine grok --effort bogus 2>&1)"; gl_rc=$?
 if [ "$gl_rc" -eq 2 ] && [[ "$gl_out" == *"xhigh"*"high"*"medium"*"low"* ]] && [ ! -e "$GL/grok.json" ]; then
   echo "  PASS  invalid grok --effort exits 2 naming the four levels without spawning grok"; pass=$((pass+1))
 else
@@ -4654,6 +4693,13 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$WM/bin/codex"; chmod +x "$WM/bin/code
   && printf 'x\n' > f && git add f && git commit -qm i && git worktree add -q ../wt -b wt ) >/dev/null 2>&1
 CHARLES_STATE_DIR="$WM/state" PATH="$WM/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$WM/wt" --timeout 5 "from worktree" >/dev/null 2>&1
 CHARLES_STATE_DIR="$WM/state" PATH="$WM/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$WM/main" --timeout 5 "from main" >/dev/null 2>&1
+mkdir -p "$WM/main/sub"
+CHARLES_STATE_DIR="$WM/state" PATH="$WM/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$WM/main/sub" --timeout 5 "from subfolder" >/dev/null 2>&1
+if [ -s "$WM/main/sub/.charles/dispatches.jsonl" ] && ! jq -e 'select(.task == "from subfolder")' "$WM/main/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  a --dir in a subfolder of the main checkout is not mirrored to the repo root"; pass=$((pass+1))
+else
+  echo "  FAIL  subfolder dispatch must not write to the repo root log"; fail=$((fail+1))
+fi
 if [ "$(jq -r 'select(.task == "from worktree") | .event' "$WM/wt/.charles/dispatches.jsonl" | sort | tr '\n' ' ')" = "end start " ] \
   && [ "$(jq -r 'select(.task == "from worktree") | .event' "$WM/main/.charles/dispatches.jsonl" | sort | tr '\n' ' ')" = "end start " ] \
   && [ "$(jq -r 'select(.task == "from main") | .event' "$WM/main/.charles/dispatches.jsonl" | wc -l)" -eq 2 ]; then
@@ -5486,7 +5532,7 @@ if [ "$r5_duplicate_rc" -eq 0 ] \
   && grep -qF 'WARN — spec docs/specs/duplicate.md has no' <<<"$r5_duplicate_out"; then
   echo "  PASS  R5 uses only the first duplicate Grill verdict section (warns)"; pass=$((pass+1))
 else
-  echo "  FAIL  R5 must refuse a marker found only in a duplicate verdict section (rc=$r5_duplicate_rc): $r5_duplicate_out"; fail=$((fail+1))
+  echo "  FAIL  R5 must warn on a marker found only in a duplicate verdict section (rc=$r5_duplicate_rc): $r5_duplicate_out"; fail=$((fail+1))
 fi
 
 printf '# Plan\n\n## Grill verdict\n\n- Rounds: 2\n\n- [ ] **R1. rounds acceptance**\n' > "$R5DIR/docs/specs/rounds.md"
@@ -5532,11 +5578,12 @@ mkdir -p "$PD/r10-repo/.charles/runs/r5-parallel"
 printf '# Run r5-parallel\n\n- flow: feature\n- spec: docs/specs/parallel-ungrilled.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$PD/r10-repo/.charles/runs/r5-parallel/RUN.md"
 r5_parallel_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" \
-  bash "$RUN_SH" --lane implement --dir "$PD/r10-repo" --req R1 --run r5-parallel --validate-only "preflight" 2>&1)"; r5_parallel_rc=$?
-if [ "$r5_parallel_rc" -eq 0 ] && grep -qF 'WARN — spec docs/specs/parallel-ungrilled.md has no' <<<"$r5_parallel_out"; then
-  echo "  PASS  parallel preflight (validate-only) warns on an ungrilled spec"; pass=$((pass+1))
+  bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/parallel-ungrilled.chunks.json" \
+  --run r5-parallel --no-green 2>&1)"; r5_parallel_rc=$?
+if ! grep -qF 'was refused' <<<"$r5_parallel_out" && ! grep -qF 'invalid manifest' <<<"$r5_parallel_out"; then
+  echo "  PASS  parallel-chunks does not refuse an ungrilled spec"; pass=$((pass+1))
 else
-  echo "  FAIL  parallel preflight must warn, not refuse (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
+  echo "  FAIL  parallel-chunks must not refuse an ungrilled spec (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
 fi
 
 # --- R6 review coverage -------------------------------------------------------

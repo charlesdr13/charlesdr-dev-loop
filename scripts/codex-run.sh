@@ -385,7 +385,8 @@ validate_dispatch_scope() {
       done
       [ "${#both[@]}" -eq 0 ] || matched=("${both[@]}")
     fi
-    if [ "${#matched[@]}" -ge 1 ]; then open_runs=("${matched[@]}"); else open_runs=("${fresh[@]}"); fi
+    # Nothing matched and nothing fresh: keep them all so the ambiguity refusal still fires.
+    if [ "${#matched[@]}" -ge 1 ]; then open_runs=("${matched[@]}"); elif [ "${#fresh[@]}" -ge 1 ]; then open_runs=("${fresh[@]}"); fi
   fi
   # Abandoned runs stay open for /resolve; choose one instead of blocking the repo.
   if [ "$RUN_SELECTOR_SET" -eq 1 ]; then
@@ -661,11 +662,16 @@ omp_default_model() { # omp_default_model LANE
 # Append one record to the dispatch log. In a linked worktree the same line also
 # goes to the main checkout's log, so receipts outlive the worktree.
 append_receipt() { # append_receipt FILE < record
-  local rec common main
+  local rec common gitdir main
   rec="$(cat)" || return 1
+  [ -n "$rec" ] || return 0
   printf '%s\n' "$rec" >> "$1" || return 1
   command -v git >/dev/null 2>&1 || return 0
-  common="$(cd "$DIR" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  local -a g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE git -C "$DIR")
+  common="$("${g[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  gitdir="$("${g[@]}" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 0
+  # Only a linked worktree of a normal repo has a separate main checkout to mirror to.
+  [ "$gitdir" != "$common" ] && [ "$(basename "$common")" = ".git" ] || return 0
   main="$(dirname "$common")/.charles/dispatches.jsonl"
   [ "$(realpath -m "$main")" = "$(realpath -m "$1")" ] && return 0
   mkdir -p "$(dirname "$main")" 2>/dev/null && printf '%s\n' "$rec" >> "$main" 2>/dev/null || true
@@ -1390,7 +1396,8 @@ else
   # inline editing: that would defeat the entire point of routing this work out.
   fb_engine=""
   case "$ENGINE" in luna|terra) fb_engine=grok ;; grok) fb_engine=luna ;; esac
-  if [ $RC -ne 0 ] && [ "$FALLBACK" -eq 1 ] && [ -n "$fb_engine" ]; then
+  # rc 2 is a usage error: a different engine would not fix it.
+  if [ $RC -ne 0 ] && [ $RC -ne 2 ] && [ "$FALLBACK" -eq 1 ] && [ -n "$fb_engine" ]; then
     primary_rc="$RC"
     if [ "$primary_rc" -eq 124 ] && dispatch_timed_out; then
       echo "codex-run.sh: fallback was skipped because the task timed out" >&2
