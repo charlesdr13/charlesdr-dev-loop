@@ -17,3 +17,8 @@ Green: `bash scripts/selftest.sh && bash scripts/doctor.sh`.
 Grill waived: two small, reversible changes the user asked for directly; the review grades the diff.
 
 ## Sign-off
+
+- [x] **R1** — built-in default is claude; preferences still win (mutation-tested); empty CHARLES_DEFAULT_ENGINE restores luna/sol — selftest 465 passed, 0 failed
+- [x] **R2** — SKILL.md, engine.md, README lane table, CLAUDE.md, plugin and marketplace descriptions — review round 2 SATISFIES PLAN
+- [x] **R3** — step 2 "Anchor, then plan": at most 3 questions with defaults, proceed without waiting — SKILL.md diff
+- [x] **R4** — 2.49.1 in plugin.json and both marketplace.json fields
