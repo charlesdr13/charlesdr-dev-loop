@@ -54,13 +54,13 @@ claude dispatch has no fallback.
 
 `deepseek` is the free-of-codex-quota lane (deepseek-v4-flash @ max, via
 `~/.codex/deepseek.config.toml`). With no preference, explore and implement use
-luna with deepseek as fallback, and review uses sol.
+luna (falling back to grok), and review uses sol.
 
 `deepseek` is peak-aware. DeepSeek bills roughly double between 01:00-04:00 and
 06:00-10:00 UTC, so dispatches inside those windows run on luna instead — at max
 reasoning with luna's normal fast_mode selection. Outside them the lane stays
-on deepseek. An explicit `--engine deepseek` is never swapped: that is the
-failure fallback path.
+on deepseek. An explicit `--engine deepseek` is never swapped. deepseek is not an
+automatic fallback: luna and terra fall back to grok, and grok to luna.
 
 `grok` runs all three lanes — explore, implement, AND review — on `grok-4.6` at
 high effort by default via the local `grok` CLI; `--effort max` means `xhigh`
