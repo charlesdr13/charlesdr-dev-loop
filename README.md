@@ -570,6 +570,10 @@ verdict and changes no lane produced are NOTEs, not blockers. While a run is
 open, `doctor` keeps installed-content drift at WARN but FAILs on an unreviewed
 implement; report that expected mid-flow failure rather than reinstalling or
 trying to bypass the review.
+
+In a repo with a `no-mistakes` git remote, the no-mistakes pipeline is the final gate
+instead of the plugin review: record `run-state.sh phase <dir> review "no-mistakes: ..."`
+and close reports unreviewed implements as a NOTE ("graded by no-mistakes"), no `--force` needed.
 The small transition table in `scripts/flow.json` drives the expected-next hints;
 `scripts/runs-sweep.sh [root...]` is the standing read-only hygiene sweep across
 opted-in repos, so run it when `doctor` warns about open runs.

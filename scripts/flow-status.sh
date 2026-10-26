@@ -301,10 +301,21 @@ if [ -s "$log" ] && command -v jq >/dev/null; then
     | [(.ts // ""), (flow_id(.flow_run_id) | if . == "" then "__NO_FLOW_RUN_ID__" else . end), text(.spec_path)] | @tsv
   ')
   ungraded=$((ungraded_close + ungraded_repo))
+  # A no-mistakes repo whose closing run recorded a no-mistakes review phase was graded by that pipeline.
+  nm_graded=0
+  if [ -n "$CLOSING" ] && git -C "$DIR" remote get-url no-mistakes >/dev/null 2>&1 &&
+     awk '/^- \[[^]]*\] review/ {on=1; next} /^- \[|^## / {on=0} on && /no-mistakes/ {f=1} END {exit !f}' "$CLOSING/RUN.md" 2>/dev/null; then
+    nm_graded=1
+  fi
   if [ "${ungraded:-0}" -gt 0 ]; then
-    [ "$ungraded_close" -eq 0 ] || say_bad "$ungraded_close implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
+    if [ "$ungraded_close" -gt 0 ] && [ "$nm_graded" -eq 1 ]; then
+      note "$ungraded_close implement dispatch(es) graded by no-mistakes"
+    elif [ "$ungraded_close" -gt 0 ]; then
+      say_bad "$ungraded_close implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
+    fi
     [ "$ungraded_repo" -eq 0 ] || say_repo "$ungraded_repo implement dispatch(es) never reviewed (repo total: $impl implements, $revs reviews)"
-    echo "         the isolated reviewer is the point of this plugin; run codex-reviewer against the plan"
+    [ "$ungraded_close" -gt 0 ] && [ "$nm_graded" -eq 1 ] && [ "$ungraded_repo" -eq 0 ] ||
+      echo "         the isolated reviewer is the point of this plugin; run the review lane against the plan"
   else
     if [ "${revs:-0}" -eq 0 ] && [ "${impl:-0}" -gt 0 ]; then
       say_ok "no successful implement awaiting review ($impl implement dispatch(es), all failed)"
