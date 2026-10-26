@@ -22,3 +22,7 @@ Grill waived: two small, reversible changes the user asked for directly; the rev
 - [x] **R2** — SKILL.md, engine.md, README lane table, CLAUDE.md, plugin and marketplace descriptions — review round 2 SATISFIES PLAN
 - [x] **R3** — step 2 "Anchor, then plan": at most 3 questions with defaults, proceed without waiting — SKILL.md diff
 - [x] **R4** — 2.49.1 in plugin.json and both marketplace.json fields
+
+## Run outcome — 2026-10-26
+
+shipped 2.49.1 (PR #5, installed)
