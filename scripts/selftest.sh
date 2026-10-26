@@ -4998,6 +4998,14 @@ nm_case no-phase 1 "" "1 passed, 0 failed" 5
 nm_case failed 1 "no-mistakes: failed, https://example.invalid/pr/1" "1 passed, 0 failed" 5
 nm_case later-phase 1 "PASS" "1 passed, 0 failed; $NM_OK" 5
 
+# The flow skill is loaded on every flow; keep it at most 260 lines.
+skill_lines="$(wc -l < "$(cd "$(dirname "$0")/.." && pwd)/skills/charles-flow/SKILL.md")"
+if [ "$skill_lines" -le 260 ]; then
+  echo "  PASS  charles-flow SKILL.md is $skill_lines lines (cap 260)"; pass=$((pass+1))
+else
+  echo "  FAIL  charles-flow SKILL.md is $skill_lines lines, over the 260 cap"; fail=$((fail+1))
+fi
+
 # The orphan census must fail closed when it cannot inspect the dispatch log.
 CF="$BOX/census-fail"; mkdir -p "$CF"
 ( cd "$CF" && git init -q && git config user.name tester && git config user.email tester@example.invalid
