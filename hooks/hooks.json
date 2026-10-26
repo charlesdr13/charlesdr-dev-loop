@@ -1,27 +1,7 @@
 {
-  "description": "charlesdr-dev-loop: route non-trivial edits AND code-working subagents to a codex lane; remember an approved inline block; warn on unclosed runs with failed lanes; isolate claude-reviewer to its review box and log claude-lane receipts. Active only in repos with a .charles.toml.",
+  "description": "charlesdr-dev-loop: warn on unclosed runs with failed lanes, abandon stale runs at session start, isolate claude-reviewer to its review box and log claude-lane receipts. Active only in repos with a .charles.toml.",
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/route-to-codex.sh",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/route-subagents.sh",
-            "timeout": 10
-          }
-        ]
-      },
       {
         "matcher": "Agent|Task",
         "hooks": [
@@ -66,16 +46,6 @@
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mark-inline-ok.sh",
-            "timeout": 10
-          }
-        ]
-      },
       {
         "matcher": "Agent|Task",
         "hooks": [

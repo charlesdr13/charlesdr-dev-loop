@@ -46,9 +46,9 @@ else
   esac
 fi
 [ -f "$HOME/.codex/terra.config.toml" ] && say OK "terra profile (escalation engine)" || say WARN "missing ~/.codex/terra.config.toml — no escalation when work comes back wrong twice"
-[ -f "$HOME/.codex/deepseek.config.toml" ] && say OK "deepseek profile (fallback engine)" || say WARN "missing ~/.codex/deepseek.config.toml — no fallback if luna fails"
-[ -f "$HOME/.config/lg-cc-deepseek/key.env" ] && say OK "deepseek key present" || say WARN "missing ~/.config/lg-cc-deepseek/key.env — no fallback if luna fails"
-[ -x "$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh" ] && say OK "codex-ds.sh wrapper" || say WARN "missing codex-ds.sh — no fallback if luna fails"
+if [ "$engine" != "grok" ]; then
+  have grok && say OK "grok CLI on PATH (fallback engine for luna and terra)" || say WARN "grok CLI not on PATH — no fallback if luna fails"
+fi
 grep -q 'model = "gpt-6.1-sol"' "$HOME/.codex/config.toml" 2>/dev/null && say OK "sol base model (review lane)" || say WARN "base model is not gpt-6.1-sol — review lane will use whatever ~/.codex/config.toml says"
 
 echo

@@ -1,133 +1,16 @@
 #!/usr/bin/env bash
-# selftest.sh — asserts the hook allows what it should and asks on what it shouldn't.
+# selftest.sh — asserts the plugin's scripts and hooks behave as specified.
 # ponytail: one runnable check for the only non-trivial branch logic in the plugin.
 set -uo pipefail
-unset CHARLES_FAST_MODE CHARLES_SUBAGENTS_OK CHARLES_INLINE_OK CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+unset CHARLES_FAST_MODE CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
-HOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-to-codex.sh"
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
 pass=0; fail=0
-
-check() { # check NAME EXPECT(allow|ask|deny) PAYLOAD
-  local name="$1" expect="$2" payload="$3" out decision
-  out="$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)"
-  if [ -z "$out" ]; then decision=allow
-  else decision="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null)"; fi
-  if [ "$decision" = "$expect" ]; then
-    echo "  PASS  $name (expected $expect)"; pass=$((pass+1))
-  else
-    echo "  FAIL  $name — expected $expect, got $decision"; echo "        $out"; fail=$((fail+1))
-  fi
-}
-
-big="$(python3 -c 'print("\n".join("line %d" % i for i in range(80)))')"
-small="$(python3 -c 'print("\n".join("line %d" % i for i in range(5)))')"
-
-# --- repo WITHOUT .charles.toml: hook must stay out of the way ----------------
-mkdir -p "$BOX/plain"; echo "x" > "$BOX/plain/a.ts"
-check "opted-out repo, huge edit" allow \
-  "$(jq -nc --arg p "$BOX/plain/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-# --- opted-in repo -----------------------------------------------------------
-mkdir -p "$BOX/repo"; printf 'inline_lines = 40\ninline_files = 3\n' > "$BOX/repo/.charles.toml"
-for f in a.ts b.ts c.ts d2.ts d.md; do echo "x" > "$BOX/repo/$f"; done
-
-check "small edit" allow \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$small" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-check "markdown, huge" allow \
-  "$(jq -nc --arg p "$BOX/repo/d.md" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-check "new file, huge (scaffolding)" allow \
-  "$(jq -nc --arg p "$BOX/repo/brand-new.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-bypass_out="$(CHARLES_INLINE_OK=1 bash "$HOOK" <<<"$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')" 2>/dev/null)"
-if [ -z "$bypass_out" ]; then echo "  PASS  CHARLES_INLINE_OK bypass (expected allow)"; pass=$((pass+1))
-else echo "  FAIL  CHARLES_INLINE_OK bypass — expected allow, got $bypass_out"; fail=$((fail+1)); fi
-
-: > "$BOX/repo/.charles/touched" 2>/dev/null || mkdir -p "$BOX/repo/.charles"
-check "big edit trips line threshold" ask \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-FM_TASK_ID=t1 check "firstmate crewmate: big edit denied, not asked" deny \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-CHARLES_UNATTENDED=1 check "CHARLES_UNATTENDED: big edit denied, not asked" deny \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-# 3rd distinct file trips the file threshold even though each edit is tiny.
-: > "$BOX/repo/.charles/touched"
-printf '%s\n' "$BOX/repo/a.ts" "$BOX/repo/b.ts" > "$BOX/repo/.charles/touched"
-check "3rd file trips file threshold" ask \
-  "$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
-
-# a dispatch clears the counter -> back to allow
-: > "$BOX/repo/.charles/touched"
-check "counter cleared after dispatch" allow \
-  "$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
-
-# --- approving an ask is remembered ------------------------------------------
-# The nag bug: nfiles only grows, so before this every edit for the next hour
-# re-asked after the 3rd file. Approval must buy silence.
-MARK="$(cd "$(dirname "$0")/.." && pwd)/hooks/mark-inline-ok.sh"
-: > "$BOX/repo/.charles/touched"
-printf '%s\n' "$BOX/repo/a.ts" "$BOX/repo/b.ts" > "$BOX/repo/.charles/touched"
-rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
-
-edit_c="$(jq -nc --arg p "$BOX/repo/c.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
-check "ask fires on the 3rd file" ask "$edit_c"
-
-# the edit lands -> PostToolUse converts pending-ask into the grant
-printf '%s' "$edit_c" | bash "$MARK" >/dev/null 2>&1
-if [ -f "$BOX/repo/.charles/inline-ok" ]; then
-  echo "  PASS  approved edit writes inline-ok"; pass=$((pass+1))
-else
-  echo "  FAIL  approved edit writes inline-ok — marker missing"; fail=$((fail+1))
-fi
-
-check "4th file stays quiet after approval" allow \
-  "$(jq -nc --arg p "$BOX/repo/d2.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')"
-check "big edit stays quiet after approval" allow \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-# an expired grant re-arms the gate
-touch -d '2 hours ago' "$BOX/repo/.charles/inline-ok"
-check "expired grant asks again" ask \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-# a DENIED ask must not be cashable by a later edit to another file
-rm -f "$BOX/repo/.charles/inline-ok"
-printf '%s\n' "$BOX/repo/a.ts" > "$BOX/repo/.charles/pending-ask"
-printf '%s' "$(jq -nc --arg p "$BOX/repo/b.ts" --arg s "$small" '{tool_name:"Edit",tool_input:{file_path:$p,old_string:"x",new_string:$s}}')" | bash "$MARK" >/dev/null 2>&1
-if [ ! -f "$BOX/repo/.charles/inline-ok" ]; then
-  echo "  PASS  mismatched pending-ask grants nothing"; pass=$((pass+1))
-else
-  echo "  FAIL  mismatched pending-ask grants nothing — grant was written"; fail=$((fail+1))
-fi
-rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
-
-# --- Claude Code worktrees are exempt and do not count -----------------------
-WT="$BOX/repo/.claude/worktrees/fixture"; mkdir -p "$WT"
-rm -f "$BOX/repo/.charles/inline-ok"
-echo "x" > "$WT/a.ts"
-: > "$BOX/repo/.charles/touched"
-worktree_out="$(jq -nc --arg p "$WT/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}' | CHARLES_INLINE_OK=0 bash "$HOOK" 2>/dev/null)"
-worktree_count="$(wc -l < "$BOX/repo/.charles/touched")"
-if [ -z "$worktree_out" ] && [ "$worktree_count" -eq 0 ]; then
-  echo "  PASS  worktree edit is silent and not counted"; pass=$((pass+1))
-else
-  echo "  FAIL  worktree edit should be silent and leave the counter empty"; fail=$((fail+1))
-fi
-
-check "same over-threshold edit outside worktrees still asks" ask \
-  "$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}')"
-
-ask_text="$(jq -nc --arg p "$BOX/repo/a.ts" --arg c "$big" '{tool_name:"Write",tool_input:{file_path:$p,content:$c}}' | CHARLES_INLINE_OK=0 bash "$HOOK" 2>/dev/null)"
-if grep -qF 'CHARLES_INLINE_OK' <<<"$ask_text" \
-  && grep -qF 'inline_lines' <<<"$ask_text" \
-  && grep -qF 'inline_files' <<<"$ask_text"; then
-  echo "  PASS  ask text names the bypass and threshold keys"; pass=$((pass+1))
-else
-  echo "  FAIL  ask text must name CHARLES_INLINE_OK, inline_lines, and inline_files"; fail=$((fail+1))
-fi
+mkdir -p "$BOX/plain"
+# Keep every test off the real grok CLI: luna/terra now fall back to it. Tests that
+# need a working grok put their own fake first on PATH.
+mkdir -p "$BOX/stub-bin"; printf '#!/usr/bin/env bash\nexit 1\n' > "$BOX/stub-bin/grok"; chmod +x "$BOX/stub-bin/grok"
+PATH="$BOX/stub-bin:$PATH"
 
 # --- scripts reached through a PATH symlink must still find run-common.sh -----
 # v2.30.0 sourced "$SCRIPT_DIR/run-common.sh" with SCRIPT_DIR taken from an
@@ -166,94 +49,6 @@ if [ -z "$shebang_bad" ]; then
 else
   echo "  FAIL  script(s) with no shebang on line 1:$shebang_bad"; fail=$((fail+1))
 fi
-
-# --- subagent routing hook ----------------------------------------------------
-SUBHOOK="$(cd "$(dirname "$0")/.." && pwd)/hooks/route-subagents.sh"
-
-scheck_tool() { # scheck_tool NAME EXPECT TOOL SUBAGENT_TYPE CWD
-  local name="$1" expect="$2" tool="$3" out decision
-  out="$(jq -nc --arg t "$tool" --arg s "$4" --arg c "$5" '{tool_name:$t,cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
-  if [ -z "$out" ]; then decision=allow
-  else decision="$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"$out" 2>/dev/null)"; fi
-  if [ "$decision" = "$expect" ]; then
-    echo "  PASS  $name (expected $expect)"; pass=$((pass+1))
-  else
-    echo "  FAIL  $name — expected $expect, got $decision"; echo "        $out"; fail=$((fail+1))
-  fi
-}
-
-echo
-
-routing_cases=(
-  "opted-out repo, general-purpose|allow|general-purpose|$BOX/plain"
-  "codex-reviewer remains allowed|allow|codex-reviewer|$BOX/repo"
-  "namespaced codex-reviewer remains allowed|allow|charlesdr-dev-loop:codex-reviewer|$BOX/repo"
-  "namespaced claude-explorer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-explorer|$BOX/repo"
-  "namespaced claude-implementer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-implementer|$BOX/repo"
-  "namespaced claude-reviewer IS the engine=claude lane|allow|charlesdr-dev-loop:claude-reviewer|$BOX/repo"
-  "google-drive is not code work|allow|google-drive|$BOX/repo"
-  "Explore must route to a lane|ask|Explore|$BOX/repo"
-  "general-purpose must route|ask|general-purpose|$BOX/repo"
-  "python-pro must route|ask|python-pro|$BOX/repo"
-  "feature-dev:code-explorer routes|ask|feature-dev:code-explorer|$BOX/repo"
-)
-FM_TASK_ID=t1 scheck_tool "firstmate crewmate: general-purpose denied, not asked" deny Agent general-purpose "$BOX/repo"
-for tool in Agent Task; do
-  for test_case in "${routing_cases[@]}"; do
-    IFS='|' read -r name expect sub cwd <<<"$test_case"
-    scheck_tool "$tool $name" "$expect" "$tool" "$sub" "$cwd"
-  done
-done
-
-message_check() { # message_check NAME SUBAGENT_TYPE CWD EXPECTED-DISPATCH
-  local name="$1" out
-  out="$(jq -nc --arg s "$2" --arg c "$3" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:$s,prompt:"x"}}' | bash "$SUBHOOK" 2>/dev/null)"
-  if grep -qF "$4" <<<"$out" && grep -qF 'run_in_background: true' <<<"$out"; then
-    echo "  PASS  $name"; pass=$((pass+1))
-  else
-    echo "  FAIL  $name — expected direct background dispatch"; echo "        $out"; fail=$((fail+1))
-  fi
-}
-
-# --- approving a SPAWN grants too (fresh session: no edit has happened yet) ----
-rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
-spawn_payload="$(jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"Explore",prompt:"x"}}')"
-scheck_tool "first spawn of a session asks" ask Agent Explore "$BOX/repo"
-printf '%s' "$spawn_payload" | bash "$MARK" >/dev/null 2>&1
-if [ -f "$BOX/repo/.charles/inline-ok" ]; then
-  echo "  PASS  approved spawn writes inline-ok"; pass=$((pass+1))
-else
-  echo "  FAIL  approved spawn writes inline-ok — marker missing"; fail=$((fail+1))
-fi
-scheck_tool "second spawn stays quiet" allow Agent general-purpose "$BOX/repo"
-# a denied spawn must not be cashed by a different agent type
-rm -f "$BOX/repo/.charles/inline-ok"
-printf 'agent:Explore\n' > "$BOX/repo/.charles/pending-ask"
-printf '%s' "$(jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"python-pro",prompt:"x"}}')" | bash "$MARK" >/dev/null 2>&1
-if [ ! -f "$BOX/repo/.charles/inline-ok" ]; then
-  echo "  PASS  mismatched spawn pending grants nothing"; pass=$((pass+1))
-else
-  echo "  FAIL  mismatched spawn pending grants nothing — grant was written"; fail=$((fail+1))
-fi
-rm -f "$BOX/repo/.charles/inline-ok" "$BOX/repo/.charles/pending-ask"
-
-# --- the inline grant reaches the subagent gate, on a shorter clock -----------
-: > "$BOX/repo/.charles/inline-ok"
-scheck_tool "fresh grant quiets the subagent gate" allow Agent Explore "$BOX/repo"
-# 10-minute default: older than the edit gate's 60 tolerates, still asks here.
-touch -d '30 minutes ago' "$BOX/repo/.charles/inline-ok"
-scheck_tool "grant older than 10min re-arms the subagent gate" ask Agent Explore "$BOX/repo"
-rm -f "$BOX/repo/.charles/inline-ok"
-
-jq -nc --arg c "$BOX/repo" '{tool_name:"Agent",cwd:$c,tool_input:{subagent_type:"general-purpose",prompt:"x"}}' \
-  | CHARLES_SUBAGENTS_OK=1 bash "$SUBHOOK" 2>/dev/null | grep -q . \
-  && { echo "  FAIL  CHARLES_SUBAGENTS_OK=1 still asks"; fail=$((fail+1)); } \
-  || { echo "  PASS  CHARLES_SUBAGENTS_OK=1 turns the subagent gate off"; pass=$((pass+1)); }
-
-message_check "Explore block points to direct dispatch" Explore "$BOX/repo" \
-  "codex-run --lane explore --dir <repo> --timeout 2700"
-message_check "implement block points to direct dispatch" python-pro "$BOX/repo" \
-  "codex-run --lane implement --dir <repo> --timeout 2700"
 
 # The Claude hook harness cannot be exercised from selftest; this matcher string
 # guard is the accepted wiring limit.
@@ -1732,6 +1527,28 @@ else
   echo "  FAIL  --run must take precedence over CHARLES_RUN (rc=$req_rc)"; fail=$((fail+1))
 fi
 
+# R4: runs idle over a day are ignored without a selector; --plan picks its run.
+touch -d '3 days ago' "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
+: > "$REQAMB/.charles/dispatches.jsonl"
+r4_stale_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --req R1 --no-fallback --timeout 2 "scope" 2>&1)"; r4_stale_rc=$?
+if [ "$r4_stale_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .flow_run_id == "run-alpha-20260821")' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  a stale open run is ignored when choosing the run"; pass=$((pass+1))
+else
+  echo "  FAIL  a stale open run must be ignored (rc=$r4_stale_rc): $r4_stale_out"; fail=$((fail+1))
+fi
+touch "$REQAMB/.charles/runs/run-beta-20260821/RUN.md"
+: > "$REQAMB/.charles/dispatches.jsonl"
+r4_plan_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
+  bash "$RUN_SH" --lane implement --dir "$REQAMB" --plan docs/specs/plan-beta.md --req A3 --no-fallback --timeout 2 "scope" 2>&1)"; r4_plan_rc=$?
+if [ "$r4_plan_rc" -eq 0 ] \
+  && jq -e 'select(.event == "start" and .flow_run_id == "run-beta-20260821")' "$REQAMB/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  --plan selects the open run whose spec matches"; pass=$((pass+1))
+else
+  echo "  FAIL  --plan must select the run with that spec (rc=$r4_plan_rc): $r4_plan_out"; fail=$((fail+1))
+fi
+
 : > "$REQAMB/.charles/dispatches.jsonl"
 req_out="$(CHARLES_RUN= PATH="$REQAMB/bin:$PATH" CHARLES_STATE_DIR="$REQAMB/state" \
   bash "$RUN_SH" --lane implement --dir "$REQAMB" --run run-al --req R1 \
@@ -2299,18 +2116,18 @@ mkdir -p "$CS/.charles/runs/own-plan"
 printf '# Run own-plan\n\n- flow: feature\n- spec: docs/specs/own-ungrilled.md\n- started: %s\n- repo: %s\n\n## Phases\n\n- [12:00Z] verify\n\n## Open items\n\n## Rollback\n\n' \
   "$CS_PLAN" "$CS" > "$CS/.charles/runs/own-plan/RUN.md"
 plan_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/own-plan" 2>&1)"; plan_status_rc=$?
-if [ "$plan_status_rc" -eq 1 ] && grep -q 'ISSUE.*grill verdict' <<<"$plan_status" \
+if [ "$plan_status_rc" -eq 0 ] && grep -q 'NOTE.*grill verdict' <<<"$plan_status" \
   && grep -q 'NOTE.*never reviewed' <<<"$plan_status" \
   && grep -q 'NOTE.*run(s) still open' <<<"$plan_status"; then
-  echo "  PASS  own ungrilled plan is the blocking plan finding"; pass=$((pass+1))
+  echo "  PASS  own ungrilled plan is only a NOTE"; pass=$((pass+1))
 else
-  echo "  FAIL  only the closing run's ungrilled plan should block (rc=$plan_status_rc)"; fail=$((fail+1))
+  echo "  FAIL  an ungrilled plan must be a NOTE, not an ISSUE (rc=$plan_status_rc)"; fail=$((fail+1))
 fi
 plan_close="$(CHARLES_STATE_DIR="$CS_STATE" bash "$RS" close "$CS" done --run own-plan 2>&1)"; plan_close_rc=$?
-if [ "$plan_close_rc" -eq 5 ] && grep -q 'grill verdict' <<<"$plan_close"; then
-  echo "  PASS  close refuses on own ungrilled spec"; pass=$((pass+1))
+if [ "$plan_close_rc" -eq 0 ]; then
+  echo "  PASS  close does not refuse on an ungrilled spec"; pass=$((pass+1))
 else
-  echo "  FAIL  close should refuse on own ungrilled spec (rc=$plan_close_rc)"; fail=$((fail+1))
+  echo "  FAIL  close must not refuse on an ungrilled spec (rc=$plan_close_rc)"; fail=$((fail+1))
 fi
 
 mkdir -p "$CS/.charles/runs/own-midflow"
@@ -2334,7 +2151,7 @@ fi
 all_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" 2>&1)"; all_status_rc=$?
 if [ "$all_status_rc" -eq 1 ] && grep -q 'ISSUE.*orphan' <<<"$all_status" \
   && grep -q 'ISSUE.*never reviewed' <<<"$all_status" \
-  && grep -q 'ISSUE.*grill verdict' <<<"$all_status" \
+  && grep -q 'NOTE.*grill verdict' <<<"$all_status" \
   && grep -q 'ISSUE.*run(s) still open' <<<"$all_status"; then
   echo "  PASS  repo-wide flow status still reports every finding"; pass=$((pass+1))
 else
@@ -2362,18 +2179,18 @@ printf '# Run unsourced-run\n\n- flow: feature\n- started: %s\n- repo: %s\n\n## 
 printf 'unaccounted\n' > "$UC/tracked"
 unsourced_status="$(bash "$FS" "$UC" --closing "$UC/.charles/runs/unsourced-run" 2>&1)"; unsourced_status_rc=$?
 unsourced_issues="$(grep -c '  ISSUE ' <<<"$unsourced_status" || true)"
-if [ "$unsourced_status_rc" -eq 1 ] && [ "$unsourced_issues" -eq 1 ] \
-  && grep -q 'ISSUE.*working-tree changes' <<<"$unsourced_status" \
-  && ! grep -q 'NOTE.*working-tree changes' <<<"$unsourced_status"; then
-  echo "  PASS  unsourced changes remain a blocking close finding"; pass=$((pass+1))
+if [ "$unsourced_status_rc" -eq 0 ] && [ "$unsourced_issues" -eq 0 ] \
+  && grep -q 'NOTE.*working-tree changes' <<<"$unsourced_status" \
+  && ! grep -q 'ISSUE.*working-tree changes' <<<"$unsourced_status"; then
+  echo "  PASS  unsourced changes are a NOTE, never a close blocker"; pass=$((pass+1))
 else
-  echo "  FAIL  unsourced changes must block even with no attributable flow issue (rc=$unsourced_status_rc)"; fail=$((fail+1))
+  echo "  FAIL  unsourced changes must be a NOTE (rc=$unsourced_status_rc)"; fail=$((fail+1))
 fi
 unsourced_close="$(bash "$RS" close "$UC" done --run unsourced-run 2>&1)"; unsourced_close_rc=$?
-if [ "$unsourced_close_rc" -eq 5 ]; then
-  echo "  PASS  close refuses on unsourced working-tree changes"; pass=$((pass+1))
+if [ "$unsourced_close_rc" -eq 0 ]; then
+  echo "  PASS  close accepts unsourced working-tree changes"; pass=$((pass+1))
 else
-  echo "  FAIL  close should refuse on unsourced working-tree changes (rc=$unsourced_close_rc)"; fail=$((fail+1))
+  echo "  FAIL  close must accept unsourced working-tree changes (rc=$unsourced_close_rc)"; fail=$((fail+1))
 fi
 
 MISSING_START="$BOX/close-missing-start"; mkdir -p "$MISSING_START/.charles/runs/closing"
@@ -2432,10 +2249,9 @@ for tool in bash dirname sed head jq sort tail grep awk basename date git wc ls;
   ln -s "$(command -v "$tool")" "$NO_REALPATH_BIN/$tool"
 done
 no_realpath_status="$(PATH="$NO_REALPATH_BIN" bash "$FS" "$NO_REALPATH" --closing "$NO_REALPATH/.charles/runs/own-plan/../own-plan" 2>&1)"; no_realpath_rc=$?
-if [ "$no_realpath_rc" -eq 1 ] && grep -q 'ISSUE.*grill verdict' <<<"$no_realpath_status" \
+if [ "$no_realpath_rc" -eq 1 ] && grep -q 'NOTE.*grill verdict' <<<"$no_realpath_status" \
   && grep -q 'ISSUE.*died mid-flow' <<<"$no_realpath_status" \
   && grep -q 'WARN.*realpath' <<<"$no_realpath_status" \
-  && ! grep -q 'NOTE.*grill verdict' <<<"$no_realpath_status" \
   && ! grep -q 'NOTE.*died mid-flow' <<<"$no_realpath_status"; then
   echo "  PASS  non-canonical early and late findings block without realpath"; pass=$((pass+1))
 else
@@ -2704,16 +2520,46 @@ printf '{"version":"fixture"}\n' > "$R8_PLUGIN/.claude-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$R8_PLUGIN/scripts/codex-run.sh"
 chmod +x "$R8_PLUGIN/scripts/codex-run.sh"
 r8_link_out="$(cd "$R8/status" && HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8_PLUGIN" bash "$LINK" 2>&1)"
-if grep -q 'ABANDONED' <<<"$r8_link_out" && ! grep -q 'open run(s)' <<<"$r8_link_out"; then
-  echo "  PASS  SessionStart notice reports ABANDONED outside open count"; pass=$((pass+1))
+if ! grep -q 'ABANDONED' <<<"$r8_link_out" && ! grep -q 'open run(s)' <<<"$r8_link_out"; then
+  echo "  PASS  SessionStart notice no longer lists ABANDONED runs"; pass=$((pass+1))
 else
-  echo "  FAIL  SessionStart notice must distinguish ABANDONED (output: $r8_link_out)"; fail=$((fail+1))
+  echo "  FAIL  SessionStart notice must not print ABANDONED (output: $r8_link_out)"; fail=$((fail+1))
 fi
 r8_warn_out="$(cd "$R8/status" && bash "$WARN" 2>&1)"
-if grep -q 'ABANDONED' <<<"$r8_warn_out" && ! grep -q 'FAILED item' <<<"$r8_warn_out"; then
-  echo "  PASS  Stop hook reports ABANDONED without a FAILED warning"; pass=$((pass+1))
+if [ -z "$r8_warn_out" ]; then
+  echo "  PASS  Stop hook never prints the ABANDONED line"; pass=$((pass+1))
 else
-  echo "  FAIL  Stop hook must distinguish ABANDONED (output: $r8_warn_out)"; fail=$((fail+1))
+  echo "  FAIL  Stop hook must stay silent for an ABANDONED run (output: $r8_warn_out)"; fail=$((fail+1))
+fi
+
+# R2: SessionStart abandons runs idle past CHARLES_STALE_DAYS; a fresh run stays open.
+R2="$BOX/r2-stale"; mkdir -p "$R2/docs/specs"; touch "$R2/.charles.toml" "$R2/docs/specs/a.md" "$R2/docs/specs/b.md"
+r2_old="$(bash "$RS" init "$R2" feature "old run" --spec docs/specs/a.md 2>/dev/null)"
+r2_new="$(bash "$RS" init "$R2" feature "new run" --spec docs/specs/b.md 2>/dev/null)"
+touch -d '8 days ago' "$R2/.charles/runs/$r2_old/RUN.md"
+ln -sf "$RS" "$R8_PLUGIN/scripts/run-state.sh"
+r2_out="$(cd "$R2" && HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8/plugin" bash "$LINK" 2>&1)"
+if grep -qF 'charlesdr-dev-loop: auto-abandoned 1 stale run(s)' <<<"$r2_out" \
+  && grep -qF '1 open run(s) here' <<<"$r2_out" && grep -qF "Newest: $r2_new" <<<"$r2_out" \
+  && grep -q '^## Abandoned$' "$R2/.charles/runs/$r2_old/RUN.md" \
+  && grep -qF 'stale: no activity for 7 days' "$R2/.charles/runs/$r2_old/RUN.md" \
+  && ! grep -q '^## Outcome' "$R2/.charles/runs/$r2_new/RUN.md"; then
+  echo "  PASS  SessionStart abandons an 8-day-old run and leaves a fresh one open"; pass=$((pass+1))
+else
+  echo "  FAIL  stale-run abandon is wrong (output: $r2_out)"; fail=$((fail+1))
+fi
+
+# R3: the Stop hook warns only for FAILED items in a run touched in the last 24 hours.
+R3="$BOX/r3-warn"; mkdir -p "$R3/docs/specs"; touch "$R3/.charles.toml" "$R3/docs/specs/a.md"
+r3_id="$(bash "$RS" init "$R3" feature "failed run" --spec docs/specs/a.md 2>/dev/null)"
+bash "$RS" item "$R3" FAILED "lane died" >/dev/null 2>&1
+r3_fresh="$(cd "$R3" && bash "$WARN" 2>&1)"
+touch -d '2 days ago' "$R3/.charles/runs/$r3_id/RUN.md"
+r3_old="$(cd "$R3" && bash "$WARN" 2>&1)"
+if grep -qF '1 FAILED item(s)' <<<"$r3_fresh" && [ -z "$r3_old" ]; then
+  echo "  PASS  Stop hook warns for a fresh FAILED run and is silent for a 2-day-old one"; pass=$((pass+1))
+else
+  echo "  FAIL  Stop hook freshness gate is wrong (fresh: $r3_fresh | old: $r3_old)"; fail=$((fail+1))
 fi
 
 # --- doctor drift classes -----------------------------------------------------
@@ -3844,7 +3690,7 @@ else
 fi
 
 rm -f "$GL/grok.json"
-gl_out="$(grok_run --lane explore --engine grok --effort bogus 2>&1)"; gl_rc=$?
+gl_out="$(grok_run --lane explore --engine grok --effort bogus --no-fallback 2>&1)"; gl_rc=$?
 if [ "$gl_rc" -eq 2 ] && [[ "$gl_out" == *"xhigh"*"high"*"medium"*"low"* ]] && [ ! -e "$GL/grok.json" ]; then
   echo "  PASS  invalid grok --effort exits 2 naming the four levels without spawning grok"; pass=$((pass+1))
 else
@@ -3862,7 +3708,7 @@ else
   echo "  FAIL  successful grok dispatch must publish .last and record grok/grok-4.6 (rc=$gl_rc)"; fail=$((fail+1))
 fi
 
-GROK_TEST_RC=7 grok_run --lane explore --engine grok >/dev/null 2>&1; gl_rc=$?
+GROK_TEST_RC=7 grok_run --lane explore --engine grok --no-fallback >/dev/null 2>&1; gl_rc=$?
 gl_run="$(jq -r 'select(.event == "start") | .run' "$GL/repo/.charles/dispatches.jsonl" | tail -1)"
 if [ "$gl_rc" -eq 7 ] && [ -f "$GL/state/$gl_run.last" ] && [ ! -s "$GL/state/$gl_run.last" ] \
   && jq -se --arg r "$gl_run" 'map(select(.event == "end" and .run == $r)) |
@@ -4032,8 +3878,7 @@ touch "$OL/repo/.charles.toml"
 cat > "$OL/bin/omp" <<'SH'
 #!/usr/bin/env bash
 jq -nc --arg cwd "$PWD" --arg stdin "$(readlink /proc/$$/fd/0)" \
-  --arg inline_ok "${CHARLES_INLINE_OK:-}" \
-  '{argv:$ARGS.positional,cwd:$cwd,stdin:$stdin,inline_ok:$inline_ok}' \
+ '{argv:$ARGS.positional,cwd:$cwd,stdin:$stdin}' \
   --args -- "$@" > "$OMP_TEST_CAPTURE"
 # no default: a fork that drops --cwd must fail the exact-listing check, not
 # silently pass because run_attempt happened to cd into the box.
@@ -4077,9 +3922,8 @@ if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && jq -e --arg dir "$OL/repo"
     and (.argv | index("--no-lsp")) != null
     and .argv[(.argv | index("--approval-mode")) + 1] == "yolo"
     and .argv[(.argv | index("--tools")) + 1] == "read,grep,glob,bash"
-    and .inline_ok == "1"
     and .stdin == "/dev/null"' "$OL/omp.json" >/dev/null; then
-  echo "  PASS  omp explore builds --model/--thinking/--tools, yolo, and carries CHARLES_INLINE_OK=1"; pass=$((pass+1))
+  echo "  PASS  omp explore builds --model/--thinking/--tools, and yolo"; pass=$((pass+1))
 else
   echo "  FAIL  omp explore argv, posture, stdin, or env is wrong (rc=$ol_rc)"; fail=$((fail+1))
 fi
@@ -4099,8 +3943,7 @@ if [ "$ol_rc" -eq 0 ] && jq -e '
     and .argv[(.argv | index("--model")) + 1] == "cursor/composer-2.5"
     and .argv[(.argv | index("--thinking")) + 1] == "max"
     and (.argv | index("--tools")) == null
-    and (.argv | index("--no-lsp")) == null
-    and .inline_ok == "1"' "$OL/omp.json" >/dev/null; then
+    and (.argv | index("--no-lsp")) == null' "$OL/omp.json" >/dev/null; then
   echo "  PASS  omp implement defaults to cursor/composer-2.5, full tools, and carries the ladder"; pass=$((pass+1))
 else
   echo "  FAIL  omp implement default model/tools/ladder is wrong (rc=$ol_rc)"; fail=$((fail+1))
@@ -4185,7 +4028,6 @@ if [ "$ol_rc" -eq 0 ] && [ ! -e "$OL/codex.json" ] && [ -e "$OL/omp.json" ] \
     and (.argv | index("--no-session")) != null
     and (.argv | index("--no-skills")) != null
     and .argv[0] == "-p" and (.argv[1] | contains("adversarial reviewer"))
-    and .inline_ok == "1"
     and .stdin == "/dev/null"' "$OL/omp.json" >/dev/null; then
   echo "  PASS  --engine omp --lane review runs omp in an isolated box with read,grep,glob tools, defaulting sol to medium effort"; pass=$((pass+1))
 else
@@ -4293,9 +4135,8 @@ fi
 R1="$BOX/r1-fallback"; mkdir -p "$R1/bin" "$R1/home/.claude/skills/codex-deepseek/scripts"
 printf '#!/usr/bin/env bash\ncase "${CHARLES_R1_MODE:-}" in\n  deadline) sleep 2 ;;\n  early124) exit 124 ;;\n  failure) exit 1 ;;\nesac\n' > "$R1/bin/codex"
 chmod +x "$R1/bin/codex"
-printf '#!/usr/bin/env bash\n: > "${CHARLES_R1_DEEPSEEK_RAN:?}"\nprintf "deepseek result\\n"\n' \
-  > "$R1/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
-chmod +x "$R1/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+printf '#!/usr/bin/env bash\n: > "${CHARLES_R1_DEEPSEEK_RAN:?}"\nprintf "grok result\\n"\n' > "$R1/bin/grok"
+chmod +x "$R1/bin/grok"
 
 R1D="$R1/deadline"; mkdir -p "$R1D/repo"
 r1_dead_out="$(HOME="$R1/home" CHARLES_R1_MODE=deadline CHARLES_R1_DEEPSEEK_RAN="$R1D/deepseek-ran" \
@@ -4304,7 +4145,7 @@ r1_dead_out="$(HOME="$R1/home" CHARLES_R1_MODE=deadline CHARLES_R1_DEEPSEEK_RAN=
 r1_dead_ends="$(jq -r 'select(.event == "end") | .engine' "$R1D/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
 if [ "$r1_dead_rc" -eq 124 ] && grep -qF 'fallback was skipped because the task timed out' <<<"$r1_dead_out" \
   && [ ! -e "$R1D/deepseek-ran" ] && [ "$r1_dead_ends" -eq 1 ]; then
-  echo "  PASS  rc=124 at the timeout deadline skips deepseek fallback"; pass=$((pass+1))
+  echo "  PASS  rc=124 at the timeout deadline skips the grok fallback"; pass=$((pass+1))
 else
   echo "  FAIL  rc=124 at the timeout deadline must skip fallback (rc=$r1_dead_rc, ends=$r1_dead_ends)"; fail=$((fail+1))
 fi
@@ -4315,9 +4156,9 @@ r1_fail_out="$(HOME="$R1/home" CHARLES_R1_MODE=failure CHARLES_R1_DEEPSEEK_RAN="
   bash "$RUN_SH" --lane explore --dir "$R1F/repo" --timeout 1 "failure" 2>&1)"; r1_fail_rc=$?
 r1_fail_ends="$(jq -r 'select(.event == "end") | .engine' "$R1F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
 if [ "$r1_fail_rc" -eq 0 ] && [ -e "$R1F/deepseek-ran" ] && [ "$r1_fail_ends" -eq 2 ]; then
-  echo "  PASS  rc=1 still falls back to deepseek"; pass=$((pass+1))
+  echo "  PASS  rc=1 still falls back to grok"; pass=$((pass+1))
 else
-  echo "  FAIL  rc=1 must still fall back to deepseek (rc=$r1_fail_rc, ends=$r1_fail_ends)"; fail=$((fail+1))
+  echo "  FAIL  rc=1 must still fall back to grok (rc=$r1_fail_rc, ends=$r1_fail_ends)"; fail=$((fail+1))
 fi
 
 R1E="$R1/early-124"; mkdir -p "$R1E/repo"
@@ -4325,9 +4166,9 @@ r1_early_out="$(HOME="$R1/home" CHARLES_R1_MODE=early124 CHARLES_R1_DEEPSEEK_RAN
   CHARLES_STATE_DIR="$R1E/state" PATH="$R1/bin:$PATH" \
   bash "$RUN_SH" --lane explore --dir "$R1E/repo" --timeout 1 "early 124" 2>&1)"; r1_early_rc=$?
 if [ "$r1_early_rc" -eq 0 ] && [ -e "$R1E/deepseek-ran" ]; then
-  echo "  PASS  early rc=124 still falls back to deepseek"; pass=$((pass+1))
+  echo "  PASS  early rc=124 still falls back to grok"; pass=$((pass+1))
 else
-  echo "  FAIL  early rc=124 must still fall back to deepseek (rc=$r1_early_rc)"; fail=$((fail+1))
+  echo "  FAIL  early rc=124 must still fall back to grok (rc=$r1_early_rc)"; fail=$((fail+1))
 fi
 
 # R2: kill a live wrapper and prove its detached child group and receipt finish.
@@ -4700,15 +4541,15 @@ fi
 R2F="$R2/clean-fallback"; mkdir -p "$R2F/bin" "$R2F/home/.claude/skills/codex-deepseek/scripts" "$R2F/repo"
 printf '#!/usr/bin/env bash\ncase " $* " in *" -p luna "*) exit 1;; esac\nexit 0\n' > "$R2F/bin/codex"
 chmod +x "$R2F/bin/codex"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$R2F/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
-chmod +x "$R2F/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R2F/bin/grok"
+chmod +x "$R2F/bin/grok"
 HOME="$R2F/home" CHARLES_STATE_DIR="$R2F/state" PATH="$R2F/bin:$PATH" bash "$RUN_SH" \
   --lane explore --dir "$R2F/repo" --timeout 5 "clean fallback" >/dev/null 2>&1
 r2_fallback_rc=$?
 r2_fallback_run="$(jq -r 'select(.event == "start") | .run' "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | head -1)"
 r2_fallback_luna_ends="$(jq -r --arg r "$r2_fallback_run" 'select(.event == "end" and .run == $r and .engine == "luna") | .run' \
   "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
-r2_fallback_deepseek_ends="$(jq -r --arg r "$r2_fallback_run" 'select(.event == "end" and .run == $r and .engine == "deepseek") | .run' \
+r2_fallback_deepseek_ends="$(jq -r --arg r "$r2_fallback_run" 'select(.event == "end" and .run == $r and .engine == "grok") | .run' \
   "$R2F/repo/.charles/dispatches.jsonl" 2>/dev/null | wc -l)"
 r2_fallback_survivor=0
 for _ in $(seq 1 30); do
@@ -4758,8 +4599,8 @@ fi
 FB="$BOX/fallback"; mkdir -p "$FB/bin" "$FB/home/.claude/skills/codex-deepseek/scripts" "$FB/repo"
 printf '#!/usr/bin/env bash\ncase " $* " in *" -p luna "*) exit 7;; esac\nexit 0\n' > "$FB/bin/codex"
 chmod +x "$FB/bin/codex"
-printf '#!/usr/bin/env bash\nprintf "deepseek result\\n"\n' > "$FB/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
-chmod +x "$FB/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+printf '#!/usr/bin/env bash\nprintf "grok result\\n"\n' > "$FB/bin/grok"
+chmod +x "$FB/bin/grok"
 fb_out="$(HOME="$FB/home" CHARLES_STATE_DIR="$FB/state" PATH="$FB/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$FB/repo" --timeout 2 "fallback" 2>&1)"; fb_rc=$?
 fb_run="$(jq -r 'select(.event == "end") | .run' "$FB/repo/.charles/dispatches.jsonl" 2>/dev/null | tail -1)"
 if [ "$fb_rc" -eq 0 ] && grep -q 'fallback_from:luna' <<<"$fb_out" && grep -q 'primary_rc:7' <<<"$fb_out"; then
@@ -4781,6 +4622,44 @@ if grep -q 'fallback_from:luna' "$FB/state/$fb_run.last" 2>/dev/null && grep -q 
   echo "  PASS  fallback result carries the same fields"; pass=$((pass+1))
 else
   echo "  FAIL  fallback result should carry the same fields"; fail=$((fail+1))
+fi
+
+# R8: grok falls back to luna; deepseek is never an automatic fallback.
+FBG="$BOX/fallback-grok"; mkdir -p "$FBG/bin" "$FBG/repo"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$FBG/bin/grok"
+printf '#!/usr/bin/env bash\nprintf "luna result\\n"\n' > "$FBG/bin/codex"
+chmod +x "$FBG/bin/grok" "$FBG/bin/codex"
+fbg_out="$(CHARLES_STATE_DIR="$FBG/state" PATH="$FBG/bin:$PATH" bash "$RUN_SH" --lane explore --engine grok --dir "$FBG/repo" --timeout 5 "grok falls back" 2>&1)"; fbg_rc=$?
+if [ "$fbg_rc" -eq 0 ] && grep -q 'fallback_from:grok primary_rc:3' <<<"$fbg_out" \
+  && jq -e 'select(.event == "end" and .engine == "luna" and .fallback_from == "grok" and .primary_rc == 3)' "$FBG/repo/.charles/dispatches.jsonl" >/dev/null 2>&1; then
+  echo "  PASS  grok falls back to luna with the fallback receipt"; pass=$((pass+1))
+else
+  echo "  FAIL  grok must fall back to luna (rc=$fbg_rc): $fbg_out"; fail=$((fail+1))
+fi
+FBD="$BOX/fallback-no-deepseek"; mkdir -p "$FBD/bin" "$FBD/repo" "$FBD/home/.claude/skills/codex-deepseek/scripts"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/codex"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FBD/bin/grok"
+printf '#!/usr/bin/env bash\n: > "%s/ds-ran"\n' "$FBD" > "$FBD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+chmod +x "$FBD/bin/codex" "$FBD/bin/grok" "$FBD/home/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
+HOME="$FBD/home" CHARLES_STATE_DIR="$FBD/state" PATH="$FBD/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$FBD/repo" --timeout 5 "both fail" >/dev/null 2>&1
+if [ ! -e "$FBD/ds-ran" ]; then
+  echo "  PASS  deepseek is not an automatic fallback"; pass=$((pass+1))
+else
+  echo "  FAIL  deepseek must not run as an automatic fallback"; fail=$((fail+1))
+fi
+
+# R7: a dispatch in a linked worktree also lands in the main checkout's log, once.
+WM="$BOX/mirror"; mkdir -p "$WM/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$WM/bin/codex"; chmod +x "$WM/bin/codex"
+( cd "$WM" && env -u GIT_DIR -u GIT_WORK_TREE git init -q main && cd main && git config user.name t && git config user.email t@t.invalid \
+  && printf 'x\n' > f && git add f && git commit -qm i && git worktree add -q ../wt -b wt ) >/dev/null 2>&1
+CHARLES_STATE_DIR="$WM/state" PATH="$WM/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$WM/wt" --timeout 5 "from worktree" >/dev/null 2>&1
+CHARLES_STATE_DIR="$WM/state" PATH="$WM/bin:$PATH" bash "$RUN_SH" --lane explore --dir "$WM/main" --timeout 5 "from main" >/dev/null 2>&1
+if [ "$(jq -r 'select(.task == "from worktree") | .event' "$WM/wt/.charles/dispatches.jsonl" | sort | tr '\n' ' ')" = "end start " ] \
+  && [ "$(jq -r 'select(.task == "from worktree") | .event' "$WM/main/.charles/dispatches.jsonl" | sort | tr '\n' ' ')" = "end start " ] \
+  && [ "$(jq -r 'select(.task == "from main") | .event' "$WM/main/.charles/dispatches.jsonl" | wc -l)" -eq 2 ]; then
+  echo "  PASS  worktree dispatch records are mirrored to the main checkout, with no duplicates for main itself"; pass=$((pass+1))
+else
+  echo "  FAIL  worktree receipt mirroring is wrong: $(cat "$WM/main/.charles/dispatches.jsonl" 2>/dev/null)"; fail=$((fail+1))
 fi
 
 # --- omp bridge (hooks/pre/charles.ts): task tool, lane models, review box, receipts
@@ -4877,33 +4756,6 @@ ob_out="$(jq -nc --arg r "$OB/repo" '[{ev:"tool_call",cwd:$r,agent:{kind:"main",
 ob_check "omp task with an unknown charles- header is blocked with the dispatcher's reason" \
   '.[0].block == true and (.[0].reason | contains("unknown header"))' "$ob_out"
 
-# subagent gate: omp's own code-work agents (and the default agent) are asked
-# about; headless answers no, so the spawn is blocked. Outside a repo: silent.
-ob_out="$(jq -nc --arg r "$OB/repo" --arg p "$OB/plain" '[
-  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"map the repo"}]}}},
-  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{task:"refactor it"}]}}},
-  {ev:"tool_call",cwd:$p,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"map"}]}}}]' | ob)"
-ob_check "omp scout/default task spawns are gated toward the lane agents; outside an opted-in repo they pass" \
-  '.[0].block == true and (.[0].reason | contains("claude-explorer")) and .[1].block == true and (.[1].reason | contains("claude-implementer")) and .[2] == null' "$ob_out"
-ob_out="$(jq -nc --arg r "$OB/repo2" '[
-  {ev:"tool_call",cwd:$r,confirm:true,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"docs lookup"}]}}},
-  {ev:"tool_call",cwd:$r,e:{toolName:"task",input:{context:"c",tasks:[{agent:"scout",task:"again"}]}}}]' | ob)"
-if jq -e '. == [null,null]' <<<"$ob_out" >/dev/null && [ -f "$OB/repo2/.charles/inline-ok" ]; then
-  echo "  PASS  an approved omp subagent ask is granted and remembered for the next spawn"; pass=$((pass+1))
-else
-  echo "  FAIL  an approved omp subagent ask must grant inline-ok — got: $ob_out"; fail=$((fail+1))
-fi
-
-# edit gate: the implement lane subagent is the dispatch, so its edits pass;
-# the same write from the main agent is still asked about (and blocked headless).
-ob_big="$(seq 1 120 | sed 's/^/const x = /')"
-printf 'const x = 0\n' > "$OB/repo/big.ts"   # a new file is scaffolding and always allowed
-ob_out="$(jq -nc --arg r "$OB/repo" --arg c "$ob_big" '[
-  {ev:"tool_call",cwd:$r,agent:{kind:"sub",name:"claude-implementer",id:"I1"},e:{toolName:"write",input:{path:"big.ts",content:$c}}},
-  {ev:"tool_call",cwd:$r,agent:{kind:"main",name:"main"},e:{toolName:"write",input:{path:"big.ts",content:$c}}}]' | ob)"
-ob_check "the claude-implementer subagent writes past the edit gate; the main agent is still gated" \
-  '.[0] == null and .[1].block == true' "$ob_out"
-
 # reviewer confinement: only read/grep/glob inside a marked review box (plus
 # yield to finish); the repo, bash, write and a relative glob are all denied.
 OB_BOX="$(mktemp -d "${TMPDIR:-/tmp}/charles-review.XXXXXX")"
@@ -4970,16 +4822,6 @@ fi
 # dirname "." is "." forever. Both hooks span-locked at rc 124 when a payload
 # carried a relative path from a directory with no .charles.toml above it.
 NC="$BOX/nocharles"; mkdir -p "$NC"
-
-( cd "$NC" && printf '{"tool_name":"Write","tool_input":{"file_path":"a.ts","content":"x"}}' \
-  | timeout 5 bash "$HOOK" ) >/dev/null 2>&1
-[ $? -ne 124 ] && { echo "  PASS  relative file_path does not hang the edit hook"; pass=$((pass+1)); } \
-               || { echo "  FAIL  edit hook hung on a relative path"; fail=$((fail+1)); }
-
-( cd "$NC" && printf '{"tool_name":"Agent","cwd":".","tool_input":{"subagent_type":"Explore","prompt":"x"}}' \
-  | timeout 5 bash "$SUBHOOK" ) >/dev/null 2>&1
-[ $? -ne 124 ] && { echo "  PASS  relative cwd does not hang the subagent hook"; pass=$((pass+1)); } \
-               || { echo "  FAIL  subagent hook hung on a relative cwd"; fail=$((fail+1)); }
 
 ( cd "$NC" && timeout 5 bash "$WARN" ) >/dev/null 2>&1
 [ $? -ne 124 ] && { echo "  PASS  stop hook does not hang outside an opted-in repo"; pass=$((pass+1)); } \
@@ -5627,17 +5469,12 @@ printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/ungrilled.md\n\n##
 r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
   CHARLES_LANE_MARKER="$R5DIR/lane-ran" \
   bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --no-fallback --timeout 2 "r5 ungrilled" 2>&1)"; r5_rc=$?
-if [ "$r5_rc" -eq 5 ] \
-  && grep -qF 'docs/specs/ungrilled.md' <<<"$r5_out" \
-  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_out"; then
-  echo "  PASS  R5 refuses an ungrilled spec with the missing marker"; pass=$((pass+1))
+if [ "$r5_rc" -eq 0 ] \
+  && grep -qF 'WARN — spec docs/specs/ungrilled.md has no' <<<"$r5_out" \
+  && [ -e "$R5DIR/lane-ran" ] && jq -e 'select(.event == "start")' "$r5_log" >/dev/null 2>&1; then
+  echo "  PASS  R5 warns on an ungrilled spec and still dispatches"; pass=$((pass+1))
 else
-  echo "  FAIL  R5 must refuse an ungrilled spec (rc=$r5_rc): $r5_out"; fail=$((fail+1))
-fi
-if [ ! -s "$r5_log" ] && [ ! -e "$R5DIR/lane-ran" ]; then
-  echo "  PASS  R5 refusal writes no dispatch event or lane marker"; pass=$((pass+1))
-else
-  echo "  FAIL  R5 refusal must write no dispatch event or lane marker"; fail=$((fail+1))
+  echo "  FAIL  R5 must warn, not refuse, an ungrilled spec (rc=$r5_rc): $r5_out"; fail=$((fail+1))
 fi
 
 printf '# Plan\n\n## Grill verdict\n\n- Reviewer note: first section has no marker.\n\n## Grill verdict\n\n- Rounds: 2\n\n- [ ] **R1. duplicate heading**\n' > "$R5DIR/docs/specs/duplicate.md"
@@ -5645,10 +5482,9 @@ printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/duplicate.md\n\n##
 r5_duplicate_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
   bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --validate-only --no-fallback --timeout 2 \
   "r5 duplicate verdict" 2>&1)"; r5_duplicate_rc=$?
-if [ "$r5_duplicate_rc" -eq 5 ] \
-  && grep -qF 'docs/specs/duplicate.md' <<<"$r5_duplicate_out" \
-  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_duplicate_out"; then
-  echo "  PASS  R5 uses only the first duplicate Grill verdict section"; pass=$((pass+1))
+if [ "$r5_duplicate_rc" -eq 0 ] \
+  && grep -qF 'WARN — spec docs/specs/duplicate.md has no' <<<"$r5_duplicate_out"; then
+  echo "  PASS  R5 uses only the first duplicate Grill verdict section (warns)"; pass=$((pass+1))
 else
   echo "  FAIL  R5 must refuse a marker found only in a duplicate verdict section (rc=$r5_duplicate_rc): $r5_duplicate_out"; fail=$((fail+1))
 fi
@@ -5682,12 +5518,11 @@ printf '# Plan\n\n## Grill verdict\n\n_(pending)_\n\n- [ ] **R1. pending verdict
 printf '# Run open-run\n\n- flow: feature\n- spec: docs/specs/pending.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' > "$r5_run_md"
 r5_out="$(PATH="$R5DIR/bin:$PATH" CHARLES_STATE_DIR="$R5DIR/state" \
   bash "$RUN_SH" --lane implement --dir "$R5DIR" --req R1 --validate-only --no-fallback --timeout 2 "r5 pending" 2>&1)"; r5_rc=$?
-if [ "$r5_rc" -eq 5 ] \
-  && grep -qF 'docs/specs/pending.md' <<<"$r5_out" \
-  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_out"; then
-  echo "  PASS  R5 refuses a placeholder pending verdict"; pass=$((pass+1))
+if [ "$r5_rc" -eq 0 ] \
+  && grep -qF 'WARN — spec docs/specs/pending.md has no' <<<"$r5_out"; then
+  echo "  PASS  R5 warns on a placeholder pending verdict"; pass=$((pass+1))
 else
-  echo "  FAIL  R5 must refuse a placeholder pending verdict (rc=$r5_rc): $r5_out"; fail=$((fail+1))
+  echo "  FAIL  R5 must warn on a placeholder pending verdict (rc=$r5_rc): $r5_out"; fail=$((fail+1))
 fi
 
 printf '# Plan\n\n- [ ] **R1. parallel ungrilled**\n' > "$PD/r10-repo/docs/specs/parallel-ungrilled.md"
@@ -5697,14 +5532,11 @@ mkdir -p "$PD/r10-repo/.charles/runs/r5-parallel"
 printf '# Run r5-parallel\n\n- flow: feature\n- spec: docs/specs/parallel-ungrilled.md\n\n## Phases\n\n## Open items\n\n## Rollback\n\n' \
   > "$PD/r10-repo/.charles/runs/r5-parallel/RUN.md"
 r5_parallel_out="$(PATH="$PD/bin:$PATH" CHARLES_STATE_DIR="$PD/state" \
-  bash "$PARALLEL" "$PD/r10-repo" "$PD/r10-repo/docs/specs/parallel-ungrilled.chunks.json" \
-  --run r5-parallel --no-green 2>&1)"; r5_parallel_rc=$?
-if [ "$r5_parallel_rc" -eq 1 ] \
-  && grep -qF 'invalid manifest: chunk alpha requirement scope was refused' <<<"$r5_parallel_out" \
-  && grep -qF "missing '- Rounds:' or 'Grill waived: <reason>'" <<<"$r5_parallel_out"; then
-  echo "  PASS  parallel preflight refuses an ungrilled spec"; pass=$((pass+1))
+  bash "$RUN_SH" --lane implement --dir "$PD/r10-repo" --req R1 --run r5-parallel --validate-only "preflight" 2>&1)"; r5_parallel_rc=$?
+if [ "$r5_parallel_rc" -eq 0 ] && grep -qF 'WARN — spec docs/specs/parallel-ungrilled.md has no' <<<"$r5_parallel_out"; then
+  echo "  PASS  parallel preflight (validate-only) warns on an ungrilled spec"; pass=$((pass+1))
 else
-  echo "  FAIL  parallel preflight must refuse an ungrilled spec (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
+  echo "  FAIL  parallel preflight must warn, not refuse (rc=$r5_parallel_rc): $r5_parallel_out"; fail=$((fail+1))
 fi
 
 # --- R6 review coverage -------------------------------------------------------

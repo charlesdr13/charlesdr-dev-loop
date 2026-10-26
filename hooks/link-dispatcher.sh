@@ -57,9 +57,8 @@ if [ "$(readlink "$link" 2>/dev/null)" != "$target" ]; then
 fi
 
 # --- where you left off -------------------------------------------------------
-# 12 runs sat open across 5 repos, invisible unless you ran /status in each. The
-# Stop hook only warns about FAILED items; this answers the resume question at
-# the moment you enter the repo, and stays silent when nothing is open.
+# Runs idle past CHARLES_STALE_DAYS (default 7) are abandoned here, so the open
+# list only shows work someone could still pick up. Silent when nothing is open.
 repo="$PWD"
 repo="$(realpath -m "$repo" 2>/dev/null || echo "$repo")"
 while [ "$repo" != "/" ] && [ ! -f "$repo/.charles.toml" ]; do
@@ -67,14 +66,16 @@ while [ "$repo" != "/" ] && [ ! -f "$repo/.charles.toml" ]; do
 done
 [ -f "$repo/.charles.toml" ] || exit 0
 
-open_n=0; items=0; newest=""; abandoned_n=0; abandoned_ids=""
+stale_days="${CHARLES_STALE_DAYS:-7}"
+case "$stale_days" in ''|*[!0-9]*) stale_days=7 ;; esac
+open_n=0; items=0; newest=""; stale_n=0
 for d in "$repo"/.charles/runs/*/; do
   [ -f "$d/RUN.md" ] || continue
-  if grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null; then
-    if grep -q '^## Abandoned$' "$d/RUN.md" 2>/dev/null; then
-      abandoned_n=$((abandoned_n + 1))
-      abandoned_ids="${abandoned_ids:+$abandoned_ids }$(basename "${d%/}")"
-    fi
+  grep -q '^## Outcome' "$d/RUN.md" 2>/dev/null && continue
+  if [ -n "$(find "$d/RUN.md" -mmin +$((stale_days * 1440)) 2>/dev/null)" ] \
+    && bash "$root/scripts/run-state.sh" abandon "$repo" --run "$(basename "${d%/}")" \
+      "stale: no activity for $stale_days days" >/dev/null 2>&1; then
+    stale_n=$((stale_n + 1))
     continue
   fi
   open_n=$((open_n + 1))
@@ -83,11 +84,9 @@ for d in "$repo"/.charles/runs/*/; do
   newest="$(basename "${d%/}")"
 done
 
+[ "$stale_n" -gt 0 ] && echo "charlesdr-dev-loop: auto-abandoned $stale_n stale run(s)"
 if [ "$open_n" -gt 0 ]; then
   echo "charlesdr-dev-loop: $open_n open run(s) here, $items unresolved item(s). Newest: $newest"
   echo "  /charlesdr-dev-loop:resolve to pick up where you stopped"
-fi
-if [ "$abandoned_n" -gt 0 ]; then
-  echo "charlesdr-dev-loop: $abandoned_n ABANDONED run(s) here (not open): $abandoned_ids"
 fi
 exit 0

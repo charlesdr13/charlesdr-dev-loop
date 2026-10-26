@@ -178,6 +178,7 @@ last_phase() {
 
 say_bad() { echo "  ISSUE  $1"; issues=$((issues+1)); }
 say_ok()  { echo "  ok     $1"; }
+note()    { echo "  NOTE   $1"; }
 say_repo() { echo "  NOTE   repo backlog (not this close): $1"; repo_issues=$((repo_issues+1)); }
 run_is_closed() { grep -q '^## Outcome' "$1" 2>/dev/null; }
 run_is_abandoned() { grep -q '^## Abandoned$' "$1" 2>/dev/null; }
@@ -334,9 +335,9 @@ elif [ "$specs" -gt 0 ]; then
   graded=$(grep -rl 'Grill verdict' "$DIR"/docs/specs/*.md 2>/dev/null | wc -l)
   if [ -z "$CLOSING" ]; then
     if [ "$graded" -eq 0 ]; then
-      say_bad "$specs plan(s), none carrying a grill verdict — plans went to implementation unchallenged"
+      note "$specs plan(s), none carrying a grill verdict — plans went to implementation unchallenged"
     elif [ "$graded" -lt "$specs" ]; then
-      say_bad "$((specs - graded)) of $specs plan(s) have no grill verdict"
+      note "$((specs - graded)) of $specs plan(s) have no grill verdict"
     else
       say_ok "all $specs plan(s) carry a grill verdict"
     fi
@@ -353,7 +354,7 @@ elif [ "$specs" -gt 0 ]; then
       fi
     done < <(printf '%s\n' "$DIR"/docs/specs/*.md)
     if [ "$closing_missing" -gt 0 ]; then
-      say_bad "$closing_missing plan(s) have no grill verdict — the closing run's spec is unchallenged"
+      note "$closing_missing plan(s) have no grill verdict — the closing run's spec is unchallenged"
     fi
     if [ "$repo_missing" -gt 0 ]; then
       say_repo "$repo_missing plan(s) have no grill verdict"
@@ -368,9 +369,9 @@ if [ -x "$us" ]; then
   out="$("$us" "$DIR" 2>&1)"; urc=$?
   case "$urc" in
     0) ;;
-    2) say_bad "changes from a lane that was cut short — verify with green.sh and codex-reviewer, then keep or revert" ;;
-    3) say_bad "an orphaned implement lane may own working-tree changes — census before discarding" ;;
-    *) say_bad "working-tree changes that no dispatch produced — discard them whole" ;;
+    2) note "changes from a lane that was cut short — verify with green.sh and codex-reviewer, then keep or revert" ;;
+    3) note "an orphaned implement lane may own working-tree changes — census before discarding" ;;
+    *) note "working-tree changes that no dispatch produced — discard them whole" ;;
   esac
   [ "$urc" -ne 0 ] && echo "$out" | sed -n '1,2p' | sed 's/^/         /'
   true

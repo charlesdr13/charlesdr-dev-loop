@@ -5,9 +5,8 @@
 // hooks/pre/*.ts as extension modules, so this file feeds Claude-shaped payloads
 // to the same shell hooks. One gate, two hosts; the shell scripts stay the truth.
 //
-// Bridged: route-to-codex + mark-inline-ok (edit gate), warn-open-runs (stop),
-// link-dispatcher (session start), and the Agent|Task hooks on omp's task tool:
-// route-subagents (subagent gate), claude-lane-dispatch (lane dispatch),
+// Bridged: warn-open-runs (stop), link-dispatcher (session start), and the
+// Agent|Task hooks on omp's task tool: claude-lane-dispatch (lane dispatch),
 // claude-review-box (reviewer confinement), claude-lane-receipt (end receipt).
 // omp re-runs this factory inside every subagent, and ctx.agent says which one.
 import { spawnSync } from "node:child_process";
@@ -97,7 +96,7 @@ function modelName(m: any): string | undefined {
   return typeof m === "string" ? m : m.provider && m.id ? `${m.provider}/${m.id}` : m.id;
 }
 
-// Every task item passes the subagent gate, then the lane dispatcher, which
+// Every task item passes the lane dispatcher, which
 // logs the start receipt and rewrites a lane's brief to carry charles-run:.
 async function gateTask(e: any, ctx: any, cwd: string) {
   const input = e.input ?? {};
@@ -106,13 +105,6 @@ async function gateTask(e: any, ctx: any, cwd: string) {
   let changed = false;
   for (const it of items) {
     const payload = { tool_name: "Task", tool_input: { subagent_type: it.agent || "task", prompt: it.task ?? "" } };
-    const gate = verdict(hook("route-subagents.sh", payload, cwd));
-    if (gate?.decision === "deny") return { block: true, reason: gate.reason };
-    if (gate) {
-      // Headless omp (-p) and subagents answer confirm with false, so the gate blocks there.
-      if (!(await ctx.ui.confirm("charlesdr-dev-loop", gate.reason))) return { block: true, reason: gate.reason };
-      hook("mark-inline-ok.sh", payload, cwd);
-    }
     const d = verdict(hook("claude-lane-dispatch.sh", payload, cwd, {}, 60_000));
     if (d?.decision === "deny") return { block: true, reason: d.reason };
     if (d?.updatedInput?.prompt) {
@@ -193,27 +185,6 @@ export default function (pi: any) {
     const lane = ctx?.agent?.kind === "sub" ? laneAgent(ctx.agent.name) : undefined;
     if (lane === "claude-reviewer") return reviewBox(e, cwd, lane);
     if (e.toolName === "task") return gateTask(e, ctx, cwd);
-    if (e.toolName !== "write" && e.toolName !== "edit") return;
-    // The implement lane is the dispatch this gate asks for, like CHARLES_INLINE_OK=1 on a codex-run lane.
-    if (lane === "claude-implementer") return;
-    const paths: string[] = e.input.paths ?? [e.input.path];
-    for (const p of paths.filter(Boolean)) {
-      const file_path = resolve(cwd, p);
-      // ponytail: an omp edit is a patch DSL, so its whole text (headers included)
-      // stands in for new_string. Overcounts by a few lines; the gate errs toward asking.
-      const payload =
-        e.toolName === "write"
-          ? { tool_name: "Write", tool_input: { file_path, content: e.input.content } }
-          : { tool_name: "Edit", tool_input: { file_path, old_string: "", new_string: e.input.input } };
-      const v = verdict(hook("route-to-codex.sh", payload, cwd));
-      if (!v) continue;
-      const reason = v.reason;
-      if (v.decision === "deny") return { block: true, reason };
-      // Headless omp (-p) answers confirm with false, so the gate blocks there.
-      if (!(await ctx.ui.confirm("charlesdr-dev-loop", reason))) return { block: true, reason };
-      // ponytail: grants on approval, not on landing — omp has no per-call post hook here.
-      hook("mark-inline-ok.sh", payload, cwd);
-    }
   });
 
   // A lane is done when it yields its final result (a section yield carries a
