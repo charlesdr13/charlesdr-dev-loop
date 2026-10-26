@@ -527,6 +527,10 @@ harmless one: **plausible code with no provenance**.
 scripts/unsourced.sh .        # 0 accounted for · 1 nothing produced this
 ```
 
+Since 2.49.0 this is informational: `flow-status.sh` and `close` report it as a NOTE,
+never a blocker, because the orchestrator may now edit inline and other sessions
+share the main checkout. Run it yourself when a lane's report and the tree disagree.
+
 It compares the working tree against the dispatch log, ignoring what the
 orchestrator legitimately authors itself (plans in `docs/specs/`, `.charles/`).
 A failed dispatch does not launder edits — only `rc=0` accounts for them.
