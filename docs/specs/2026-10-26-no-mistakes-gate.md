@@ -26,3 +26,7 @@ Grill waived: small, reversible, directly requested; behaviour outside no-mistak
 - [x] **R2** — flow-status counts only the `review` phase's own proof block saying `no-mistakes: passed`, only with the remote; repo-backlog path unchanged — review round 2 resolved
 - [x] **R3** — 5 cases: graded, no-remote, no-phase, failed, later-phase; mutation to loose matching fails 2 of them — selftest 471 passed, 0 failed
 - [x] **R4** — README paragraph, commands/status.md line, 2.50.0 in plugin.json and both marketplace.json fields
+
+## Run outcome — 2026-10-26
+
+shipped 2.50.0 (PR #6, installed)
