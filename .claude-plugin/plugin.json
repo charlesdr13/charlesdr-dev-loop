@@ -1,6 +1,6 @@
 {
   "name": "charlesdr-dev-loop",
-  "version": "2.50.3",
+  "version": "2.50.4",
   "description": "Charles's development loop: Claude Code orchestrates, its own subagents explore and implement (codex or grok when asked), an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Opt-in per repo via .charles.toml.",
   "author": {
     "name": "charlesdr-dev-loop"

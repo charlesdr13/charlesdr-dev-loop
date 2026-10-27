@@ -454,7 +454,7 @@ validate_dispatch_scope() {
     }
   fi
 
-  local run_name spec spec_path resolved_dir resolved_spec id plan_label pattern_id
+  local run_name spec spec_path resolved_spec id plan_label pattern_id
   if [ -n "$run_dir" ]; then
     run_name="${run_dir##*/}"
     spec="$(sed -n 's/^- spec: //p' "$run_dir/RUN.md" | head -1)"
@@ -469,20 +469,17 @@ validate_dispatch_scope() {
       return 2
     fi
     if command -v realpath >/dev/null 2>&1; then
-      resolved_dir="$(realpath "$RUN_DIR" 2>/dev/null || printf '%s\n' "$RUN_DIR")"
       resolved_spec="$(realpath "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
     elif [ -d "$(dirname "$spec_path")" ]; then
-      resolved_dir="$(cd "$RUN_DIR" && pwd -P)"
       [ -L "$spec_path" ] && { echo "codex-run.sh: REFUSING — cannot safely resolve symlinked spec $spec without realpath" >&2; return 2; }
       resolved_spec="$(cd "$(dirname "$spec_path")" && pwd -P)/$(basename "$spec_path")"
     else
       echo "codex-run.sh: REFUSING — cannot resolve spec $spec" >&2
       return 2
     fi
-    case "$resolved_spec" in
-      "$resolved_dir"/*) ;;
-      *) echo "codex-run.sh: REFUSING — open run $run_name names a spec outside the repository: $spec" >&2; return 2 ;;
-    esac
+    charles_in_repo "$RUN_DIR" "$resolved_spec" || {
+      echo "codex-run.sh: REFUSING — open run $run_name names a spec outside the repository: $spec" >&2; return 2
+    }
     plan_path="$resolved_spec"
     plan_label="$spec"
     if [ "$validate_implement" -eq 1 ] && [ "$REQ_SET" -eq 0 ]; then

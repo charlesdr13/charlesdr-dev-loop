@@ -1473,6 +1473,21 @@ if [ "$req_wt_rc" -eq 2 ] && grep -qF 'docs/specs/plan.md' <<<"$req_wt_out" \
 else
   echo "  FAIL  worktree selectors must honor the main repo open run (codex=$req_wt_rc state=$wt_state_rc)"; fail=$((fail+1))
 fi
+# A run whose spec was written in a linked worktree (recorded absolute) passes
+# codex-run's boundary check; a spec outside every worktree does not.
+mkdir -p "$REQWT/outside"; cp "$REQWT/worktree/docs/specs/plan.md" "$REQWT/outside/plan.md"
+sed -i "s|^- spec: .*|- spec: $(realpath "$REQWT/worktree/docs/specs/plan.md")|" "$REQWT/main/.charles/runs/open-run/RUN.md"
+wt_spec_out="$(PATH="$REQWT/bin:$PATH" CHARLES_STATE_DIR="$REQWT/state" CHARLES_LANE_MARKER="$REQWT/lane-ran" \
+  bash "$RUN_SH" --lane implement --dir "$REQWT/worktree" --run open-run --no-fallback --timeout 2 "scope" 2>&1)"
+sed -i "s|^- spec: .*|- spec: $(realpath "$REQWT/outside/plan.md")|" "$REQWT/main/.charles/runs/open-run/RUN.md"
+out_spec_out="$(PATH="$REQWT/bin:$PATH" CHARLES_STATE_DIR="$REQWT/state" CHARLES_LANE_MARKER="$REQWT/lane-ran" \
+  bash "$RUN_SH" --lane implement --dir "$REQWT/worktree" --run open-run --no-fallback --timeout 2 "scope" 2>&1)"
+if grep -q 'must name requirements' <<<"$wt_spec_out" && ! grep -q 'outside the repository' <<<"$wt_spec_out" \
+  && grep -q 'outside the repository' <<<"$out_spec_out" && [ ! -e "$REQWT/lane-ran" ]; then
+  echo "  PASS  codex-run accepts a run spec in a linked worktree and refuses one outside the repo"; pass=$((pass+1))
+else
+  echo "  FAIL  codex-run must accept a worktree spec and refuse an outside one"; fail=$((fail+1))
+fi
 
 REQAMB="$BOX/req-ambiguous"; mkdir -p "$REQAMB/bin" "$REQAMB/docs/specs" \
   "$REQAMB/.charles/runs/run-alpha-20260821" "$REQAMB/.charles/runs/run-beta-20260821"
