@@ -218,18 +218,6 @@ spec_key() {
   fi
 }
 
-# DIR is the main checkout (charles_run_root follows --git-common-dir), but a
-# flow writes its plan in the worktree it runs in. Any worktree of this repo is
-# inside the repository; anywhere else is not.
-spec_in_repo() {
-  local root
-  while IFS= read -r root; do
-    root="$(cd -- "$root" 2>/dev/null && pwd -P)" || continue
-    case "$1" in "$root"/*) return 0 ;; esac
-  done < <(printf '%s\n' "$DIR"; git -C "$DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
-  return 1
-}
-
 # $2 is the base for a relative path: the caller's checkout by default, DIR for
 # a spec already recorded in RUN.md.
 resolve_spec_path() {
@@ -254,7 +242,7 @@ resolve_spec_path() {
     echo "run-state.sh: REFUSING — cannot resolve spec $spec" >&2
     return 2
   fi
-  spec_in_repo "$resolved_spec" || {
+  charles_in_repo "$DIR" "$resolved_spec" || {
     echo "run-state.sh: REFUSING — spec resolves outside the repository: $spec" >&2
     return 2
   }
@@ -600,7 +588,7 @@ close)
     else
       resolved_spec="$spec_path"
     fi
-    spec_in_repo "$resolved_spec" || {
+    charles_in_repo "$DIR" "$resolved_spec" || {
       echo "run-state.sh: REFUSING to close — $spec resolves outside the repository." >&2
       exit 6
     }

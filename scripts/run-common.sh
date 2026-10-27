@@ -17,3 +17,15 @@ charles_run_root() {
   fi
   printf '%s\n' "$dir"
 }
+
+# True when $2 (a resolved path) is inside $1 (a run root) or any linked
+# worktree of it. The run root is the main checkout, but a flow writes its plan
+# in the worktree it runs in.
+charles_in_repo() {
+  local root
+  while IFS= read -r root; do
+    root="$(cd -- "$root" 2>/dev/null && pwd -P)" || continue
+    case "$2" in "$root"/*) return 0 ;; esac
+  done < <(printf '%s\n' "$1"; git -C "$1" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+  return 1
+}
