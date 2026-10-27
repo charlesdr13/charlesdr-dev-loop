@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "charlesdr-dev-loop: personal dev-loop plugin — Claude subagent lanes (codex or grok on request), isolated review.",
-    "version": "2.50.2"
+    "version": "2.50.3"
   },
   "plugins": [
     {
       "name": "charlesdr-dev-loop",
       "source": "./",
       "description": "Claude Code orchestrates its own explore/implement subagents (codex or grok on request), isolated adversarial review",
-      "version": "2.50.2",
+      "version": "2.50.3",
       "category": "productivity"
     }
   ]

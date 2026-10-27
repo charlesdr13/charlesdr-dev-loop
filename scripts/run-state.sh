@@ -32,6 +32,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && p
 cmd="${1:-}"; shift || true
 DIR="${1:-$PWD}"; shift || true
 [ -d "$DIR" ] || { echo "run-state.sh: no such directory: $DIR" >&2; exit 2; }
+# A spec path the caller types is relative to the checkout they are in, which
+# for a linked worktree is not the run root below.
+SPEC_BASE="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || { cd -- "$DIR" && pwd; })"
 DIR="$(charles_run_root "$DIR")"
 RUNS="$DIR/.charles/runs"
 FLOW_FILE="$SCRIPT_DIR/flow.json"
@@ -207,7 +210,7 @@ parse_run_option() {
 
 spec_key() {
   local path="$1"
-  case "$path" in /*) ;; *) path="$DIR/$path" ;; esac
+  case "$path" in /*) ;; *) path="${2:-$SPEC_BASE}/$path" ;; esac
   if command -v realpath >/dev/null 2>&1; then
     realpath -m "$path" 2>/dev/null || printf '%s\n' "$path"
   else
@@ -227,11 +230,13 @@ spec_in_repo() {
   return 1
 }
 
+# $2 is the base for a relative path: the caller's checkout by default, DIR for
+# a spec already recorded in RUN.md.
 resolve_spec_path() {
   local spec="$1" spec_path resolved_spec
   case "$spec" in
     /*) spec_path="$spec" ;;
-    *)  spec_path="$DIR/$spec" ;;
+    *)  spec_path="${2:-$SPEC_BASE}/$spec" ;;
   esac
   [ -f "$spec_path" ] && [ -r "$spec_path" ] || {
     echo "run-state.sh: REFUSING — spec path does not exist or is unreadable: $spec" >&2
@@ -285,7 +290,12 @@ init)
       *) echo "run-state.sh: unknown init option '$1'" >&2; exit 2 ;;
     esac
   done
-  [ -z "$spec" ] || resolve_spec_path "$spec" >/dev/null || exit $?
+  if [ -n "$spec" ]; then
+    spec_path="$(resolve_spec_path "$spec")" || exit $?
+    # Recorded paths are read from the run root later, so a worktree's spec is
+    # recorded absolute.
+    [ "$SPEC_BASE" -ef "$DIR" ] || spec="$spec_path"
+  fi
   lock_run_state || exit $?
   id="$(date +%Y%m%d-%H%M%S)-$flow-$$"
   d="$RUNS/$id"; mkdir -p "$d"
@@ -306,6 +316,7 @@ spec)
   set -- "${PARSED_ARGS[@]}"
   spec="${1:?spec path required}"
   spec_path="$(resolve_spec_path "$spec")" || exit $?
+  [ "$SPEC_BASE" -ef "$DIR" ] || spec="$spec_path"
   lock_run_state || exit $?
   d="$(newest_open)" || {
     rc=$?
@@ -511,7 +522,7 @@ abandon)
   if [ -n "$recorded_spec" ]; then
     # Abandoning is bookkeeping for a run that died; its spec is often gone
     # with the worktree it lived in. Record the outcome in RUN.md regardless.
-    spec_path="$(resolve_spec_path "$recorded_spec" 2>/dev/null)" || {
+    spec_path="$(resolve_spec_path "$recorded_spec" "$DIR" 2>/dev/null)" || {
       echo "run-state.sh: warning — spec $recorded_spec is missing or outside the repository; outcome recorded in RUN.md only" >&2
       spec_path=""
     }
@@ -551,7 +562,7 @@ close)
     recorded_spec_used=1
   fi
   if [ -n "$recorded_spec" ] && [ -n "$spec" ] \
-    && [ "$(spec_key "$recorded_spec")" != "$(spec_key "$spec")" ]; then
+    && [ "$(spec_key "$recorded_spec" "$DIR")" != "$(spec_key "$spec")" ]; then
     echo "run-state.sh: REFUSING to close — selected run $(basename "$d") has a different spec." >&2
     echo "  recorded spec: $recorded_spec" >&2
     echo "  --spec given:  $spec" >&2
@@ -571,10 +582,10 @@ close)
   # outside the repo. A typo'd relative path plus --force would otherwise write
   # to someone else's file.
   if [ "$recorded_spec_used" -eq 1 ]; then
-    spec_path="$(resolve_spec_path "$spec")" || exit $?
+    spec_path="$(resolve_spec_path "$spec" "$DIR")" || exit $?
   elif [ -n "$spec" ]; then
     spec_path="$spec"
-    case "$spec_path" in /*) ;; *) spec_path="$DIR/$spec_path" ;; esac
+    case "$spec_path" in /*) ;; *) spec_path="$SPEC_BASE/$spec_path" ;; esac
     if command -v realpath >/dev/null 2>&1; then
       resolved_spec="$(realpath "$spec_path" 2>/dev/null || realpath -m "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
     elif [ -d "$(dirname "$spec_path")" ]; then
