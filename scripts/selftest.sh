@@ -2508,6 +2508,33 @@ else
   echo "  FAIL  abandon must refuse an already-ABANDONED run (rc=$r8_abandon_again_rc)"; fail=$((fail+1))
 fi
 
+# A run whose spec was deleted with its worktree must still be abandonable.
+r8_gone_id="$(bash "$RS" init "$R8/status" feature "spec gone" --spec docs/specs/plan.md 2>/dev/null)"
+sed -i "s|^- spec: .*|- spec: docs/specs/deleted.md|" "$R8/status/.charles/runs/$r8_gone_id/RUN.md"
+r8_gone_out="$(bash "$RS" abandon "$R8/status" --run "$r8_gone_id" "spec worktree deleted" 2>&1)"; r8_gone_rc=$?
+if [ "$r8_gone_rc" -eq 0 ] && grep -q '^ABANDONED$' "$R8/status/.charles/runs/$r8_gone_id/RUN.md" \
+  && grep -q 'RUN.md only' <<<"$r8_gone_out" && [ ! -e "$R8/status/docs/specs/deleted.md" ]; then
+  echo "  PASS  abandon succeeds when the recorded spec is gone"; pass=$((pass+1))
+else
+  echo "  FAIL  abandon must succeed when the recorded spec is gone (rc=$r8_gone_rc)"; fail=$((fail+1))
+fi
+
+# A spec inside a linked worktree is inside the repository; a sibling dir is not.
+R8W="$R8/wt-main"; mkdir -p "$R8W"
+git -C "$R8W" init -q && git -C "$R8W" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$R8W" worktree add -q "$R8/wt-lane" -b r8-lane 2>/dev/null
+mkdir -p "$R8/wt-lane/docs/specs" "$R8/wt-other"
+printf '# R8 worktree plan\n' > "$R8/wt-lane/docs/specs/plan.md"
+printf '# not this repo\n' > "$R8/wt-other/plan.md"
+r8_wt_id="$(bash "$RS" init "$R8/wt-lane" feature "worktree spec" --spec "$R8/wt-lane/docs/specs/plan.md" 2>&1)"; r8_wt_rc=$?
+r8_out_msg="$(bash "$RS" init "$R8/wt-lane" feature "outside spec" --spec "$R8/wt-other/plan.md" 2>&1)"; r8_out_rc=$?
+if [ "$r8_wt_rc" -eq 0 ] && [ -f "$R8W/.charles/runs/$r8_wt_id/RUN.md" ] \
+  && [ "$r8_out_rc" -eq 2 ] && grep -q 'outside the repository' <<<"$r8_out_msg"; then
+  echo "  PASS  a spec in a linked worktree is accepted; one outside every worktree is refused"; pass=$((pass+1))
+else
+  echo "  FAIL  worktree spec must be accepted (rc=$r8_wt_rc) and outside spec refused (rc=$r8_out_rc)"; fail=$((fail+1))
+fi
+
 r8_show_out="$(bash "$RS" show "$R8/status" --list 2>&1)"
 if grep -q "^ABANDONED $r8_abandon_id$" <<<"$r8_show_out" \
   && grep -q "^closed $r8_finished_id$" <<<"$r8_show_out" \

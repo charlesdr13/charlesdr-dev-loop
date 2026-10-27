@@ -215,8 +215,20 @@ spec_key() {
   fi
 }
 
+# DIR is the main checkout (charles_run_root follows --git-common-dir), but a
+# flow writes its plan in the worktree it runs in. Any worktree of this repo is
+# inside the repository; anywhere else is not.
+spec_in_repo() {
+  local root
+  while IFS= read -r root; do
+    root="$(cd -- "$root" 2>/dev/null && pwd -P)" || continue
+    case "$1" in "$root"/*) return 0 ;; esac
+  done < <(printf '%s\n' "$DIR"; git -C "$DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+  return 1
+}
+
 resolve_spec_path() {
-  local spec="$1" spec_path resolved_dir resolved_spec
+  local spec="$1" spec_path resolved_spec
   case "$spec" in
     /*) spec_path="$spec" ;;
     *)  spec_path="$DIR/$spec" ;;
@@ -226,10 +238,8 @@ resolve_spec_path() {
     return 2
   }
   if command -v realpath >/dev/null 2>&1; then
-    resolved_dir="$(realpath "$DIR" 2>/dev/null || printf '%s\n' "$DIR")"
     resolved_spec="$(realpath "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
   elif [ -d "$(dirname "$spec_path")" ]; then
-    resolved_dir="$(cd "$DIR" && pwd -P)"
     [ -L "$spec_path" ] && {
       echo "run-state.sh: REFUSING — cannot safely resolve symlinked spec $spec without realpath" >&2
       return 2
@@ -239,13 +249,11 @@ resolve_spec_path() {
     echo "run-state.sh: REFUSING — cannot resolve spec $spec" >&2
     return 2
   fi
-  case "$resolved_spec" in
-    "$resolved_dir"/*) printf '%s\n' "$resolved_spec" ;;
-    *)
-      echo "run-state.sh: REFUSING — spec resolves outside the repository: $spec" >&2
-      return 2
-      ;;
-  esac
+  spec_in_repo "$resolved_spec" || {
+    echo "run-state.sh: REFUSING — spec resolves outside the repository: $spec" >&2
+    return 2
+  }
+  printf '%s\n' "$resolved_spec"
 }
 
 lock_run_state() {
@@ -501,7 +509,12 @@ abandon)
   recorded_spec="$(sed -n 's/^- spec: //p' "$d/RUN.md" | head -1)"
   spec_path=""
   if [ -n "$recorded_spec" ]; then
-    spec_path="$(resolve_spec_path "$recorded_spec")" || exit $?
+    # Abandoning is bookkeeping for a run that died; its spec is often gone
+    # with the worktree it lived in. Record the outcome in RUN.md regardless.
+    spec_path="$(resolve_spec_path "$recorded_spec" 2>/dev/null)" || {
+      echo "run-state.sh: warning — spec $recorded_spec is missing or outside the repository; outcome recorded in RUN.md only" >&2
+      spec_path=""
+    }
   fi
   abandoned_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '\n## Outcome\n\nABANDONED\n\n## Abandoned\n\nreason: %s\n\nclosed: %s\n' \
@@ -563,10 +576,8 @@ close)
     spec_path="$spec"
     case "$spec_path" in /*) ;; *) spec_path="$DIR/$spec_path" ;; esac
     if command -v realpath >/dev/null 2>&1; then
-      resolved_dir="$(realpath "$DIR" 2>/dev/null || printf '%s\n' "$DIR")"
       resolved_spec="$(realpath "$spec_path" 2>/dev/null || realpath -m "$spec_path" 2>/dev/null || printf '%s\n' "$spec_path")"
     elif [ -d "$(dirname "$spec_path")" ]; then
-      resolved_dir="$(cd "$DIR" && pwd -P)"
       # `cd`+`pwd -P` resolves the directory chain but not a final symlink, and
       # the outcome append below follows it. Without realpath there is nothing
       # left to resolve it with, so refuse rather than write through it.
@@ -576,16 +587,13 @@ close)
       fi
       resolved_spec="$(cd "$(dirname "$spec_path")" && pwd -P)/$(basename "$spec_path")"
     else
-      resolved_dir="$DIR"
       resolved_spec="$spec_path"
     fi
-    case "$resolved_spec" in
-      "$resolved_dir"/*) spec_path="$resolved_spec" ;;
-      *)
-        echo "run-state.sh: REFUSING to close — $spec resolves outside the repository." >&2
-        exit 6
-        ;;
-    esac
+    spec_in_repo "$resolved_spec" || {
+      echo "run-state.sh: REFUSING to close — $spec resolves outside the repository." >&2
+      exit 6
+    }
+    spec_path="$resolved_spec"
   fi
 
   if [ "$force" -eq 0 ] && [ -n "$spec" ]; then
