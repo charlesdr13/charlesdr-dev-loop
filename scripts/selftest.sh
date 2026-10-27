@@ -2528,6 +2528,16 @@ printf '# R8 worktree plan\n' > "$R8/wt-lane/docs/specs/plan.md"
 printf '# not this repo\n' > "$R8/wt-other/plan.md"
 r8_wt_id="$(bash "$RS" init "$R8/wt-lane" feature "worktree spec" --spec "$R8/wt-lane/docs/specs/plan.md" 2>&1)"; r8_wt_rc=$?
 r8_out_msg="$(bash "$RS" init "$R8/wt-lane" feature "outside spec" --spec "$R8/wt-other/plan.md" 2>&1)"; r8_out_rc=$?
+r8_rel_id="$(cd "$R8/wt-lane" && bash "$RS" init "$(pwd)" feature "relative worktree spec" --spec docs/specs/plan.md 2>&1)"; r8_rel_rc=$?
+r8_rel_md="$R8W/.charles/runs/$r8_rel_id/RUN.md"
+if [ "$r8_rel_rc" -eq 0 ] && grep -qxF -- "- spec: $(realpath "$R8/wt-lane/docs/specs/plan.md")" "$r8_rel_md" \
+  && printf -- '\n## Sign-off\n\n- [x] done\n' >> "$R8/wt-lane/docs/specs/plan.md" \
+  && bash "$RS" close "$R8/wt-lane" "done" --run "$r8_rel_id" --spec docs/specs/plan.md >/dev/null 2>&1 \
+  && grep -q '^## Run outcome' "$R8/wt-lane/docs/specs/plan.md"; then
+  echo "  PASS  a relative spec typed in a worktree resolves there, is recorded absolute, and closes"; pass=$((pass+1))
+else
+  echo "  FAIL  a relative worktree spec must resolve in the worktree and close (rc=$r8_rel_rc)"; fail=$((fail+1))
+fi
 if [ "$r8_wt_rc" -eq 0 ] && [ -f "$R8W/.charles/runs/$r8_wt_id/RUN.md" ] \
   && [ "$r8_out_rc" -eq 2 ] && grep -q 'outside the repository' <<<"$r8_out_msg"; then
   echo "  PASS  a spec in a linked worktree is accepted; one outside every worktree is refused"; pass=$((pass+1))
