@@ -14,7 +14,7 @@
 # and passes through untouched, silently.
 #
 # Matched by SUFFIX, not exact name, plugin agents spawn namespaced
-# (charlesdr-dev-loop:claude-explorer).
+# (cstack:claude-explorer).
 #
 # Contract: JSON on stdout, exit 0. Silence = no opinion.
 
@@ -79,7 +79,7 @@ if [ -z "$root" ]; then
   # No charles-* headers: an ordinary agent in a repo that never opted in, not ours. With headers, the
   # caller asked for a lane: passing through would spawn the agent with no box, every read blocked.
   [ -n "$cl_dir$cl_plan$cl_req$cl_base" ] || exit 0
-  jq -nc --arg r "$dir is not opted in to charlesdr-dev-loop (no .charles.toml at or above it), so no $lane lane can be dispatched there. Run charles-optin-local in that directory first, then spawn again." \
+  jq -nc --arg r "$dir is not opted in to cstack (no .charles.toml at or above it), so no $lane lane can be dispatched there. Run charles-optin-local in that directory first, then spawn again." \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
 fi

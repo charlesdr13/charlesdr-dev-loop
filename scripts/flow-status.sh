@@ -436,9 +436,9 @@ for d in "$DIR"/.charles/runs/*/; do
 done
 if [ "$open" -gt 0 ]; then
   if [ -n "$CLOSING" ] && [ "$attribution_degraded" -eq 0 ]; then
-    say_repo "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"
+    say_repo "$open run(s) still open — resume with /cstack:resolve, or close them"
   else
-    say_bad "$open run(s) still open — resume with /charlesdr-dev-loop:resolve, or close them"
+    say_bad "$open run(s) still open — resume with /cstack:resolve, or close them"
   fi
 else
   say_ok "no runs left open"
@@ -449,7 +449,7 @@ if [ "$attribution_degraded" -eq 1 ]; then
   echo "  WARN   attribution degraded: $attribution_reason; every finding blocks this close"
 fi
 if [ "$repo_issues" -gt 0 ]; then
-  echo "$repo_issues repo backlog finding(s) — use /charlesdr-dev-loop:resolve; audit with runs-sweep.sh"
+  echo "$repo_issues repo backlog finding(s) — use /cstack:resolve; audit with runs-sweep.sh"
 fi
 if [ "$issues" -eq 0 ]; then echo "flow complete: nothing outstanding"; exit 0; fi
 echo "$issues outstanding — a dispatch succeeding is not a flow finishing"

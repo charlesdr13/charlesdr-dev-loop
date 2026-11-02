@@ -183,7 +183,7 @@ RUN_SELECTOR_SET=0
 if [ -n "$RUN_SELECTOR" ]; then RUN_SELECTOR_SET=1; fi
 VALIDATE_ONLY=0
 FALLBACK=1
-STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
+STATE_DIR="${CHARLES_STATE_DIR:-$HOME/.cache/cstack}"
 DS_SCRIPT="$HOME/.claude/skills/codex-deepseek/scripts/codex-ds.sh"
 
 usage() { sed -n '2,24p' "$0"; exit 2; }
@@ -943,7 +943,7 @@ run_deepseek() {
 
 # --- engine: claude — hands off to a Claude Code subagent, no process run here
 # print_spawn_block writes the block the orchestrating session parses to spawn
-# charlesdr-dev-loop:claude-<lane agent>. charles-run/charles-dir are always the repo
+# cstack:claude-<lane agent>. charles-run/charles-dir are always the repo
 # run id and directory (dispatches.jsonl lives there for every lane, including
 # review, whose real workspace is the box named by an extra charles-box line).
 # Shared by explore/implement (spawn_claude_lane) and review (run_review) so
@@ -951,7 +951,7 @@ run_deepseek() {
 print_spawn_block() { # print_spawn_block LANE [EXTRA_HEADER_LINES]
   local agent
   case "$1" in explore) agent=explorer ;; implement) agent=implementer ;; review) agent=reviewer ;; esac
-  printf 'SPAWN: charlesdr-dev-loop:claude-%s\n' "$agent"
+  printf 'SPAWN: cstack:claude-%s\n' "$agent"
   printf 'PROMPT:\n'
   printf 'charles-run: %s\n' "$RUN_ID"
   printf 'charles-dir: %s\n' "$DIR"

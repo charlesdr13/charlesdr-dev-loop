@@ -1,5 +1,5 @@
 ---
-description: Opt this repo into the charlesdr-dev-loop flow — seeds .charles.toml, gitignores .charles/
+description: Opt this repo into the cstack flow — seeds .charles.toml, gitignores .charles/
 ---
 
 Run:

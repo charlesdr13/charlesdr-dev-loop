@@ -9,7 +9,7 @@
 # flow-status.sh and lane-status.sh keep working unchanged.
 #
 # Matched by SUFFIX, not exact name: plugin agents spawn namespaced
-# (charlesdr-dev-loop:claude-explorer).
+# (cstack:claude-explorer).
 #
 # rc is always 0 here: PostToolUse firing means the tool call itself completed,
 # not that the lane's own work succeeded — that judgment is the review's job.

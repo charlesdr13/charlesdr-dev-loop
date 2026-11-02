@@ -1,4 +1,4 @@
-# charlesdr-dev-loop — per-repo flow config. Committed on purpose: the green command is
+# cstack — per-repo flow config. Committed on purpose: the green command is
 # a fact about this repo, not a preference of yours.
 
 # What "all green" means. The debug loop runs this and stops when it passes.

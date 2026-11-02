@@ -11,7 +11,7 @@
 # exit 3  UNKNOWN   — artifacts are insufficient to determine liveness
 set -uo pipefail
 
-STATE="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
+STATE="${CHARLES_STATE_DIR:-$HOME/.cache/cstack}"
 run=""
 SCOPE_DIR=""
 state_pending=0

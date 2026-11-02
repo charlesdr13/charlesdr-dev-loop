@@ -6,7 +6,7 @@ ok=0; bad=0
 say() { printf '  %-6s %s\n' "$1" "$2"; [ "$1" = "FAIL" ] && bad=$((bad+1)) || ok=$((ok+1)); }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-echo "charlesdr-dev-loop doctor"
+echo "cstack doctor"
 echo
 echo "Lanes:"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 run_root="$(charles_run_root "$PWD")"
 engine="${CHARLES_ENGINE:-}"
 [ -n "$engine" ] || engine="$(cat "$run_root/.charles/engine" 2>/dev/null || true)"
-[ -n "$engine" ] || engine="$(cat "${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}/engine" 2>/dev/null || true)"
+[ -n "$engine" ] || engine="$(cat "${CHARLES_STATE_DIR:-$HOME/.cache/cstack}/engine" 2>/dev/null || true)"
 # engine=claude hands explore/implement/review off to a plugin subagent instead
 # of running codex/luna, so their absence is not fatal here — only the three
 # agent files matter, checked below.
@@ -66,7 +66,7 @@ if [ -f "$PWD/.charles.toml" ]; then
   g="$(grep -oE '^green[[:space:]]*=[[:space:]]*".*"' "$PWD/.charles.toml" | sed 's/.*= *"//; s/"$//')"
   [ -n "$g" ] && say OK "green command: $g" || say WARN "no green command set — the debug loop will refuse to start"
 else
-  say WARN "not opted in — run /charlesdr-dev-loop:init to enable the hook and flows here"
+  say WARN "not opted in — run /cstack:init to enable the hook and flows here"
 fi
 have tasks-axi && say OK "tasks-axi (open items)" || say WARN "tasks-axi missing — open items stay in RUN.md instead"
 if [ -d "$PWD/.charles/runs" ]; then
@@ -75,16 +75,16 @@ if [ -d "$PWD/.charles/runs" ]; then
     [ -f "$d/RUN.md" ] || continue
     grep -q '^## Outcome' "$d/RUN.md" || open_n=$((open_n+1))
   done
-  [ "$open_n" -eq 0 ] && say OK "no unclosed runs" || say WARN "$open_n unclosed run(s) — /charlesdr-dev-loop:resolve"
+  [ "$open_n" -eq 0 ] && say OK "no unclosed runs" || say WARN "$open_n unclosed run(s) — /cstack:resolve"
 fi
 
 
 echo
 echo "Installed plugin:"
 VER="$(jq -r '.version' "$REPO_ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
-CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VER"
+CACHE="$HOME/.claude/plugins/cache/cstack/cstack/$VER"
 if [ ! -d "$CACHE" ]; then
-  say WARN "v$VER not installed — run: claude plugin marketplace update charlesdr-dev-loop && claude plugin uninstall charlesdr-dev-loop@charlesdr-dev-loop && claude plugin install charlesdr-dev-loop@charlesdr-dev-loop  (install alone is a no-op when a version is already installed)"
+  say WARN "v$VER not installed — run: claude plugin marketplace update cstack && claude plugin uninstall cstack@cstack && claude plugin install cstack@cstack  (install alone is a no-op when a version is already installed)"
 else
   drift=0
   spec_drift=0

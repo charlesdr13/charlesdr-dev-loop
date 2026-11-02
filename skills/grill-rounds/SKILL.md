@@ -84,7 +84,7 @@ credibility depends on that: a list padded with lookups teaches them to skim it.
 
 **Nothing proceeds to implementation while an item is unanswered.** If the user
 goes quiet, the run stays open with its `BLOCKED-HUMAN` items and
-`/charlesdr-dev-loop:resolve` picks them up later — that is exactly what that
+`/cstack:resolve` picks them up later — that is exactly what that
 state is for.
 
 Format each as:

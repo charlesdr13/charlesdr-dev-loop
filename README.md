@@ -1,4 +1,4 @@
-# charlesdr-dev-loop
+# cstack
 
 Claude Code stops writing your code and starts running the shop. Exploration,
 implementation and review go to Claude's own subagents by default (haiku explorer,
@@ -7,8 +7,8 @@ you ask for them with `--engine` or `/engine`.
 
 ```bash
 cd your-repo
-/charlesdr-dev-loop:init                          # opt this repo in, once
-/charlesdr-dev-loop:feature add rate limiting to the API
+/cstack:init                          # opt this repo in, once
+/cstack:feature add rate limiting to the API
 ```
 
 That single command runs the lean loop: read the code (explore lanes with
@@ -143,7 +143,7 @@ This wraps tools it does not ship. Before installing:
   v2+): `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh`.
   Its defaults need no `treehouse init`.
 
-Run `/charlesdr-dev-loop:doctor` after install; it tells you exactly which of
+Run `/cstack:doctor` after install; it tells you exactly which of
 these is missing and what each one costs you.
 
 ## Install
@@ -151,14 +151,14 @@ these is missing and what each one costs you.
 As a plugin, which is the normal path:
 
 ```bash
-/plugin marketplace add charlesdr13/charlesdr-dev-loop
-/plugin install charlesdr-dev-loop@charlesdr-dev-loop
+/plugin marketplace add charlesdr13/cstack
+/plugin install cstack@cstack
 ```
 
 Then check every lane resolves:
 
 ```bash
-/charlesdr-dev-loop:doctor
+/cstack:doctor
 ```
 
 As plain skills, for a harness without plugin support:
@@ -174,8 +174,8 @@ In [omp](https://github.com/can1357/oh-my-pi), to orchestrate from any model
 (GPT, Grok, Cursor, Claude):
 
 ```bash
-omp plugin marketplace add charlesdr13/charlesdr-dev-loop
-omp plugin install charlesdr-dev-loop@charlesdr-dev-loop
+omp plugin marketplace add charlesdr13/cstack
+omp plugin install cstack@cstack
 ```
 
 Recommended `~/.omp/agent/config.yml`. It routes each lane agent through a model
@@ -226,7 +226,7 @@ model that actually ran. omp's own code-work agents (`task`, `scout`, `sonic`,
 ## Opting a repo in
 
 ```bash
-/charlesdr-dev-loop:init
+/cstack:init
 ```
 
 Writes `.charles.toml`, committed on purpose:
@@ -269,7 +269,7 @@ Review effort is positional: intermediate reviews use `--effort medium`; the
 final pre-close review omits `--effort` and uses the model-aware default (sol at
 medium, luna/terra at max). This is a documented rule, not a flag.
 
-Run `/charlesdr-dev-loop:engine claude` to run explore, implement AND review
+Run `/cstack:engine claude` to run explore, implement AND review
 as native Claude Code subagents: `claude-explorer` (haiku), `claude-implementer`
 (sonnet), or `claude-reviewer` (opus). The orchestrator makes one Agent call
 whose prompt opens with `charles-dir:` (plus `charles-plan:`, `charles-req:`
@@ -286,7 +286,7 @@ fallback. `claude-explorer` keeps Bash for read-only probes by instruction,
 not by tool restriction — the same Bash-can-write ceiling as the other
 read-only lanes.
 
-Run `/charlesdr-dev-loop:engine grok` to use Grok (`grok-4.6`, local `grok`
+Run `/cstack:engine grok` to use Grok (`grok-4.6`, local `grok`
 CLI) at high effort for all three lanes — explore, implement, AND review. A
 `grok` preference is honoured on review too: it is a different model family
 from every codex profile, which is exactly what the isolated review wants.
@@ -295,7 +295,7 @@ is refused: no session id is recorded. Grok failures have no fallback.
 Read-only grok lanes block `write`/`search_replace`; Bash writes remain the
 same known isolation ceiling as claude.
 
-Run `/charlesdr-dev-loop:engine omp` to run all three lanes as headless `omp`
+Run `/cstack:engine omp` to run all three lanes as headless `omp`
 processes, one model per lane by default: explore `cursor/composer-2.5-fast`,
 implement `cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol`.
 `omp:<provider>/<model>` overrides the model for every lane (an unknown model
@@ -309,7 +309,7 @@ the same thing as the Agent tool.
 Engine values are `luna`, `terra`, `deepseek`, `claude`, `grok`, and `omp`. `/engine <value>`
 writes `<run root>/.charles/engine` in a repo with `.charles.toml`, shared by the
 primary checkout and linked worktrees; elsewhere it writes the global
-`$CHARLES_STATE_DIR/engine` (default: `~/.cache/charlesdr-dev-loop/engine`).
+`$CHARLES_STATE_DIR/engine` (default: `~/.cache/cstack/engine`).
 `/engine global <value>` always writes global. `/engine default` clears the
 project preference; `/engine global default` clears global. The command reports
 the effective scope and engine. Precedence: `--engine`, `CHARLES_ENGINE`,
@@ -419,16 +419,16 @@ writing to the same tree.
 
 | Command | When |
 |---|---|
-| `/charlesdr-dev-loop:feature <what>` | Building something new |
-| `/charlesdr-dev-loop:debug <symptom>` | Something is broken |
-| `/charlesdr-dev-loop:polish` | "What should I improve here" |
-| `/charlesdr-dev-loop:fast-flow <ask>` | Small or medium adaptive fast lane |
-| `/charlesdr-dev-loop:init` | Opt this repo in |
-| `/charlesdr-dev-loop:ui <route>` | UI/UX polish — routes to impeccable, adds a codex mechanical audit |
-| `/charlesdr-dev-loop:release <semver>` | Publish a version |
-| `/charlesdr-dev-loop:ops` | Cross-repo run triage and recovery |
-| `/charlesdr-dev-loop:resolve` | Pick up where the last run stopped |
-| `/charlesdr-dev-loop:doctor` | Check every lane and dependency |
+| `/cstack:feature <what>` | Building something new |
+| `/cstack:debug <symptom>` | Something is broken |
+| `/cstack:polish` | "What should I improve here" |
+| `/cstack:fast-flow <ask>` | Small or medium adaptive fast lane |
+| `/cstack:init` | Opt this repo in |
+| `/cstack:ui <route>` | UI/UX polish — routes to impeccable, adds a codex mechanical audit |
+| `/cstack:release <semver>` | Publish a version |
+| `/cstack:ops` | Cross-repo run triage and recovery |
+| `/cstack:resolve` | Pick up where the last run stopped |
+| `/cstack:doctor` | Check every lane and dependency |
 
 You do not have to type them. In an opted-in repo the flow triggers on intent —
 "add rate limiting" is enough. The commands are for being explicit.
@@ -450,8 +450,8 @@ unblock them:
 | `FAILED` | a lane died, work incomplete | re-dispatch |
 
 ```bash
-/charlesdr-dev-loop:resolve          # newest unclosed run
-/charlesdr-dev-loop:resolve --list   # pick another
+/cstack:resolve          # newest unclosed run
+/cstack:resolve --list   # pick another
 ```
 
 Open a run with `run-state.sh init <dir> <flow> "<goal>" --spec
@@ -484,7 +484,7 @@ forged from inside a report, so that is what gets checked.
 
 ## UI polish is a router, not a flow
 
-`/charlesdr-dev-loop:ui` deliberately does **not** implement UI judgment.
+`/cstack:ui` deliberately does **not** implement UI judgment.
 `impeccable` is a 27-command UI system whose `polish`
 alone covers spacing, information architecture, typography, contrast,
 interaction states, micro-interactions, content, icons and forms — and nine of

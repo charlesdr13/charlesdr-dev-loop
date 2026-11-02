@@ -24,7 +24,7 @@ const LANES: Record<string, { lane: string; model: string }> = {
   "claude-reviewer": { lane: "review", model: "openai-codex/gpt-6.1-sol:medium" },
 };
 
-// Plugin agents may arrive namespaced (charlesdr-dev-loop:claude-explorer).
+// Plugin agents may arrive namespaced (cstack:claude-explorer).
 export function laneAgent(agent?: string): string | undefined {
   const base = String(agent ?? "").split(":").pop()!.toLowerCase();
   return base in LANES ? base : undefined;
@@ -170,7 +170,7 @@ export default function (pi: any) {
   pi.on("before_subagent_spawn", async (e: any, ctx: any) => {
     if (!laneAgent(e.agent) || !optedIn(ctx?.cwd ?? process.cwd())) return;
     const model = laneModel(e.agent, await modelOverrides(pi));
-    if (model) return { model, note: `charlesdr-dev-loop ${LANES[laneAgent(e.agent)!].lane} lane` };
+    if (model) return { model, note: `cstack ${LANES[laneAgent(e.agent)!].lane} lane` };
   });
 
   pi.on("before_agent_start", (e: any, ctx: any) => {

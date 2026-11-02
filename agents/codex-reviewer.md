@@ -100,7 +100,7 @@ minutes (heavy diff, big repo, or terra at max) runs in the background with
 1. Do NOT re-dispatch. A second codex process may now be racing the first.
 2. Do NOT poll in a loop. Each poll is a turn, and turns are the cost.
 3. Report the failure, name the `raw:` jsonl path from the run, and STOP. A
-   timed-out lane is a `FAILED` item for `/charlesdr-dev-loop:resolve`, not a
+   timed-out lane is a `FAILED` item for `/cstack:resolve`, not a
    cue to improvise.
 
 **If the review genuinely needs longer than 10 minutes**, make one separate Bash

@@ -10,19 +10,19 @@ orchestrator is a strong model; it reads code and makes small edits itself. Lane
 exist for breadth and parallelism, not as a toll booth.
 
 **Gate:** needs a `.charles.toml` at the repo root. If there is none, say so and
-offer `/charlesdr-dev-loop:init`.
+offer `/cstack:init`.
 
 ## Select by work-kind
 
 | Work-kind | Destination |
 |---|---|
-| Build something new | `/charlesdr-dev-loop:feature` |
-| Something is broken | `/charlesdr-dev-loop:debug` |
-| Improve existing behaviour | `/charlesdr-dev-loop:polish` |
-| Small or medium ask, lean loop | `/charlesdr-dev-loop:fast-flow` |
-| UI/UX work — router, not a flow | `/charlesdr-dev-loop:ui` |
-| Publish a version | `/charlesdr-dev-loop:release` |
-| Cross-repo run triage or recovery | `/charlesdr-dev-loop:ops` |
+| Build something new | `/cstack:feature` |
+| Something is broken | `/cstack:debug` |
+| Improve existing behaviour | `/cstack:polish` |
+| Small or medium ask, lean loop | `/cstack:fast-flow` |
+| UI/UX work — router, not a flow | `/cstack:ui` |
+| Publish a version | `/cstack:release` |
+| Cross-repo run triage or recovery | `/cstack:ops` |
 
 Feature, debug, polish and fast-flow run the loop below; each command says only what differs.
 
@@ -95,7 +95,7 @@ Default engine: `claude`, your own subagents. Use `luna`, `terra`, `grok`, `omp`
 failed grok to luna, with a `fallback_from:<engine> primary_rc:<n>` receipt.
 
 **engine=claude:** one Agent call is the whole dispatch, no `codex-run` in Bash.
-Spawn `charlesdr-dev-loop:claude-explorer` (haiku), `claude-implementer` (sonnet) or
+Spawn `cstack:claude-explorer` (haiku), `claude-implementer` (sonnet) or
 `claude-reviewer` (opus) with header lines, a blank line, then the task:
 
 ```
@@ -212,7 +212,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh close "$(pwd)" "<outcome>" --spec doc
 
 While a run is open, `codex-run --lane implement` requires `--req` and checks the
 IDs against the run's spec. Close only when every item is resolved and the flow
-reached its final phase; a run that died midway is abandoned (`/charlesdr-dev-loop:resolve`),
+reached its final phase; a run that died midway is abandoned (`/cstack:resolve`),
 not finished. Runs idle for 7 days are abandoned automatically at session start.
 
 `close` runs `flow-status.sh` and refuses (exit 5) on findings from this run:
@@ -240,13 +240,13 @@ outcome to the committed plan; `.charles/` (run state, logs) is gitignored.
   this diff fix the stated cause and nothing else".
 - **Polish.** One explore pass for gaps, must-haves and quality-of-life wins, one
   lens per call. Take the shortlist to the user, plan the survivor.
-- **UI.** `/charlesdr-dev-loop:ui`. This one is a **router, not a flow**:
+- **UI.** `/cstack:ui`. This one is a **router, not a flow**:
   `impeccable` owns taste. Route to ONE impeccable command; run one explore lane
   for the mechanical audit only (token drift, off-scale spacing, dead styles with
   `file:line`); taste disagreements become `BLOCKED-HUMAN`. Check contrast, focus,
   tab order and CLS did not regress; review for scope creep. Screenshots go to the
   user, never to a lane.
-- **Release, ops.** `/charlesdr-dev-loop:release <semver>` and `:ops` own their steps.
+- **Release, ops.** `/cstack:release <semver>` and `:ops` own their steps.
   Never close, abandon or delete another repository's run without explicit human
   confirmation of repo, run id and action.
 - **Fast.** `commands/fast-flow.md`: this loop on a small ask.

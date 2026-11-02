@@ -20,4 +20,4 @@ codex-run --lane implement --dir <repo> --req <R1,A3> --timeout 2700 "<task>"
 
 Cap green-fix cycles at 3, then record a `FAILED` item and stop.
 
-No `.charles.toml`: stop and offer `/charlesdr-dev-loop:init`.
+No `.charles.toml`: stop and offer `/cstack:init`.

@@ -5,16 +5,16 @@ description: Fast flow — the lean loop on a small or medium ask, one worktree 
 Run the **lean loop** from the `charles-flow` skill on: $ARGUMENTS
 
 For a small or medium ask. Needs a `.charles.toml` (else offer
-`/charlesdr-dev-loop:init`); if a run is already open, offer
-`/charlesdr-dev-loop:resolve`.
+`/cstack:init`); if a run is already open, offer
+`/cstack:resolve`.
 
 ```bash
 SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 ```
 
 1. **Classify and baseline.** `debug`, `build`, or route out: UI/UX to
-   `/charlesdr-dev-loop:ui`; 2+ chunks, flow machinery, or money/auth/concurrency
-   work to `/charlesdr-dev-loop:feature` or `:debug`. Run `"$SCRIPTS/green.sh" "$(pwd)"`;
+   `/cstack:ui`; 2+ chunks, flow machinery, or money/auth/concurrency
+   work to `/cstack:feature` or `:debug`. Run `"$SCRIPTS/green.sh" "$(pwd)"`;
    red baseline means stop and offer `:debug`.
 2. **Understand.** Read the code yourself. Only if the area is unfamiliar, one
    explore lane in a Bash call with `run_in_background: true`:
