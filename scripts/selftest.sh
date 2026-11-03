@@ -4,6 +4,8 @@
 set -uo pipefail
 # The stubs below exercise the codex/grok lanes; the claude default is tested explicitly.
 export CHARLES_DEFAULT_ENGINE=
+# pin the orchestrator so tests behave the same when run from Codex or Grok
+export CHARLES_ORCHESTRATOR=claude
 unset CHARLES_FAST_MODE CHARLES_UNATTENDED FM_TASK_ID GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 BOX="$(mktemp -d)"; trap 'rm -rf "$BOX"' EXIT
@@ -4789,6 +4791,33 @@ else
   echo "  FAIL  unconfigured lanes must default to claude (rc=$def_rc/$defr_rc): $def_out | $defr_out"; fail=$((fail+1))
 fi
 mkdir -p "$DEF/bin"; printf '#!/usr/bin/env bash\nprintf "luna ran\\n"\n' > "$DEF/bin/codex"; chmod +x "$DEF/bin/codex"
+# 3.1.0 R3: a Codex or Grok orchestrator swaps only the built-in claude default.
+printf '#!/usr/bin/env bash\nprintf "grok ran\\n"\n' > "$DEF/bin/grok"; chmod +x "$DEF/bin/grok"
+orch_last() { jq -sr '[.[] | select(.event == "end")] | last | .engine' "$DEF/repo/.charles/dispatches.jsonl" 2>/dev/null; }
+for o in codex:luna grok:grok; do
+  oo_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE -u CLAUDECODE CHARLES_ORCHESTRATOR="${o%%:*}" PATH="$DEF/bin:$PATH" CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" --timeout 5 "orch ${o%%:*}" 2>&1)"
+  if ! grep -q '^SPAWN:' <<<"$oo_out" && grep -q "orchestrated from" <<<"$oo_out" && [ "$(orch_last)" = "${o##*:}" ]; then
+    echo "  PASS  a ${o%%:*} orchestrator runs default lanes on ${o##*:}"; pass=$((pass+1))
+  else
+    echo "  FAIL  a ${o%%:*} orchestrator must run default lanes on ${o##*:} (last=$(orch_last)): $oo_out"; fail=$((fail+1))
+  fi
+done
+mkdir -p "$DEF/anc"; ln -sf "$(command -v bash)" "$DEF/anc/codex"
+oa_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE -u CLAUDECODE -u CHARLES_ORCHESTRATOR PATH="$DEF/bin:$PATH" CHARLES_STATE_DIR="$DEF/state" RUN_SH="$RUN_SH" DEFR="$DEF/repo" "$DEF/anc/codex" -c 'bash "$RUN_SH" --lane explore --dir "$DEFR" --timeout 5 "orch detect"; true' 2>&1)"
+if grep -q "orchestrated from Codex" <<<"$oa_out" && [ "$(orch_last)" = luna ]; then
+  echo "  PASS  a codex ancestor process is detected without CHARLES_ORCHESTRATOR"; pass=$((pass+1))
+else
+  echo "  FAIL  a codex ancestor must be detected (last=$(orch_last)): $oa_out"; fail=$((fail+1))
+fi
+oe_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE -u CLAUDECODE CHARLES_ORCHESTRATOR=codex CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --engine claude --dir "$DEF/repo" "explicit claude" 2>&1)"
+if grep -q '^SPAWN: cstack:claude-explorer' <<<"$oe_out"; then
+  echo "  PASS  an explicit --engine claude is never swapped"; pass=$((pass+1))
+else
+  echo "  FAIL  an explicit --engine claude must not be swapped: $oe_out"; fail=$((fail+1))
+fi
+grep -q 'Repro:' "$RUN_SH" && grep -q 'Repro:' "$(dirname "$RUN_SH")/../agents/claude-reviewer.md" \
+  && { echo "  PASS  both review prompts ask for a Repro: line"; pass=$((pass+1)); } \
+  || { echo "  FAIL  both review prompts must ask for a Repro: line"; fail=$((fail+1)); }
 for defp in global project; do
   rm -f "$DEF/state/engine" "$DEF/repo/.charles/engine"
   if [ "$defp" = global ]; then mkdir -p "$DEF/state"; printf 'luna\n' > "$DEF/state/engine"

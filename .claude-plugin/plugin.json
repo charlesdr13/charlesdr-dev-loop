@@ -1,7 +1,7 @@
 {
   "name": "cstack",
-  "version": "3.0.0",
-  "description": "Charles's development loop: Claude Code orchestrates, its own subagents explore and implement (codex or grok when asked), an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Opt-in per repo via .charles.toml.",
+  "version": "3.1.0",
+  "description": "Charles's development loop: Claude Code orchestrates, its own subagents explore and implement (codex or grok when asked), an isolated reviewer grades. The default loop is plan, implement, one review, green, close, with no edit gate. Runs from Claude Code, Codex or Grok; a repo is opted in (.charles.toml) the first time the flow runs there.",
   "author": {
     "name": "cstack"
   },

@@ -8,6 +8,7 @@
 #
 #   bash scripts/install-skills.sh            # symlink (edits track the repo)
 #   bash scripts/install-skills.sh --copy     # copy (independent of the repo)
+#   bash scripts/install-skills.sh --codex    # symlink into ~/.codex/skills for Codex
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,6 +16,7 @@ SKILLS="$HOME/.claude/skills"
 BIN="$HOME/.local/bin"
 MODE="symlink"
 [ "${1:-}" = "--copy" ] && MODE="copy"
+[ "${1:-}" = "--codex" ] && SKILLS="$HOME/.codex/skills"
 
 mkdir -p "$SKILLS" "$BIN"
 
