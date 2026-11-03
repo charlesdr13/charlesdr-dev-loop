@@ -36,7 +36,7 @@ case ":$PATH:" in
 esac
 
 echo
-echo "Skill-only install. You do NOT have: the codex-* agents, the /charlesdr-dev-loop:*"
+echo "Skill-only install. You do NOT have: the codex-* agents, the /cstack:*"
 echo "commands, or the edit-routing hook. For those, install as a plugin:"
 echo "  /plugin marketplace add $REPO"
-echo "  /plugin install charlesdr-dev-loop@charlesdr-dev-loop"
+echo "  /plugin install cstack@cstack"

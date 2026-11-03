@@ -14,7 +14,7 @@ Report what came back. For each issue, say what closes it:
   (in a no-mistakes repo with a `review` phase citing no-mistakes, these are a NOTE, not a blocker)
 - **plans with no grill verdict** → a NOTE only; `grill-rounds` if the plan is risky
 - **unsourced working-tree changes** → a NOTE at close (inline edits are legitimate); commit or resolve them
-- **open runs** → `/charlesdr-dev-loop:resolve`
+- **open runs** → `/cstack:resolve`
 
 Do not offer to `--force` a close unless the user asks. The point of the check
 is that "the dispatches succeeded" is not the same as "the work is done".

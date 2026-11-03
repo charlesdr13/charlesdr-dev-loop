@@ -1,4 +1,4 @@
-# charlesdr-dev-loop
+# cstack
 
 A Claude Code plugin. Claude orchestrates; its own subagents (claude-explorer,
 claude-implementer, claude-reviewer) do the work by default; codex or grok lanes

@@ -72,18 +72,18 @@ fi
 mv "$tmp_dir/plugin.json" .claude-plugin/plugin.json
 mv "$tmp_dir/marketplace.json" .claude-plugin/marketplace.json
 
-if ! claude plugin marketplace update charlesdr-dev-loop \
-  || ! claude plugin install charlesdr-dev-loop@charlesdr-dev-loop; then
+if ! claude plugin marketplace update cstack \
+  || ! claude plugin install cstack@cstack; then
   exit 1
 fi
 # `install` is a no-op when the plugin is already installed; `update` is what
 # actually copies the new version into the cache.
-CACHE_ROOT="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop"
+CACHE_ROOT="$HOME/.claude/plugins/cache/cstack/cstack"
 if [ ! -d "$CACHE_ROOT/$VERSION" ]; then
-  claude plugin update charlesdr-dev-loop@charlesdr-dev-loop || exit 1
+  claude plugin update cstack@cstack || exit 1
 fi
 
-CACHE="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$VERSION"
+CACHE="$HOME/.claude/plugins/cache/cstack/cstack/$VERSION"
 TARGET="$CACHE/scripts/codex-run.sh"
 LINK="$HOME/.local/bin/codex-run"
 if [ ! -d "$CACHE" ]; then
@@ -101,12 +101,12 @@ fi
 restore_needed=0
 
 if command -v omp >/dev/null 2>&1; then
-  if ! omp plugin marketplace update charlesdr-dev-loop \
-    || ! omp plugin install charlesdr-dev-loop@charlesdr-dev-loop --force; then
+  if ! omp plugin marketplace update cstack \
+    || ! omp plugin install cstack@cstack --force; then
     echo "release.sh: omp plugin refresh failed" >&2
     exit 1
   fi
-  OMP_CACHE="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___$VERSION"
+  OMP_CACHE="$HOME/.omp/plugins/cache/plugins/cstack___cstack___$VERSION"
   if [ ! -d "$OMP_CACHE" ]; then
     echo "release.sh: omp cache directory is missing: $OMP_CACHE" >&2
     exit 1

@@ -18,4 +18,4 @@ codex-run --lane implement --dir <repo> --req <R1,A3> --timeout 2700 "<task>"
 Open the run with `run-state.sh init ... --spec docs/specs/<plan>.md`; defer
 mid-flow discoveries with `run-state.sh defer <dir> "<text>"`.
 
-No `.charles.toml`: stop and offer `/charlesdr-dev-loop:init`.
+No `.charles.toml`: stop and offer `/cstack:init`.

@@ -16,4 +16,4 @@ codex-run --lane implement --dir <repo> --req <R1,A3> --timeout 2700 "<task>"
 
 Review for scope creep, the characteristic failure of polish work.
 
-No `.charles.toml`: stop and offer `/charlesdr-dev-loop:init`.
+No `.charles.toml`: stop and offer `/cstack:init`.

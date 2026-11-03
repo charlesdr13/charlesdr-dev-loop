@@ -27,10 +27,10 @@ target_ok() {
   # plugin's checkout under the same cache root is still a git tree to refuse.
   home_resolved="$(readlink -f "$HOME" 2>/dev/null)" || home_resolved="$HOME"
   case "$resolved" in
-    "$home_resolved/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___"*) return 0 ;;
+    "$home_resolved/.omp/plugins/cache/plugins/cstack___cstack___"*) return 0 ;;
   esac
   if "${git_clean[@]}" -C "$(dirname "$resolved")" rev-parse --show-toplevel >/dev/null 2>&1; then
-    echo "charlesdr-dev-loop: refusing to link codex-run into a git working tree: $resolved" >&2
+    echo "cstack: refusing to link codex-run into a git working tree: $resolved" >&2
     return 1
   fi
 }
@@ -38,7 +38,7 @@ target_ok() {
 target=""
 ver="$(jq -r '.version' "$root/.claude-plugin/plugin.json" 2>/dev/null)" || ver=""
 if [ -n "$ver" ]; then
-  cache="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/$ver/scripts/codex-run.sh"
+  cache="$HOME/.claude/plugins/cache/cstack/cstack/$ver/scripts/codex-run.sh"
   target_ok "$cache" && target="$cache"
 fi
 if [ -z "$target" ] && target_ok "$src"; then
@@ -53,7 +53,7 @@ link="$bin/codex-run"
 # Only rewrite when it actually changed, so a reinstall is silent and idempotent.
 if [ "$(readlink "$link" 2>/dev/null)" != "$target" ]; then
   ln -sfn "$target" "$link" 2>/dev/null || exit 0
-  echo "charlesdr-dev-loop: codex-run -> $target"
+  echo "cstack: codex-run -> $target"
 fi
 
 # --- where you left off -------------------------------------------------------
@@ -85,9 +85,9 @@ for d in "$repo"/.charles/runs/*/; do
   newest="$(basename "${d%/}")"
 done
 
-[ "$stale_n" -gt 0 ] && echo "charlesdr-dev-loop: auto-abandoned $stale_n stale run(s)"
+[ "$stale_n" -gt 0 ] && echo "cstack: auto-abandoned $stale_n stale run(s)"
 if [ "$open_n" -gt 0 ]; then
-  echo "charlesdr-dev-loop: $open_n open run(s) here, $items unresolved item(s). Newest: $newest"
-  echo "  /charlesdr-dev-loop:resolve to pick up where you stopped"
+  echo "cstack: $open_n open run(s) here, $items unresolved item(s). Newest: $newest"
+  echo "  /cstack:resolve to pick up where you stopped"
 fi
 exit 0

@@ -24,7 +24,7 @@ while [ "$root" != "/" ] && [ ! -f "$root/.charles.toml" ]; do
   parent="$(dirname "$root")"; [ "$parent" = "$root" ] && break; root="$parent"
 done
 if [ ! -f "$root/.charles.toml" ]; then
-  echo "green.sh: no .charles.toml at or above $DIR — run /charlesdr-dev-loop:init" >&2
+  echo "green.sh: no .charles.toml at or above $DIR — run /cstack:init" >&2
   exit 2
 fi
 

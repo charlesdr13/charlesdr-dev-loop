@@ -9,7 +9,7 @@ the source of truth for taste — do not reimplement its judgment here. What thi
 adds is the machinery impeccable lacks: durable run state, a codex lane for the
 mechanical half of the audit, and a scope-creep review at the end.
 
-**Gate:** requires `.charles.toml`. No file → offer `/charlesdr-dev-loop:init`.
+**Gate:** requires `.charles.toml`. No file → offer `/cstack:init`.
 
 **Scope: one route or one component.** Whole-app polish produces a diff nobody
 can review, where a single bad judgment contaminates everything. If the user

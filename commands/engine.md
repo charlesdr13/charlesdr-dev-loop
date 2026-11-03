@@ -6,7 +6,7 @@ description: Switch the project engine (luna | terra | deepseek | claude | grok 
 SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 . "$SCRIPTS/run-common.sh"
 ROOT="$(charles_run_root "$PWD")"
-D="${CHARLES_STATE_DIR:-$HOME/.cache/charlesdr-dev-loop}"
+D="${CHARLES_STATE_DIR:-$HOME/.cache/cstack}"
 VALUE="${ARGUMENTS:-}"; GLOBAL=0
 case "$VALUE" in global\ *) GLOBAL=1; VALUE="${VALUE#global }" ;; esac
 TARGET="$D/engine"
@@ -33,7 +33,7 @@ echo "engine ($SCOPE): $PICK"
 Report the engine line back. Takes effect on the next dispatch — no restart, no
 reinstall. `/engine <value>` writes `<run root>/.charles/engine` in a repo with
 `.charles.toml`, otherwise the global `$CHARLES_STATE_DIR/engine` (default:
-`~/.cache/charlesdr-dev-loop/engine`). Linked worktrees share the primary
+`~/.cache/cstack/engine`). Linked worktrees share the primary
 checkout's preference. `/engine global <value>` always writes global.
 `/engine default` clears the project preference; `/engine global default` clears
 the global preference. The echoed scope is the effective one, even after a

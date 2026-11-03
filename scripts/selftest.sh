@@ -1737,7 +1737,7 @@ else
   echo "  FAIL  session hook must refuse a working-tree target without creating the link"; fail=$((fail+1))
 fi
 
-cache_target="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/2.34.0/scripts/codex-run.sh"
+cache_target="$HOME/.claude/plugins/cache/cstack/cstack/2.34.0/scripts/codex-run.sh"
 mkdir -p "$(dirname "$cache_target")"
 printf '#!/usr/bin/env bash\necho cached\n' > "$cache_target"
 chmod +x "$cache_target"
@@ -1796,7 +1796,7 @@ fi
 
 # omp's plugin cache is a git checkout by construction (R4): the hook must
 # still link into it, but keep refusing every other git working tree.
-OMP_CACHE_ROOT="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___9.9.9"
+OMP_CACHE_ROOT="$HOME/.omp/plugins/cache/plugins/cstack___cstack___9.9.9"
 mkdir -p "$OMP_CACHE_ROOT/scripts" "$OMP_CACHE_ROOT/.claude-plugin"
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_CACHE_ROOT"
 printf '{"version":"9.9.9"}\n' > "$OMP_CACHE_ROOT/.claude-plugin/plugin.json"
@@ -1854,7 +1854,7 @@ fi
 # a checkout with this plugin's name but a different marketplace name is still
 # not the omp cache dir this hook trusts (`plugin___marketplace___version`),
 # so it must still be refused.
-OMP_OTHERMARKET_ROOT="$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___othermarket___1.0"
+OMP_OTHERMARKET_ROOT="$HOME/.omp/plugins/cache/plugins/cstack___othermarket___1.0"
 mkdir -p "$OMP_OTHERMARKET_ROOT/scripts" "$OMP_OTHERMARKET_ROOT/.claude-plugin"
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git init -q "$OMP_OTHERMARKET_ROOT"
 printf '{"version":"1.0"}\n' > "$OMP_OTHERMARKET_ROOT/.claude-plugin/plugin.json"
@@ -2113,7 +2113,7 @@ printf '{"ts":"%s","event":"start","lane":"explore","run":"old-orphan","dir":"%s
 scope_status="$(CHARLES_STATE_DIR="$CS_STATE" bash "$FS" "$CS" --closing "$CS/.charles/runs/close-run" 2>&1)"; scope_status_rc=$?
 if [ "$scope_status_rc" -eq 0 ] && grep -q 'repo backlog' <<<"$scope_status" \
   && grep -q 'old-orphan' <<<"$scope_status" && grep -q 'run stale-run' <<<"$scope_status" \
-  && grep -q '/charlesdr-dev-loop:resolve' <<<"$scope_status" && grep -q 'runs-sweep.sh' <<<"$scope_status"; then
+  && grep -q '/cstack:resolve' <<<"$scope_status" && grep -q 'runs-sweep.sh' <<<"$scope_status"; then
   echo "  PASS  closing audit reports stale findings as repo backlog"; pass=$((pass+1))
 else
   echo "  FAIL  closing audit should report stale findings without blocking (rc=$scope_status_rc)"; fail=$((fail+1))
@@ -2608,7 +2608,7 @@ r2_new="$(bash "$RS" init "$R2" feature "new run" --spec docs/specs/b.md 2>/dev/
 touch -d '8 days ago' "$R2/.charles/runs/$r2_old/RUN.md"
 ln -sf "$RS" "$R8_PLUGIN/scripts/run-state.sh"
 r2_out="$(cd "$R2" && HOME="$R8_HOME" CLAUDE_PLUGIN_ROOT="$R8/plugin" bash "$LINK" 2>&1)"
-if grep -qF 'charlesdr-dev-loop: auto-abandoned 1 stale run(s)' <<<"$r2_out" \
+if grep -qF 'cstack: auto-abandoned 1 stale run(s)' <<<"$r2_out" \
   && grep -qF '1 open run(s) here' <<<"$r2_out" && grep -qF "Newest: $r2_new" <<<"$r2_out" \
   && grep -q '^## Abandoned$' "$R2/.charles/runs/$r2_old/RUN.md" \
   && grep -qF 'stale: no activity for 7 days' "$R2/.charles/runs/$r2_old/RUN.md" \
@@ -2669,7 +2669,7 @@ cp "$REPO_ROOT/scripts/flow.json" "$DD/repo/scripts/flow.json"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DD/repo/scripts/codex-run.sh"
 chmod +x "$DD/repo/scripts/doctor.sh" "$DD/repo/scripts/flow-status.sh" "$DD/repo/scripts/codex-run.sh"
 printf 'current\n' > "$DD/repo/docs/specs/plan.md"
-DRIFT_CACHE="$DD/home/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/fixture"
+DRIFT_CACHE="$DD/home/.claude/plugins/cache/cstack/cstack/fixture"
 mkdir -p "$DRIFT_CACHE/docs/specs" "$DRIFT_CACHE/scripts"
 printf 'installed\n' > "$DRIFT_CACHE/docs/specs/plan.md"
 cp "$DD/repo/scripts/codex-run.sh" "$DRIFT_CACHE/scripts/codex-run.sh"
@@ -3045,7 +3045,7 @@ claude_run() {
 cl_out="$(claude_run --lane explore --engine claude)"; cl_rc=$?
 cl_explore_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
 if [ "$cl_rc" -eq 0 ] \
-  && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-explorer"$'\n'PROMPT:* ]] \
+  && [[ "$cl_out" == "SPAWN: cstack:claude-explorer"$'\n'PROMPT:* ]] \
   && grep -qF "charles-run: $cl_explore_run" <<<"$cl_out" \
   && grep -qF "charles-dir: $CL/repo" <<<"$cl_out" \
   && grep -qF "claude task" <<<"$cl_out" \
@@ -3072,7 +3072,7 @@ Grill waived: test.
 EOF
 cl_out="$(claude_run --lane implement --engine claude --allow-main-tree --plan "$CL/repo/plan.md" --req R1 "implement R1")"; cl_rc=$?
 cl_implement_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
-if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-implementer"$'\n'* ]] \
+if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: cstack:claude-implementer"$'\n'* ]] \
   && grep -qF "charles-plan: $CL/repo/plan.md" <<<"$cl_out" && grep -qF "charles-req: R1" <<<"$cl_out" \
   && jq -se --arg r "$cl_implement_run" \
     'map(select(.run == $r and .event == "start")) | length == 1 and .[0].req == ["R1"]' \
@@ -3088,7 +3088,7 @@ echo x > "$CL/repo/change.txt"
 cl_out="$(claude_run --lane review --engine claude --plan "$CL/repo/tracked" "check it")"; cl_rc=$?
 cl_review_run="$(jq -r 'select(.event == "start") | .run' "$CL/repo/.charles/dispatches.jsonl" | tail -1)"
 cl_box="$(sed -n 's/^charles-box: //p' <<<"$cl_out" | head -1)"
-if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: charlesdr-dev-loop:claude-reviewer"$'\n'* ]] \
+if [ "$cl_rc" -eq 0 ] && [[ "$cl_out" == "SPAWN: cstack:claude-reviewer"$'\n'* ]] \
   && [ -n "$cl_box" ] && [ -f "$cl_box/.charles-review-box" ] \
   && [ -f "$cl_box/plan.md" ] && [ -s "$cl_box/changes.diff" ]; then
   echo "  PASS  claude review builds the box, marks it, names it, and does not delete it"; pass=$((pass+1))
@@ -3108,12 +3108,12 @@ rb_check() { # rb_check NAME EXPECT TOOL TOOL_INPUT_JSON AGENT_TYPE
     echo "  FAIL  $name — expected $expect, got $decision"; echo "        $out"; fail=$((fail+1))
   fi
 }
-rb_reviewer="charlesdr-dev-loop:claude-reviewer"
+rb_reviewer="cstack:claude-reviewer"
 rb_check "reviewer Read inside its box" allow Read "$(jq -nc --arg p "$cl_box/plan.md" '{file_path:$p}')" "$rb_reviewer"
 rb_check "reviewer Read outside its box" deny Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "$rb_reviewer"
 rb_check "reviewer Read of a missing path" deny Read "$(jq -nc --arg p "$cl_box/nope.md" '{file_path:$p}')" "$rb_reviewer"
 rb_check "reviewer Bash is denied outright" deny Bash '{"command":"ls"}' "$rb_reviewer"
-rb_check "non-reviewer agent is ignored" allow Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "charlesdr-dev-loop:claude-implementer"
+rb_check "non-reviewer agent is ignored" allow Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" "cstack:claude-implementer"
 rb_check "main thread (no agent_type) is ignored" allow Read "$(jq -nc --arg p "$CL/repo/tracked" '{file_path:$p}')" ""
 # a marker planted outside the temp root unlocks nothing
 : > "$CL/repo/.charles-review-box"
@@ -3121,7 +3121,7 @@ rb_check "reviewer Read under a planted marker" deny Read "$(jq -nc --arg p "$CL
 rb_check "reviewer Grep with no path" deny Grep '{"pattern":"x"}' "$rb_reviewer"
 rb_check "reviewer Glob inside its box" allow Glob "$(jq -nc --arg p "$cl_box" '{path:$p,pattern:"*.md"}')" "$rb_reviewer"
 rb_check "reviewer Glob climbing out with .." deny Glob "$(jq -nc --arg p "$cl_box" '{path:$p,pattern:"../*/changes.diff"}')" "$rb_reviewer"
-jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "charles-run: none
+jq -nc --arg s "cstack:claude-reviewer" --arg p "charles-run: none
 charles-dir: $CL/repo
 charles-box: $CL/repo" '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$(cd "$(dirname "$0")/.." && pwd)/hooks/claude-lane-receipt.sh"
 if [ -f "$CL/repo/tracked" ]; then
@@ -3140,7 +3140,7 @@ charles-box: $cl_box
 check it"
 # A background spawn's PostToolUse fires at LAUNCH (isAsync): no end yet, and
 # the box must survive for the reviewer that is about to read it.
-jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "$cl_review_prompt" \
+jq -nc --arg s "cstack:claude-reviewer" --arg p "$cl_review_prompt" \
   '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p},tool_response:{isAsync:true,status:"async_launched"}}' | bash "$RECEIPT"
 if [ -f "$cl_box/.charles-review-box" ] && ! jq -se --arg r "$cl_review_run" \
     'map(select(.run == $r and .event == "end")) | length > 0' "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
@@ -3154,7 +3154,7 @@ jq -nc '{type:"user",message:{role:"user",content:"<system-reminder>injected con
 jq -nc '{type:"user",message:{role:"user",content:null}}' >> "$cl_transcript"
 jq -nc --arg p "$cl_review_prompt" '{type:"user",message:{role:"user",content:$p}}' >> "$cl_transcript"
 jq -nc --arg t "$cl_transcript" \
-  '{hook_event_name:"SubagentStop",agent_type:"charlesdr-dev-loop:claude-reviewer",agent_transcript_path:$t}' | bash "$RECEIPT"
+  '{hook_event_name:"SubagentStop",agent_type:"cstack:claude-reviewer",agent_transcript_path:$t}' | bash "$RECEIPT"
 if jq -se --arg r "$cl_review_run" \
     'map(select(.run == $r and .event == "end")) | length == 1 and .[0].engine == "claude" and .[0].model == "opus" and .[0].rc == 0' \
     "$CL/repo/.charles/dispatches.jsonl" >/dev/null && [ ! -e "$cl_box" ]; then
@@ -3163,7 +3163,7 @@ else
   echo "  FAIL  claude-lane-receipt.sh must append a matching end event and delete the box"; fail=$((fail+1))
 fi
 # a foreground call fires SubagentStop AND PostToolUse: still exactly one end.
-jq -nc --arg s "charlesdr-dev-loop:claude-reviewer" --arg p "$cl_review_prompt" \
+jq -nc --arg s "cstack:claude-reviewer" --arg p "$cl_review_prompt" \
   '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
 if jq -se --arg r "$cl_review_run" 'map(select(.run == $r and .event == "end")) | length == 1' \
     "$CL/repo/.charles/dispatches.jsonl" >/dev/null; then
@@ -3181,7 +3181,7 @@ cl_explore_prompt="charles-run: $cl_explore_run
 charles-dir: $CL/repo
 
 find the main entrypoint"
-jq -nc --arg s "charlesdr-dev-loop:claude-explorer" --arg p "$cl_explore_prompt" \
+jq -nc --arg s "cstack:claude-explorer" --arg p "$cl_explore_prompt" \
   '{tool_name:"Task",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
 if jq -se --arg r "$cl_explore_run" \
     'map(select(.run == $r and .event == "end")) | length == 1 and .[0].engine == "claude" and .[0].model == "haiku" and .[0].rc == 0' \
@@ -3206,20 +3206,20 @@ charles-dir: $WTL
 implement R1"
 wt_ends() { jq -s --arg r "$2" 'map(select(.run == $r and .event == "end")) | length' "$1"; }
 # PostToolUse, then SubagentStop for the same call
-jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "$wt_prompt" \
+jq -nc --arg s "cstack:claude-implementer" --arg p "$wt_prompt" \
   '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
 jq -nc --arg p "$wt_prompt" '{type:"user",message:{role:"user",content:$p}}' > "$BOX/wt-transcript.jsonl"
 jq -nc --arg t "$BOX/wt-transcript.jsonl" \
-  '{hook_event_name:"SubagentStop",agent_type:"charlesdr-dev-loop:claude-implementer",agent_transcript_path:$t}' | bash "$RECEIPT"
+  '{hook_event_name:"SubagentStop",agent_type:"cstack:claude-implementer",agent_transcript_path:$t}' | bash "$RECEIPT"
 # the main-log guard alone must stop a second mirror: drop the worktree's end and fire again
 grep -v '"event":"end"' "$WTL/.charles/dispatches.jsonl" > "$BOX/wt-log" && cp "$BOX/wt-log" "$WTL/.charles/dispatches.jsonl"
-jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "$wt_prompt" \
+jq -nc --arg s "cstack:claude-implementer" --arg p "$wt_prompt" \
   '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
 # a run whose start never reached the main log is not mirrored there
 wt_run2="20260101-000001-2-implement"
 jq -nc --arg r "$wt_run2" --arg d "$WTL" '{ts:"2026-01-01T00:00:01Z",event:"start",lane:"implement",engine:"claude",run:$r,dir:$d,task:"t"}' \
   >> "$WTL/.charles/dispatches.jsonl"
-jq -nc --arg s "charlesdr-dev-loop:claude-implementer" --arg p "charles-run: $wt_run2
+jq -nc --arg s "cstack:claude-implementer" --arg p "charles-run: $wt_run2
 charles-dir: $WTL" '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT"
 if [ "$(wt_ends "$WTM/.charles/dispatches.jsonl" "$wt_run")" = 1 ] && [ "$(wt_ends "$WTL/.charles/dispatches.jsonl" "$wt_run")" = 1 ] \
   && [ "$(wt_ends "$WTM/.charles/dispatches.jsonl" "$wt_run2")" = 0 ] && [ "$(wt_ends "$WTL/.charles/dispatches.jsonl" "$wt_run2")" = 1 ]; then
@@ -3240,7 +3240,7 @@ for cl_source in project environment global; do
   esac
   cl_pref_out="$(CLAUDE_TEST_ENGINE="$cl_env" claude_run --lane review --plan "$CL/repo/tracked" "check it")"; cl_pref_rc=$?
   cl_pref_box="$(sed -n 's/^charles-box: //p' <<<"$cl_pref_out" | head -1)"
-  if [ "$cl_pref_rc" -eq 0 ] && [[ "$cl_pref_out" == "SPAWN: charlesdr-dev-loop:claude-reviewer"$'\n'* ]] && [ -d "$cl_pref_box" ]; then
+  if [ "$cl_pref_rc" -eq 0 ] && [[ "$cl_pref_out" == "SPAWN: cstack:claude-reviewer"$'\n'* ]] && [ -d "$cl_pref_box" ]; then
     echo "  PASS  $cl_source claude preference hands review to claude-reviewer"; pass=$((pass+1))
   else
     echo "  FAIL  $cl_source claude preference must hand review to claude-reviewer (rc=$cl_pref_rc)"; fail=$((fail+1))
@@ -3401,8 +3401,8 @@ chmod +x "$RS_CLONE/scripts/green.sh" "$RS_CLONE/scripts/doctor.sh"
 RS_BIN="$BOX/release-bin"; mkdir -p "$RS_BIN"
 cat > "$RS_BIN/claude" <<'SH'
 #!/usr/bin/env bash
-if [ "$*" = "plugin install charlesdr-dev-loop@charlesdr-dev-loop" ]; then
-  dest="$HOME/.claude/plugins/cache/charlesdr-dev-loop/charlesdr-dev-loop/${RS_TEST_VERSION:?}/scripts"
+if [ "$*" = "plugin install cstack@cstack" ]; then
+  dest="$HOME/.claude/plugins/cache/cstack/cstack/${RS_TEST_VERSION:?}/scripts"
   mkdir -p "$dest"
   printf '#!/usr/bin/env bash\n' > "$dest/codex-run.sh"
   chmod +x "$dest/codex-run.sh"
@@ -3412,12 +3412,12 @@ SH
 cat > "$RS_BIN/omp" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
-  "plugin marketplace update charlesdr-dev-loop")
+  "plugin marketplace update cstack")
     [ "${RS_TEST_OMP_FAIL_MARKETPLACE:-0}" = 1 ] && exit 1 ;;
-  "plugin install charlesdr-dev-loop@charlesdr-dev-loop --force")
+  "plugin install cstack@cstack --force")
     [ "${RS_TEST_OMP_FAIL_INSTALL:-0}" = 1 ] && exit 1
     if [ "${RS_TEST_OMP_SKIP_CACHE:-0}" != 1 ]; then
-      mkdir -p "$HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___${RS_TEST_VERSION:?}"
+      mkdir -p "$HOME/.omp/plugins/cache/plugins/cstack___cstack___${RS_TEST_VERSION:?}"
     fi
     ;;
 esac
@@ -3465,7 +3465,7 @@ RS_HOME="$BOX/release-home-ok"; mkdir -p "$RS_HOME"
     bash scripts/release.sh "$RS_VERSION"
 ) >"$BOX/release-ok.out" 2>&1; rs_ok_rc=$?
 if [ "$rs_ok_rc" -eq 0 ] \
-  && [ -d "$RS_HOME/.omp/plugins/cache/plugins/charlesdr-dev-loop___charlesdr-dev-loop___$RS_VERSION" ]; then
+  && [ -d "$RS_HOME/.omp/plugins/cache/plugins/cstack___cstack___$RS_VERSION" ]; then
   echo "  PASS  release.sh succeeds and refreshes omp when the stub creates the cache dir"; pass=$((pass+1))
 else
   echo "  FAIL  release.sh must succeed when omp refresh creates the cache dir (rc=$rs_ok_rc)"; fail=$((fail+1))
@@ -3575,7 +3575,7 @@ cd_check_silent() { # cd_check_silent NAME SUBAGENT PROMPT CWD
 # logs one start event (engine claude); feeding it to claude-lane-receipt.sh
 # makes verify-receipt.sh --lane explore pass (R1/R3).
 cd_env=()
-cd_explore_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "find the main entrypoint" "$CL/repo")"; cd_explore_rc=$?
+cd_explore_out="$(cd_dispatch "cstack:claude-explorer" "find the main entrypoint" "$CL/repo")"; cd_explore_rc=$?
 cd_explore_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_explore_out")"
 cd_explore_prompt="$(jq -r '.hookSpecificOutput.updatedInput.prompt // empty' <<<"$cd_explore_out")"
 cd_explore_run="$(sed -n 's/^charles-run: //p' <<<"$cd_explore_prompt" | head -1)"
@@ -3590,7 +3590,7 @@ if [ "$cd_explore_rc" -eq 0 ] && [ "$cd_explore_decision" = allow ] \
 else
   echo "  FAIL  dispatch hook explore rewrite/start contract is wrong (rc=$cd_explore_rc)"; echo "        $cd_explore_out"; fail=$((fail+1))
 fi
-jq -nc --arg s "charlesdr-dev-loop:claude-explorer" --arg p "$cd_explore_prompt" \
+jq -nc --arg s "cstack:claude-explorer" --arg p "$cd_explore_prompt" \
   '{tool_name:"Agent",tool_input:{subagent_type:$s,prompt:$p}}' | bash "$RECEIPT" >/dev/null
 if bash "$VR" "$CL/repo" --lane explore --run "$cd_explore_run" >/dev/null 2>&1; then
   echo "  PASS  the dispatch hook's rewrite satisfies verify-receipt.sh once the receipt hook fires"; pass=$((pass+1))
@@ -3606,7 +3606,7 @@ charles-req: R1
 
 implement R1"
 cd_env=(CHARLES_ALLOW_MAIN_TREE=1)
-cd_impl_out="$(cd_dispatch "charlesdr-dev-loop:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_rc=$?
+cd_impl_out="$(cd_dispatch "cstack:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_rc=$?
 cd_impl_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_impl_out")"
 cd_impl_new_prompt="$(jq -r '.hookSpecificOutput.updatedInput.prompt // empty' <<<"$cd_impl_out")"
 cd_impl_run="$(sed -n 's/^charles-run: //p' <<<"$cd_impl_new_prompt" | head -1)"
@@ -3624,7 +3624,7 @@ fi
 # same prompt, no CHARLES_ALLOW_MAIN_TREE=1: codex-run refuses the main tree,
 # and the hook denies with that refusal in the reason (R1/R3).
 cd_env=()
-cd_impl_deny_out="$(cd_dispatch "charlesdr-dev-loop:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_deny_rc=$?
+cd_impl_deny_out="$(cd_dispatch "cstack:claude-implementer" "$cd_impl_prompt" "$CL/repo")"; cd_impl_deny_rc=$?
 cd_impl_deny_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_impl_deny_out")"
 cd_impl_deny_reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // empty' <<<"$cd_impl_deny_out")"
 if [ "$cd_impl_deny_rc" -eq 0 ] && [ "$cd_impl_deny_decision" = deny ] \
@@ -3637,7 +3637,7 @@ fi
 # review: the rewrite carries charles-box:, and the box holds the marker (R1/R3).
 echo x > "$CL/repo/change.txt"
 cd_env=()
-cd_review_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-plan: tracked
+cd_review_out="$(cd_dispatch "cstack:claude-reviewer" "charles-plan: tracked
 
 check it" "$CL/repo")"; cd_review_rc=$?
 cd_review_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_review_out")"
@@ -3654,7 +3654,7 @@ rm -rf "$cd_review_box"
 # an empty diff is denied — a clean worktree, no changes since HEAD (R3).
 mkdir -p "$CL/worktree/.charles"; touch "$CL/worktree/.charles.toml"
 cd_env=()
-cd_empty_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-plan: tracked
+cd_empty_out="$(cd_dispatch "cstack:claude-reviewer" "charles-plan: tracked
 
 check it" "$CL/worktree")"; cd_empty_rc=$?
 cd_empty_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_empty_out")"
@@ -3668,19 +3668,19 @@ fi
 
 # stays silent: a legacy SPAWN prompt, a non-claude agent, an un-opted-in repo (R1/R3).
 cd_check_silent "a prompt that already has charles-run: passes through silently" \
-  "charlesdr-dev-loop:claude-explorer" \
+  "cstack:claude-explorer" \
   "charles-run: existing-run
 charles-dir: $CL/repo
 
 find the main entrypoint" "$CL/repo"
 cd_check_silent "a non-claude agent is ignored" "Explore" "find the main entrypoint" "$CL/repo"
 cd_check_silent "a repo without .charles.toml is ignored" \
-  "charlesdr-dev-loop:claude-explorer" "find the main entrypoint" "$BOX/plain"
+  "cstack:claude-explorer" "find the main entrypoint" "$BOX/plain"
 
 # explicit charles-* headers at a dir that never opted in: deny and name the fix, never spawn a lane
 # agent with no box (it would find every read blocked and return CANNOT TELL).
 cd_env=()
-cd_noopt_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "charles-dir: $BOX/plain
+cd_noopt_out="$(cd_dispatch "cstack:claude-reviewer" "charles-dir: $BOX/plain
 charles-plan: $BOX/plain/plan.md
 
 grade it" "$CL/repo")"
@@ -3692,7 +3692,7 @@ else
   echo "  FAIL  explicit headers at an un-opted-in dir must be denied naming charles-optin-local, got: $cd_noopt_out"; fail=$((fail+1))
 fi
 for cd_hdr in "charles-req: R1" "charles-base: main"; do  # any one header asks for a lane, not just dir/plan
-  cd_hdr_out="$(cd_dispatch "charlesdr-dev-loop:claude-reviewer" "$cd_hdr
+  cd_hdr_out="$(cd_dispatch "cstack:claude-reviewer" "$cd_hdr
 
 grade it" "$BOX/plain")"
   if [ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_hdr_out")" = deny ] \
@@ -3705,7 +3705,7 @@ done
 
 # an unknown charles-foo: header is denied, naming it (R1/R3).
 cd_env=()
-cd_unknown_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "charles-foo: bar
+cd_unknown_out="$(cd_dispatch "cstack:claude-explorer" "charles-foo: bar
 
 find the main entrypoint" "$CL/repo")"
 cd_unknown_decision="$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"$cd_unknown_out")"
@@ -3716,7 +3716,7 @@ else
   echo "  FAIL  dispatch hook must deny an unknown header, naming it"; echo "        $cd_unknown_out"; fail=$((fail+1))
 fi
 
-cd_hy_out="$(cd_dispatch "charlesdr-dev-loop:claude-explorer" "charles-dir: $CL/repo
+cd_hy_out="$(cd_dispatch "cstack:claude-explorer" "charles-dir: $CL/repo
 charles-grill-verdict: yes
 
 find the main entrypoint" "$CL/repo")"
@@ -4782,8 +4782,8 @@ git -C "$DEF/repo" init -q; printf -- '- [ ] **R1** — x\n' > "$DEF/repo/plan.m
 git -C "$DEF/repo" add -A; git -C "$DEF/repo" -c user.email=t@t -c user.name=t commit -qm init; echo b >> "$DEF/repo/f"
 def_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --dir "$DEF/repo" "default engine" 2>&1)"; def_rc=$?
 defr_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane review --plan "$DEF/repo/plan.md" --dir "$DEF/repo" "default review" 2>&1)"; defr_rc=$?
-if [ "$def_rc" -eq 0 ] && [ "$defr_rc" -eq 0 ] && grep -q '^SPAWN: charlesdr-dev-loop:claude-explorer' <<<"$def_out" \
-  && grep -q '^SPAWN: charlesdr-dev-loop:claude-reviewer' <<<"$defr_out"; then
+if [ "$def_rc" -eq 0 ] && [ "$defr_rc" -eq 0 ] && grep -q '^SPAWN: cstack:claude-explorer' <<<"$def_out" \
+  && grep -q '^SPAWN: cstack:claude-reviewer' <<<"$defr_out"; then
   echo "  PASS  unconfigured lanes default to claude subagents"; pass=$((pass+1))
 else
   echo "  FAIL  unconfigured lanes must default to claude (rc=$def_rc/$defr_rc): $def_out | $defr_out"; fail=$((fail+1))
@@ -4875,7 +4875,7 @@ ob_check() { # ob_check NAME JQ_FILTER OUTPUT
 # not; a user's task.agentModelOverrides entry wins; other agents are untouched.
 ob_out="$(jq -nc '[
   {fn:"laneModel",args:["claude-explorer"]},
-  {fn:"laneModel",args:["charlesdr-dev-loop:claude-implementer"]},
+  {fn:"laneModel",args:["cstack:claude-implementer"]},
   {fn:"laneModel",args:["claude-reviewer"]},
   {fn:"laneModel",args:["claude-explorer",{"claude-explorer":"x/y"}]},
   {fn:"laneModel",args:["scout"]}]' | ob)"

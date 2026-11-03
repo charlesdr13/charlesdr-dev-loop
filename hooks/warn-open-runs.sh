@@ -26,9 +26,9 @@ for d in $(ls -1d "$runs"/*/ 2>/dev/null | sort -r); do
   n="$(grep -c '^- \[ \] \*\*FAILED\*\*' "$d/RUN.md" 2>/dev/null)" || n=0
   n="${n:-0}"
   if [ "$n" -gt 0 ]; then
-    echo "charlesdr-dev-loop: run $(basename "${d%/}") has $n FAILED item(s) — work is incomplete."
+    echo "cstack: run $(basename "${d%/}") has $n FAILED item(s) — work is incomplete."
     grep '^- \[ \] \*\*FAILED\*\*' "$d/RUN.md" | sed 's/^/  /'
-    echo "  Resume with /charlesdr-dev-loop:resolve"
+    echo "  Resume with /cstack:resolve"
   fi
   break   # newest open run only
 done

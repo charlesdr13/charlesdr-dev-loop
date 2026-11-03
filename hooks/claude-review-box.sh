@@ -8,7 +8,7 @@
 # the box before naming it in the SPAWN prompt (see run_review in codex-run.sh).
 #
 # Matched by SUFFIX: plugin agents spawn namespaced
-# (charlesdr-dev-loop:claude-reviewer). Only fires inside that subagent —
+# (cstack:claude-reviewer). Only fires inside that subagent —
 # .agent_type is absent for the main thread and for every other agent.
 #
 # Contract: JSON on stdout, exit 0. Silence = allow.

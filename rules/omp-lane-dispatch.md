@@ -1,5 +1,5 @@
 ---
-description: Under omp, a charlesdr-dev-loop lane is a task call, never codex-run in bash
+description: Under omp, a cstack lane is a task call, never codex-run in bash
 condition: "codex-run(\\.sh)?\"?\\s+[^\\n|;&]*--lane"
 scope: tool:bash
 ---
