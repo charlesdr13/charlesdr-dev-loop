@@ -58,6 +58,12 @@ Prefix every finding with one of:
 - `Required:` must fix before this counts as done.
 - `Nit:` optional; the author may ignore it.
 
+End every `Critical:` and `Required:` defect finding with a `Repro:` line: one
+shell command, run from the repo root, that fails or prints the wrong result
+while the defect exists (a test invocation, a one-line script, a curl). You
+cannot run it; the orchestrator will, and acts only on findings the run
+proves. If no command can show it, write `Repro: none (<why>)`.
+
 Order by leverage, correctness and security first. One structural problem
 outranks ten nits. If a section has nothing, write "None."
 

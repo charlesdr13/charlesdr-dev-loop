@@ -1,6 +1,6 @@
 ---
 name: charles-flow
-description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a repo with a .charles.toml. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. Claude orchestrates; its own subagents explore and implement by default (codex, grok or omp only when asked); an isolated reviewer grades the diff against the plan. Not for repos without a .charles.toml.
+description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a git repo, in Claude Code, Codex or Grok. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. In Claude Code its own subagents explore and implement by default (codex, grok or omp only when asked; luna under Codex, grok under Grok); an isolated reviewer grades the diff against the plan, and only findings a run proves get fixed. Not for small asks: a quick edit is just done.
 ---
 
 # The flow
@@ -9,8 +9,9 @@ Default loop: **plan, implement, one isolated review, green, close.** The
 orchestrator is a strong model; it reads code and makes small edits itself. Lanes
 exist for breadth and parallelism, not as a toll booth.
 
-**Gate:** needs a `.charles.toml` at the repo root. If there is none, say so and
-offer `/cstack:init`.
+Small asks skip the flow. `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"`
+(no `codex-run` on PATH: stop, "run cstack's scripts/install-skills.sh"). No `.charles.toml`?
+Run `"$SCRIPTS/init-repo.sh" "$(pwd)"` (infers green), say so in one line, carry on.
 
 ## Select by work-kind
 
@@ -31,7 +32,7 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
 1. **Understand.** Read the code yourself. Dispatch explore lanes only for broad,
    unfamiliar areas: several in parallel, each on a different angle, in the
    background. Baseline green before changing anything:
-   `${CLAUDE_PLUGIN_ROOT}/scripts/green.sh "$(pwd)"`. Never attribute an
+   `"$SCRIPTS/green.sh" "$(pwd)"`. Never attribute an
    existing red to your change.
 2. **Anchor, then plan.** If the ask leaves a real fork (scope, user-visible
    behaviour, an irreversible choice), ask at most 3 questions in one message, each
@@ -45,9 +46,13 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
 5. **Review once.** One isolated review against the plan. At most 2 rounds:
    round 2 re-checks only round 1's Critical and Required findings. A GAPS verdict
    that only asks for more tests becomes a `DEFERRED` item, not another round. A
-   third round only for money, auth/security or data-loss changes. Verify each
-   finding against source before acting; never feed the reviewer the implementer's
-   output.
+   third round only for money, auth/security or data-loss changes. Never feed the
+   reviewer the implementer's output.
+   **Prove before fixing:** run each `Critical:`/`Required:` finding's `Repro:` in the
+   implemented tree. Fix only proven ones (the run shows the failure); round 2 re-checks
+   only those. Unproven ones become `DEFERRED "unproven: <finding>"`. Check from source
+   instead: findings with no `Repro:` line (a missing requirement or check), and any
+   `Critical:` on money, auth/security or data loss. Sign-off: `review: <n> proven, <m> dropped`.
    In a no-mistakes repo (`git remote get-url no-mistakes` succeeds) skip this
    review: run `green.sh` first, then commit on a feature branch and push through
    `/no-mistakes` with the plan's goal and requirements as `--intent`; its review,
@@ -105,11 +110,9 @@ charles-req: R1,R2               # implement only
 charles-base: <ref>              # review of committed work only
 ```
 
-A hook runs `codex-run --engine claude` behind the call with the same validation,
-logs `start`, builds the reviewer's box and rewrites the prompt. A refusal comes
-back as a denied call with the reason; fix it and spawn again. Foreground or
-`run_in_background: true` both work. The `end` receipt is written when the subagent
-finishes; write no receipt and delete no box yourself.
+A hook runs `codex-run --engine claude` behind the call (validation, `start` log, the
+reviewer's box, prompt rewrite); a refusal comes back as a denied call with the reason.
+Foreground or background both work. Write no receipt and delete no box yourself.
 
 **engine=omp:** headless `omp` lanes: explore `cursor/composer-2.5-fast`, implement
 `cursor/composer-2.5`, review `openai-codex/gpt-6.1-sol` (medium).
@@ -124,6 +127,10 @@ one item per lane, `agent: "claude-explorer"`, `"claude-implementer"` or
 Never call Cursor's own `Task` tool ("Subagents are not implemented by this
 client" means wrong tool; run the orchestrator on `anthropic/claude-opus-5-5`).
 `codex-run` stays the tool for `run-state.sh`, `verify-receipt.sh`, `green.sh`.
+
+**Orchestrating from Codex or Grok:** no `/cstack:*` commands or Agent spawns. Run the
+loop directly; every lane is a `codex-run --lane` Bash call (next section), which
+picks luna under Codex and grok under Grok when no engine is chosen.
 
 ## Dispatching codex, grok or omp lanes
 
@@ -155,8 +162,7 @@ only deliberately with `--allow-main-tree` or `CHARLES_ALLOW_MAIN_TREE=1`.
 **Verify every receipt mechanically:**
 
 ```bash
-VERIFY="$(dirname "$(readlink -f "$(command -v codex-run)")")/verify-receipt.sh"
-"$VERIFY" "$(pwd)" --lane <explore|implement|review> --since 1800
+"$SCRIPTS/verify-receipt.sh" "$(pwd)" --lane <explore|implement|review> --since 1800
 ```
 
 Exit 0: a lane ran, the report is admissible. Exit 1: nothing ran; discard the
@@ -176,7 +182,6 @@ Read `parallel_min_chunks` from `.charles.toml` (default 2). With a valid
 `.chunks.json` at that size or more and `treehouse` available:
 
 ```bash
-SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"
 "$SCRIPTS/parallel-chunks.sh" "$(pwd)" docs/specs/<plan>.chunks.json
 ```
 
@@ -197,10 +202,10 @@ dispatcher kills it.
 ## Run state and close
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh init  "$(pwd)" <flow> "<goal>" --spec docs/specs/<plan>.md
-${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh phase "$(pwd)" "<phase>" "<output>"
-${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh item  "$(pwd)" <TYPE> "<text>"
-${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh close "$(pwd)" "<outcome>" --spec docs/specs/<plan>.md
+"$SCRIPTS/run-state.sh" init  "$(pwd)" <flow> "<goal>" --spec docs/specs/<plan>.md
+"$SCRIPTS/run-state.sh" phase "$(pwd)" "<phase>" "<output>"
+"$SCRIPTS/run-state.sh" item  "$(pwd)" <TYPE> "<text>"
+"$SCRIPTS/run-state.sh" close "$(pwd)" "<outcome>" --spec docs/specs/<plan>.md
 ```
 
 | Item type | Meaning |
@@ -235,17 +240,15 @@ outcome to the committed plan; `.charles/` (run state, logs) is gitignored.
 
 ## Per-kind notes
 
-- **Debug.** Reproduce and build the feedback loop first (`diagnosing-bugs`).
-  Confirm the cause from source yourself, then plan the fix. The review asks "does
-  this diff fix the stated cause and nothing else".
+- **Debug.** Reproduce and build the feedback loop first (`diagnosing-bugs`); confirm
+  the cause from source, then plan. Review asks "does this fix the cause and nothing else".
 - **Polish.** One explore pass for gaps, must-haves and quality-of-life wins, one
   lens per call. Take the shortlist to the user, plan the survivor.
-- **UI.** `/cstack:ui`. This one is a **router, not a flow**:
-  `impeccable` owns taste. Route to ONE impeccable command; run one explore lane
-  for the mechanical audit only (token drift, off-scale spacing, dead styles with
-  `file:line`); taste disagreements become `BLOCKED-HUMAN`. Check contrast, focus,
-  tab order and CLS did not regress; review for scope creep. Screenshots go to the
-  user, never to a lane.
+- **UI.** `/cstack:ui`. This one is a **router, not a flow**: `impeccable` owns taste. Route to
+  ONE impeccable command; one explore lane for the mechanical audit only (token drift,
+  off-scale spacing, dead styles with `file:line`); taste disagreements become
+  `BLOCKED-HUMAN`. Contrast, focus, tab order and CLS must not regress; review for
+  scope creep. Screenshots go to the user, never to a lane.
 - **Release, ops.** `/cstack:release <semver>` and `:ops` own their steps.
   Never close, abandon or delete another repository's run without explicit human
   confirmation of repo, run id and action.
@@ -253,6 +256,5 @@ outcome to the committed plan; `.charles/` (run state, logs) is gitignored.
 
 ## Failure handling
 
-**Never fall back to doing a failed lane's work inline.** Report the failure and
-let the user decide (small edits you chose to make in step 4 are not this). Cap
-green-fix cycles at 3, then record `FAILED` and stop.
+**Never fall back to doing a failed lane's work inline** (your own step-4 edits are
+not this): report it and let the user decide. Cap green-fix cycles at 3, then `FAILED`, stop.

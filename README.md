@@ -170,6 +170,18 @@ bash scripts/install-skills.sh          # --copy for an independent copy
 The skill-only path gives you the two skills and `codex-run` on PATH. It does
 not give you the agents, the commands, or the hook.
 
+In Codex and Grok (3.1.0), the flow runs with that harness as the orchestrator:
+
+```bash
+bash scripts/install-skills.sh --codex   # Codex: skills into ~/.codex/skills
+grok plugin install "$PWD"               # Grok loads the plugin from this folder
+bash scripts/install-skills.sh           # Grok also needs codex-run on PATH
+```
+
+With no engine chosen, `codex-run` runs lanes on luna under Codex and on grok
+under Grok (claude lanes need Claude Code's Agent tool); `CHARLES_ORCHESTRATOR`
+pins the detection.
+
 In [omp](https://github.com/can1357/oh-my-pi), to orchestrate from any model
 (GPT, Grok, Cursor, Claude):
 
@@ -229,6 +241,9 @@ model that actually ran. omp's own code-work agents (`task`, `scout`, `sonic`,
 /cstack:init
 ```
 
+Since 3.1.0 the flow does this itself the first time it runs in a repo without
+a `.charles.toml`.
+
 Writes `.charles.toml`, committed on purpose:
 
 ```toml
@@ -249,6 +264,15 @@ a model's recollection. With no green command set it refuses to run: a loop that
 cannot verify itself cannot honestly say it is finished.
 
 ---
+
+## Proof-gated review (3.1.0)
+
+Borrowed from Cursor pstack's `interrogate`. The reviewer stays blind to the
+repo, but every `Critical:` and `Required:` finding must end with a `Repro:`
+command. The orchestrator runs it in the implemented tree and fixes only
+findings the run proves; the rest are recorded as `DEFERRED "unproven: ..."`.
+Findings with no `Repro:` (a missing requirement or check) and any Critical on
+money, auth/security or data loss are checked from source instead.
 
 ## The three lanes
 

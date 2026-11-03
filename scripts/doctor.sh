@@ -15,6 +15,8 @@ run_root="$(charles_run_root "$PWD")"
 engine="${CHARLES_ENGINE:-}"
 [ -n "$engine" ] || engine="$(cat "$run_root/.charles/engine" 2>/dev/null || true)"
 [ -n "$engine" ] || engine="$(cat "${CHARLES_STATE_DIR:-$HOME/.cache/cstack}/engine" 2>/dev/null || true)"
+# same built-in default as codex-run.sh: own subagents unless an engine is chosen
+[ -n "$engine" ] || engine="${CHARLES_DEFAULT_ENGINE-claude}"
 # engine=claude hands explore/implement/review off to a plugin subagent instead
 # of running codex/luna, so their absence is not fatal here — only the three
 # agent files matter, checked below.

@@ -235,6 +235,26 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   # Charles 2026-10-26: own subagents unless codex or grok is asked for. Empty
   # CHARLES_DEFAULT_ENGINE keeps the old luna lanes with sol review (the selftest's stubs).
   [ -n "$pick" ] || { pick="${CHARLES_DEFAULT_ENGINE-claude}"; pref_src="built-in default"; }
+  # claude lanes are Claude Code Agent spawns, so a Codex or Grok orchestrator
+  # gets its own engine instead (3.1.0). Only the built-in default swaps.
+  if [ "$pick" = claude ] && [ "$pref_src" = "built-in default" ]; then
+    # The nearest harness up the process tree wins. Codex runs commands in a PID
+    # namespace that hides it (the walk sees only bash), so a blind walk falls
+    # back to the variables Codex and Grok set in their shells.
+    orch="${CHARLES_ORCHESTRATOR:-}"; anc=$PPID
+    while [ -z "$orch" ] && [ "${anc:-0}" -gt 1 ]; do
+      case "$(cat "/proc/$anc/comm" 2>/dev/null)" in codex) orch=codex ;; grok) orch=grok ;; claude) orch=claude ;; esac
+      anc="$(sed "s/.*) //" "/proc/$anc/stat" 2>/dev/null | cut -d" " -f2)"
+    done
+    if [ -z "$orch" ]; then
+      if [ -n "${CODEX_THREAD_ID:-}" ]; then orch=codex
+      elif [ -n "${GROK_AGENT:-}${GROK_SESSION_ID:-}" ]; then orch=grok; fi
+    fi
+    case "$orch" in
+      codex) pick=luna; echo "codex-run.sh: orchestrated from Codex, so this $LANE runs on luna (claude lanes need Claude Code)" >&2 ;;
+      grok)  pick=grok; echo "codex-run.sh: orchestrated from Grok, so this $LANE runs on grok (claude lanes need Claude Code)" >&2 ;;
+    esac
+  fi
   case "$pick" in
     luna|terra|claude|grok|omp|omp:*) ENGINE="$pick"; ENGINE_SET=1 ;;     # claude, grok, and omp review all honour this preference (R8)
     deepseek)
@@ -1218,6 +1238,12 @@ behaviour), Required: (must fix before this counts as done), or Nit: (optional,
 the author may ignore it). Order by leverage: correctness and security first.
 If you have one structural problem and ten nits, the structural problem is the
 review.
+
+End every Critical: and Required: defect finding with a Repro: line: one shell
+command, run from the repo root, that fails or prints the wrong result while the
+defect exists (a test invocation, a one-line script, a curl). You cannot run it;
+the orchestrator will, and acts only on findings the run proves. If no command
+can show it, write Repro: none (<why>).
 
 Do not praise. Do not summarise the diff back. If you find nothing, say so plainly."
 
