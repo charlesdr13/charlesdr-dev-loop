@@ -27,9 +27,10 @@ line 225), `agents/claude-reviewer.md` report section.
   or data loss, which are still checked from source. Sign-off
   states how many findings were proven and how many were dropped.
 - [x] **R3** `scripts/codex-run.sh`: when the engine comes from the built-in
-  default (no `--engine`, env or engine file) and resolves to `claude`, but the
-  caller is not Claude Code (`CLAUDECODE` unset), the engine becomes `luna` when
-  an ancestor process is `codex` and `grok` when it is `grok`, with one stderr
+  default (no `--engine`, env or engine file) and resolves to `claude`, the
+  nearest harness up the process tree decides: `luna` under `codex`, `grok` under
+  `grok`. When the walk sees none (Codex's sandbox hides its parents),
+  `CODEX_THREAD_ID` means Codex and `GROK_AGENT`/`GROK_SESSION_ID` mean Grok. One stderr
   line saying so. `CHARLES_ORCHESTRATOR=claude|codex|grok` pins the detection.
   An explicit `--engine claude` is never swapped. Selftest asserts the codex,
   grok and explicit-flag cases.
@@ -63,7 +64,8 @@ Grill waived: no money, auth, migration or destructive change; 8 requirements.
 - [x] **R4** — no `CLAUDE_PLUGIN_ROOT` in the skill; scripts from `$SCRIPTS`; review fix: no `codex-run` on PATH now stops the flow (repro showed `SCRIPTS` falling back to a wrong directory)
 - [x] **R5** — automatic `init-repo.sh`; description and plugin.json no longer say opt-in only
 - [x] **R6** — `install-skills.sh --codex`
-- [x] **R7** — 3.1.0 in plugin.json and both marketplace.json fields; README sections (Grok line also installs `codex-run`)
+- [x] **R7** — 3.1.0 (3.1.1 with the live-check fix) in plugin.json and both marketplace.json fields; README sections (Grok line also installs `codex-run`)
 - [x] **R8** — doctor defaults to engine claude; doctor rc 1 → 0 on this machine
+- [x] Live check (after review): a real `codex exec` saw the `charles-flow` skill, but its shell's parent chain was only `bash` (PID namespace), so the walk never swapped. Fixed with the `CODEX_THREAD_ID` fallback and a selftest that orphans the run so the walk sees no harness. A real `grok -p` shell's chain is `bash grok ...`, so the walk works there.
 - [x] Review: 4 proven (R2 Repro-less, R3 leak, R4 PATH, R2 carve-out checked from source), 0 dropped; nits taken: restored "stop" on the green-fix cap, stale descriptions. Nits deferred: doctor does not apply the Codex/Grok swap, Grok detection only matches a process named `grok`, a mistyped `CHARLES_ORCHESTRATOR` is silent, install-skills.sh reads only `$1`.
 - [x] Green: selftest 481 passed, 0 failed (also 481/0 with `CHARLES_ORCHESTRATOR=codex`); doctor rc 0

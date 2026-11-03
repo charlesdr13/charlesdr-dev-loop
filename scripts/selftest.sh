@@ -4809,6 +4809,18 @@ if grep -q "orchestrated from Codex" <<<"$oa_out" && [ "$(orch_last)" = luna ]; 
 else
   echo "  FAIL  a codex ancestor must be detected (last=$(orch_last)): $oa_out"; fail=$((fail+1))
 fi
+# Codex hides itself from the walk (PID namespace): an orphaned run, whose
+# parent chain is only the init/subreaper, must fall back to CODEX_THREAD_ID.
+of="$DEF/orphan.out"; : > "$of"
+env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE -u CLAUDECODE -u CHARLES_ORCHESTRATOR CODEX_THREAD_ID=t1 \
+  PATH="$DEF/bin:$PATH" CHARLES_STATE_DIR="$DEF/state" RUN_SH="$RUN_SH" DEFR="$DEF/repo" OF="$of" \
+  bash -c '( sleep 0.3; bash "$RUN_SH" --lane explore --dir "$DEFR" --timeout 5 "orch env" > "$OF" 2>&1; echo __done >> "$OF" ) & exit 0'
+timeout 30 bash -c 'until grep -q __done "$1"; do sleep 0.1; done' _ "$of"
+if grep -q "orchestrated from Codex" "$of" && [ "$(orch_last)" = luna ]; then
+  echo "  PASS  a hidden Codex parent is detected from CODEX_THREAD_ID"; pass=$((pass+1))
+else
+  echo "  FAIL  a hidden Codex parent must be detected from CODEX_THREAD_ID (last=$(orch_last)): $(cat "$of")"; fail=$((fail+1))
+fi
 oe_out="$(env -u CHARLES_DEFAULT_ENGINE -u CHARLES_ENGINE -u CLAUDECODE CHARLES_ORCHESTRATOR=codex CHARLES_STATE_DIR="$DEF/state" bash "$RUN_SH" --lane explore --engine claude --dir "$DEF/repo" "explicit claude" 2>&1)"
 if grep -q '^SPAWN: cstack:claude-explorer' <<<"$oe_out"; then
   echo "  PASS  an explicit --engine claude is never swapped"; pass=$((pass+1))

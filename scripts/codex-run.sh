@@ -238,12 +238,17 @@ if [ "$ENGINE_FROM_FLAG" -eq 0 ]; then
   # claude lanes are Claude Code Agent spawns, so a Codex or Grok orchestrator
   # gets its own engine instead (3.1.0). Only the built-in default swaps.
   if [ "$pick" = claude ] && [ "$pref_src" = "built-in default" ]; then
+    # The nearest harness up the process tree wins. Codex runs commands in a PID
+    # namespace that hides it (the walk sees only bash), so a blind walk falls
+    # back to the variables Codex and Grok set in their shells.
     orch="${CHARLES_ORCHESTRATOR:-}"; anc=$PPID
-    if [ -z "$orch" ] && [ -z "${CLAUDECODE:-}" ]; then
-      while [ "${anc:-0}" -gt 1 ] && [ -z "$orch" ]; do
-        case "$(cat "/proc/$anc/comm" 2>/dev/null)" in codex) orch=codex ;; grok) orch=grok ;; claude) orch=claude ;; esac
-        anc="$(sed "s/.*) //" "/proc/$anc/stat" 2>/dev/null | cut -d" " -f2)"
-      done
+    while [ -z "$orch" ] && [ "${anc:-0}" -gt 1 ]; do
+      case "$(cat "/proc/$anc/comm" 2>/dev/null)" in codex) orch=codex ;; grok) orch=grok ;; claude) orch=claude ;; esac
+      anc="$(sed "s/.*) //" "/proc/$anc/stat" 2>/dev/null | cut -d" " -f2)"
+    done
+    if [ -z "$orch" ]; then
+      if [ -n "${CODEX_THREAD_ID:-}" ]; then orch=codex
+      elif [ -n "${GROK_AGENT:-}${GROK_SESSION_ID:-}" ]; then orch=grok; fi
     fi
     case "$orch" in
       codex) pick=luna; echo "codex-run.sh: orchestrated from Codex, so this $LANE runs on luna (claude lanes need Claude Code)" >&2 ;;
