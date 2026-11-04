@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "cstack: personal dev-loop plugin — Claude subagent lanes (codex or grok on request), isolated review.",
-    "version": "3.2.0"
+    "version": "3.2.1"
   },
   "plugins": [
     {
       "name": "cstack",
       "source": "./",
       "description": "Claude Code orchestrates its own explore/implement subagents (codex or grok on request), isolated adversarial review",
-      "version": "3.2.0",
+      "version": "3.2.1",
       "category": "productivity"
     }
   ]

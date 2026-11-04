@@ -6255,5 +6255,18 @@ else
 fi
 
 echo
+# A run opened from a linked worktree keeps its spec in the worktree, not under
+# the run root's docs/specs/; closing it must not report "docs/specs/ is empty".
+WTS="$BOX/worktree-spec"; mkdir -p "$WTS/repo/.charles" "$WTS/wt/docs/specs" "$WTS/run"
+printf '# p\n' > "$WTS/wt/docs/specs/p.md"
+printf '{"ts":"2026-01-01T00:01:00Z","lane":"implement","engine":"claude","model":"m","rc":0,"run":"i1","task":"t"}\n{"ts":"2026-01-01T00:02:00Z","lane":"review","engine":"claude","model":"m","rc":0,"run":"r1","task":"t"}\n' > "$WTS/repo/.charles/dispatches.jsonl"
+wts_run() { printf '# Run x\n\n- flow: polish\n- goal: g\n- spec: %s\n- started: 2026-01-01T00:00:00Z\n' "$1" > "$WTS/run/RUN.md"; bash "$FS" "$WTS/repo" --closing "$WTS/run" 2>&1; }
+wts_ok="$(wts_run "$WTS/wt/docs/specs/p.md")"; wts_missing="$(wts_run "$WTS/wt/docs/specs/missing.md")"
+if ! grep -q 'docs/specs/ is empty' <<<"$wts_ok" && grep -q 'docs/specs/ is empty' <<<"$wts_missing"; then
+  echo "  PASS  closing a worktree run counts its spec outside the run root"; pass=$((pass+1))
+else
+  echo "  FAIL  closing a worktree run must count its existing spec, and only that"; fail=$((fail+1))
+fi
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
