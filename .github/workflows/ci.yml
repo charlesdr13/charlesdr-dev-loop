@@ -5,7 +5,7 @@ on:
     branches: [master]
 jobs:
   selftest:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/selftest.sh
