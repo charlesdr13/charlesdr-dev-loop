@@ -45,8 +45,7 @@ canonical source for how much code to write. Say which file you read.
    | Delete the failing test | Only with the user's say-so, stated in the report |
 
    Still red after three honest attempts: stop and report what you tried and
-   learned. If the repo has no single verification command, write one
-   (`scripts/green.sh`: tests, lint, type-check, `set -euo pipefail`) and say so.
+   learned.
 5. **Verify.** Run the verification you were told to run, in full, and keep its
    real output. A check that could not run (no database, network, paid API) is
    reported as not run, with what would run it, never as passed.

@@ -58,6 +58,6 @@ Bash call with `run_in_background: true`):
 codex-run --lane implement --dir <repo> --req <R1,A3> --timeout 2700 "<task>"
 ```
 
-Cap hypothesis-check-fix cycles at 3, then record a `FAILED` item and stop, reporting what you ruled out and what you would try next.
+Cap green-fix cycles at 3, then record a `FAILED` item and stop, reporting what you ruled out and what you would try next.
 
 No `.charles.toml`: stop and offer `/cstack:init`.

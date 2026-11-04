@@ -49,7 +49,8 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
    money, auth/security or data-loss changes. Never feed the reviewer the
    implementer's output.
    **Prove before fixing:** run each `Critical:`/`Required:` finding's `Repro:` in the
-   implemented tree. Fix only proven ones; unproven ones become
+   implemented tree. Fix only proven ones (the run shows the failure); round 2
+   re-checks only those. Unproven ones become
    `DEFERRED "unproven: <finding>"`. Check from source instead: findings with no
    `Repro:` line (a missing requirement or check), and any `Critical:` on money,
    auth/security or data loss. Sign-off: `review: <n> proven, <m> dropped`.
