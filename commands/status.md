@@ -16,5 +16,4 @@ Report what came back. For each issue, say what closes it:
 - **unsourced working-tree changes** → a NOTE at close (inline edits are legitimate); commit or resolve them
 - **open runs** → `/cstack:resolve`
 
-Do not offer to `--force` a close unless the user asks. The point of the check
-is that "the dispatches succeeded" is not the same as "the work is done".
+Do not offer to `--force` a close unless the user asks.

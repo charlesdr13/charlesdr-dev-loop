@@ -30,54 +30,46 @@ case "$PICK" in luna|terra|deepseek|claude|grok|omp|omp:?*) ;; *) PICK="${CHARLE
 echo "engine ($SCOPE): $PICK"
 ```
 
-Report the engine line back. Takes effect on the next dispatch — no restart, no
+Report the engine line back. Takes effect on the next dispatch; no restart or
 reinstall. `/engine <value>` writes `<run root>/.charles/engine` in a repo with
-`.charles.toml`, otherwise the global `$CHARLES_STATE_DIR/engine` (default:
-`~/.cache/cstack/engine`). Linked worktrees share the primary
-checkout's preference. `/engine global <value>` always writes global.
-`/engine default` clears the project preference; `/engine global default` clears
-the global preference. The echoed scope is the effective one, even after a
-global change that a project preference overrides.
+`.charles.toml`, otherwise the global `$CHARLES_STATE_DIR/engine` (default
+`~/.cache/cstack/engine`). Linked worktrees share the primary checkout's
+preference. `/engine global <value>` always writes global; `/engine default`
+clears the project preference, `/engine global default` the global one. The echoed
+scope is the effective one, even after a global change a project preference
+overrides.
 
 Precedence: `--engine` flag, `CHARLES_ENGINE`, project file, global file, then the
-built-in default `claude`. Codex (luna/terra/sol) and grok run only when asked for:
-`--engine` on a dispatch, or an `/engine` preference.
-`claude` runs explore, implement AND review as native Claude Code subagents:
-`claude-explorer` (haiku), `claude-implementer` (sonnet), or `claude-reviewer`
-(opus, isolated to a review box the same way `codex-reviewer` is). One Agent
-call is the dispatch. Its prompt opens with header lines: `charles-dir:`, then
-`charles-plan:` (implement and review), `charles-req:` (implement) and
-`charles-base:` (review of committed work), then a blank line and the task. A hook runs
-`codex-run`'s validation and receipts behind it, and a refusal comes back as a
-denied tool call. Like `grok`, a `claude`
-preference is honoured on review too — it no longer silently pins sol.
-`--resume` is refused: no session id is recorded for a subagent. A failed
-claude dispatch has no fallback.
+built-in default `claude`. Codex (luna/terra/sol) and grok run only when asked for.
+
+`claude` runs explore, implement and review as native subagents: `claude-explorer`
+(haiku), `claude-implementer` (sonnet), `claude-reviewer` (opus, isolated to a
+review box like `codex-reviewer`). One Agent call is the dispatch; its prompt opens
+with header lines `charles-dir:`, then `charles-plan:` (implement and review),
+`charles-req:` (implement) and `charles-base:` (review of committed work), a blank
+line, then the task. A hook runs `codex-run`'s validation and receipts behind it; a
+refusal comes back as a denied tool call. A `claude` preference is honoured on
+review too, like `grok`. `--resume` is refused (no session id is recorded for a
+subagent); a failed claude dispatch has no fallback.
 
 `deepseek` is the free-of-codex-quota lane (deepseek-v4-flash @ max, via
-`~/.codex/deepseek.config.toml`). With no preference, every lane is a claude subagent.
+`~/.codex/deepseek.config.toml`). It is peak-aware: DeepSeek bills roughly double
+between 01:00-04:00 and 06:00-10:00 UTC, so dispatches in those windows run on luna
+(max reasoning, luna's normal fast_mode selection) instead. An explicit
+`--engine deepseek` is never swapped. It is not an automatic fallback: luna and
+terra fall back to grok, and grok to luna.
 
-`deepseek` is peak-aware. DeepSeek bills roughly double between 01:00-04:00 and
-06:00-10:00 UTC, so dispatches inside those windows run on luna instead — at max
-reasoning with luna's normal fast_mode selection. Outside them the lane stays
-on deepseek. An explicit `--engine deepseek` is never swapped. deepseek is not an
-automatic fallback: luna and terra fall back to grok, and grok to luna.
+`grok` runs all three lanes on `grok-4.6` at high effort via the local `grok` CLI;
+`--effort max` means `xhigh` (grok has no `max`). Honoured on review too: a
+different model family from every codex profile, which is what the isolated review
+wants. `--resume` is refused; a failed grok dispatch has no fallback.
 
-`grok` runs all three lanes — explore, implement, AND review — on `grok-4.6` at
-high effort by default via the local `grok` CLI; `--effort max` means `xhigh`
-(grok has no `max`). Unlike `claude`, a `grok` preference is honoured on review
-too: it is a different model family from every codex profile, which is exactly
-what the isolated review wants. `--resume` is refused: no session id is
-recorded. A failed grok dispatch has no fallback.
-
-`omp` runs all three lanes on a headless `omp` process, one model per lane by
-default: explore `cursor/composer-2.5-fast`, implement `cursor/composer-2.5`,
-review `openai-codex/gpt-6.1-sol`. `omp:<provider>/<model>` overrides the
-model for every lane (an unknown model exits 1 at dispatch); `omp:` with
-nothing after it is rejected. Like `grok`, an `omp` preference is honoured on
-review too, in the same isolated box every other engine gets. `--resume` is
-refused: no session id is recorded. A failed omp dispatch has no fallback.
-Under an omp orchestrator, its bash tool's `async: true` is this repo's
-`run_in_background: true`, and its `task` tool is the Agent tool: spawning the
-`claude-<lane>` agents with it dispatches them on their omp lane models
-whatever the engine preference says.
+`omp` runs all three lanes on a headless `omp` process, one model per lane: explore
+`cursor/composer-2.5-fast`, implement `cursor/composer-2.5`, review
+`openai-codex/gpt-6.1-sol`. `omp:<provider>/<model>` overrides the model for every
+lane (an unknown model exits 1 at dispatch); a bare `omp:` is rejected. Honoured on
+review too, in the same isolated box. `--resume` is refused; a failed omp dispatch
+has no fallback. Under an omp orchestrator, its bash `async: true` is
+`run_in_background: true` and its `task` tool is the Agent tool: spawning the
+`claude-<lane>` agents with it dispatches them on their omp lane models whatever the
+engine preference says.

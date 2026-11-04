@@ -33,15 +33,12 @@ proof="$(tail -n 40 <<<"$output")"
 "$SCRIPTS/run-state.sh" close "$(pwd)" "released $ARGUMENTS" --run "$RELEASE_RUN"
 ```
 
-Pass `$ARGUMENTS` straight through; do not add validation or reimplement any
-of `release.sh`'s checks. It already refuses on a dirty `.claude-plugin/` and
-on a red green command, then installs, verifies the cache, relinks `codex-run`,
-and runs doctor.
+Pass `$ARGUMENTS` straight through; add no validation and reimplement none of
+`release.sh`'s checks. It refuses on a dirty `.claude-plugin/` and on a red green
+command, then installs, verifies the cache, relinks `codex-run`, and runs doctor.
+It takes exactly one semver (exit 2 otherwise) and always releases this plugin
+regardless of the caller's working directory.
 
-`release.sh` takes exactly one semver and exits 2 otherwise. It computes the
-plugin root from its own location, so it always releases this plugin regardless
-of the caller's working directory.
-
-The last 40 lines of the script output are recorded as proof for the release flow's `guard`, `green`,
-`version`, and `ship` phases. On failure, record the `FAILED` item above and
-leave that release run open; do not close it.
+The last 40 lines of output are the proof for the `guard`, `green`, `version` and
+`ship` phases. On failure, record the `FAILED` item above and leave the release
+run open.

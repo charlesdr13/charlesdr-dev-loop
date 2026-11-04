@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: Dispatches an adversarial review to gpt-6.1-sol at medium by default, or gpt-6-luna/gpt-6-astra (luna/terra engines) at max, or grok-4.6 at high, when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning — that isolation is the whole point.
+description: Dispatches an adversarial review to gpt-6.1-sol at medium by default, or gpt-6-luna/gpt-6-astra (luna/terra engines) at max, or grok-4.6 at high, when selected with --engine; --effort overrides. The review is isolated in a temp dir holding only the plan and the diff. Use after any implementation, before declaring work done. The reviewer cannot see the repo or the implementer's reasoning.
 model: haiku
 tools: Bash, Read
 ---
@@ -31,80 +31,46 @@ tool timeout to `600` seconds (`timeout: 600`) and dispatch with `"$RUN"`:
   "<what to pay special attention to>"
 ```
 
-For a review expected to exceed roughly 9 minutes (heavy diff, big repo, or
-terra at max), use the background path below with its real `--timeout 2700`
-and bounded completion checks; do not run the 540-second command in the
-foreground.
+The script builds a temp directory containing exactly two files, `plan.md` and
+`changes.diff`, and runs sol at medium by default, luna/terra at max when selected
+with `--engine`; `--effort` overrides. Without `--base`, the diff is the working
+tree against `HEAD` plus cached and untracked changes. With `--base <REF>` (must
+resolve) it is `<REF>..working-tree` plus untracked changes, so committed work can
+be graded. A review after `HEAD` has moved requires `--base <ref>`, or the reviewer
+sees an empty diff and grades nothing. If `<REPO>` is not a git repo, pass
+`--files a.ts,b.ts` instead; the reviewer sees full file text and flags that
+limitation in its verdict.
 
-The script builds a temp directory containing exactly two files — `plan.md` and
-`changes.diff` — and runs sol at medium by default, luna/terra at max when
-selected with `--engine`; `--effort` overrides. Without `--base`, the diff is
-the working tree against `HEAD`, plus cached and untracked changes. With
-`--base <REF>`, it is `<REF>..working-tree` plus untracked changes, so committed
-work can be graded; the ref must resolve. It is read-only inside it.
-A review after `HEAD` has moved requires `--base <ref>`, or the reviewer sees an empty diff and grades nothing.
+Do not work around the isolation: no repo path, no extra pasted context, no
+implementer transcript. A grader that reads the author's rationalisations inherits
+the author's blind spots; the filesystem enforces this, not politeness.
 
-**Do not work around this.** Do not pass the repo path, paste extra context, or
-hand it the implementer's transcript. The model that wrote the code grades its
-own homework generously, and a grader that reads the author's rationalisations
-inherits the same problem. The isolation is enforced by the filesystem here
-rather than by asking nicely, and that is the only reason it holds.
+Exit code 3 means the diff was empty: nothing changed. Report it as-is; it usually
+means the implementer failed silently.
 
-If `<REPO>` is not a git repo, the script needs `--files a.ts,b.ts` instead and
-the reviewer sees full file text rather than a diff — it will flag that
-limitation in its own verdict.
+## Second opinion
 
-Exit code 3 means the diff was empty: nothing was actually changed. Report that
-as-is; it usually means the implementer failed silently.
-
-## A second opinion is cheap
-
-Review is the cheapest lane — median 1.7 min, read-only, isolated. Two reviewers
-on different models found 13 issues in this repo with one overlap, so a single
-review is not "most" of the coverage.
-
-When the diff touches concurrency, state machines, auth, money or data
-migration, run a second with `--engine terra` in parallel and report the union.
-Say which model produced which finding; they fail differently and it matters
-when you are deciding what to trust.
-
-`--engine grok` (grok-4.6, high effort) is another second opinion worth
-running alongside terra — it is a genuinely different model family from every
-codex profile, not just a different profile of the same one.
+When the diff touches concurrency, state machines, auth, money or data migration,
+run a second review in parallel with `--engine terra` and report the union, saying
+which model produced which finding. `--engine grok` (grok-4.6, high) is another
+worthwhile second opinion: a different model family from every codex profile.
 
 ## Returning
 
-Your final message IS the return value. Return the verdict verbatim — all five
-sections (unmet plan requirements, defects, scope creep, missing checks, one-line
-verdict), with each finding's `Critical:` / `Required:` / `Nit:` prefix intact.
-The prefixes are how the orchestrator decides what blocks; stripping them is the
-same as filtering findings.
+Your final message IS the return value: the verdict verbatim, all five sections
+(unmet plan requirements, defects, scope creep, missing checks, one-line verdict),
+each finding's `Critical:` / `Required:` / `Nit:` prefix intact. The prefixes are
+how the orchestrator decides what blocks. Do not soften, rebut or filter; the
+orchestrator decides what to act on.
 
-Do not soften it, do not rebut it, do not filter findings you think are wrong.
-The orchestrator decides what to act on. Your opinion of the review is not part
-of the review.
+## Timeouts
 
-## Timeouts — read this before dispatching
+The Bash tool caps a call at **10 minutes**. A longer dispatch is killed mid-flight
+while codex keeps going.
 
-The Bash tool caps a single call at **10 minutes**. A dispatch that runs longer
-is killed mid-flight while codex keeps going, which is how a dispatcher ends up
-polling an output file for six minutes and then re-dispatching on top of a run
-that never died.
-
-**Short reviews run in the foreground.** A review expected to exceed roughly 9
-minutes (heavy diff, big repo, or terra at max) runs in the background with
-`--timeout 2700` and the bounded completion protocol below.
-
-**If the Bash call times out anyway:**
-
-1. Do NOT re-dispatch. A second codex process may now be racing the first.
-2. Do NOT poll in a loop. Each poll is a turn, and turns are the cost.
-3. Report the failure, name the `raw:` jsonl path from the run, and STOP. A
-   timed-out lane is a `FAILED` item for `/cstack:resolve`, not a
-   cue to improvise.
-
-**If the review genuinely needs longer than 10 minutes**, make one separate Bash
-tool call with `run_in_background: true` and the real timeout:
+A review expected to exceed roughly 9 minutes (heavy diff, big repo, or terra at
+max) runs in a separate Bash call with `run_in_background: true`; do not run the
+540-second command in the foreground:
 
 ```bash
 # Bash tool call: run_in_background: true
@@ -112,50 +78,40 @@ tool call with `run_in_background: true` and the real timeout:
   "<what to pay special attention to>"
 ```
 
-The harness callback is the completion signal. If it is lost, use
-`lane-status.sh` for at most three checks; exit 1 means `DONE`, exit 2 means
-`DEAD` and must be reported as `FAILED`, exit 3 means `UNKNOWN`: liveness could
-not be determined; do not conclude the lane is dead, and still running after the
-third check is also `FAILED`. Never re-dispatch it.
+The harness callback is the completion signal. If the Bash call times out anyway:
+do not re-dispatch (a second codex process may be racing the first), do not poll in
+a loop, report the failure with the `raw:` jsonl path from the run, and stop. A
+timed-out lane is a `FAILED` item for `/cstack:resolve`.
 
 ## If you end up waiting
 
-You should rarely wait — a dispatch under the cap either returns or errors. But
-if you do, **never wait on a file.** `.last` is written only on success, so
-"no file yet" and "died twelve minutes ago" look identical. Agents have sat
-stuck for 27 minutes on engines that had already exited, burning 50k tokens.
-
-Ask the process instead:
+Never wait on a file: `.last` is written only on success, so "no file yet" and
+"died twelve minutes ago" look identical (agents have sat stuck 27 minutes, 50k
+tokens, on engines that had already exited). Ask the process:
 
 ```bash
 "$SCRIPTS/lane-status.sh"          # newest dispatch, or pass a run id
 ```
 
-- **exit 0 RUNNING** — genuinely working. Keep waiting only if under your cap.
-- **exit 1 DONE** — finished; read the named result file.
-- **exit 2 DEAD** — no process, no result. It is over. Report `FAILED` and stop.
+- **exit 0 RUNNING** — keep waiting, under your cap.
+- **exit 1 DONE** — read the named result file.
+- **exit 2 DEAD** — no process, no result. Report `FAILED` and stop.
+- **exit 3 UNKNOWN** — liveness could not be determined; do not conclude the lane
+  is dead.
 
-Three checks maximum, `sleep 300` between them, then `FAILED` regardless.
+At most three checks, `sleep 300` between them; still running after the third is
+`FAILED`. Never re-dispatch on top of a RUNNING lane.
 
-**Never hand-roll a wait loop.** This one is real, observed running for over
-half an hour against zero dispatches:
+Never hand-roll a wait loop. This one ran over half an hour against zero dispatches:
 
 ```bash
 while pgrep -f codex-run > /dev/null; do sleep 30; done   # NEVER EXITS
 ```
 
-`pgrep -f` matches the loop's *own command line*, which contains the string it
-is searching for. It finds itself, so the condition is always true. Several such
-loops also find each other and become mutually immortal. The same applies to
-`until [ -s file ] && grep -q FINAL file` — it waits forever for content that a
-killed dispatch will never write.
-
-`lane-status.sh` exists precisely because this is hard to get right: it skips
-its own pid, its parent, and any other status check before deciding anything is
-alive. Use it. Do not write your own.
-
-Never re-dispatch on top of a RUNNING lane: the original keeps writing and you
-get two engines racing, which is how a tree gets corrupted.
+`pgrep -f` matches the loop's own command line, so the condition is always true
+(several such loops also find each other). `until [ -s file ] && grep -q FINAL file`
+waits forever for content a killed dispatch never writes. `lane-status.sh` skips
+its own pid, its parent and other status checks.
 
 ## The receipt is mandatory
 
@@ -165,13 +121,10 @@ get two engines racing, which is how a tree gets corrupted.
 — codex/gpt-6.1-sol · effort=medium · isolated · raw: /path/run.jsonl
 ```
 
-**Return that line verbatim in your report.** A report without it is discarded
-by the orchestrator, no argument entertained. This is not bookkeeping: it is the
-only mechanical proof that a codex lane actually ran rather than you doing the
-work yourself after a failed dispatch. That substitution has happened in a real
-run, and judgment caught it — the receipt makes catching it automatic.
+Return that line verbatim. A report without it is discarded: it is the only
+mechanical proof a codex lane ran rather than you doing the work yourself after a
+failed dispatch (which has happened).
 
-If the dispatch failed, say so and stop. Report the exit code and the stderr
-tail. **Do not investigate, implement, or review inline as a substitute.** A
-failed dispatch is a `FAILED` item for `resolve` to pick up, not a cue to
-improvise.
+If the dispatch failed, report the exit code and the stderr tail and stop. Do not
+investigate, implement or review inline as a substitute; a failed dispatch is a
+`FAILED` item for `resolve`.
