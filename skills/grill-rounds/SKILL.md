@@ -1,25 +1,24 @@
 ---
 name: grill-rounds
-description: Bounded adversarial grilling of a written plan, invoked by charles-flow for risky plans (money, auth/security, migrations or destructive changes, 10+ requirements). Round 1 is a codex adversary attacking the plan while Claude answers from source; remaining contradictions come back as one batched human round. Usable unattended. User requests to grill a plan belong to lg-dev:lg-grill, not this skill.
+description: Batch-grill a written plan, spec or design doc before building it. Use when the user says grill this, poke holes in this, stress-test this plan, red-team this plan, what did I miss, is this plan solid, find the gaps, or play devil's advocate; and when charles-flow invokes it for risky plans (money, auth/security, migrations or destructive changes, 10+ requirements). Runs up to five unattended rounds where an adversary attacks the plan and every attack is settled from source, then asks the user once, in one batch, only what the agent could not answer. Usable unattended. Not for reviewing a code diff.
 ---
 
 # grill-rounds
 
-`grill-me` interviews the user until shared understanding, one question at a
-time, unbounded. That is the right shape when the user is sitting there and the
-subject is their intent. It is the wrong shape when the plan is already written
-and most of the open questions are answerable from the codebase — you burn the
-user's attention on facts you could have looked up.
+`grill-me` interviews the user one question at a time, unbounded: right when the
+subject is their intent, wrong when the plan is written and most open questions are
+answerable from the codebase. This skill is the bounded version, front-loaded with
+an adversary.
 
-This is that skill, bounded and front-loaded with an adversary.
+**Input:** a written plan file. If the plan only exists in chat, write it to a file
+first.
 
-**Input:** a written plan file. If there isn't one, write it first — you cannot
-grill a plan that only exists in the conversation, and neither can the adversary.
+## Rounds 1-5 — unattended adversary
 
-## Round 1 — automated adversary
-
-Issue a direct background `codex-run --lane explore` call (read-only, so it
-cannot "fix" anything) with:
+Each round, issue a direct background `codex-run --lane explore` call (read-only; it
+cannot edit) with the prompt below, plus the plan path and a "Prior rounds" list
+(the resolved/changed items so far, or "none"). Without codex, a read-only
+general-purpose subagent works.
 
 > Attack this plan. You are trying to find the reason it fails, not to improve
 > it. Produce a numbered list of:
@@ -36,70 +35,52 @@ cannot "fix" anything) with:
 >
 > For each item, say what evidence would settle it, with `file:line` where the
 > answer is in the repo. Do not propose a rewrite. Do not ask questions — there
-> is nobody to answer them.
+> is nobody to answer them. Do not edit any file. Items settled in "Prior rounds"
+> are not new; raise them again only with new evidence.
 
-The last three come from `grill-with-docs`, which is available to codex as a
-skill. **Do not tell the lane to load `grill-me` or `grill-with-docs`**: both
-are interview skills that ask one question at a time and wait for a human. In an
-unattended dispatch the lane would stall on questions nobody will answer. Take
-their checkable parts, as above, and leave the interview to round 2 where a
-human actually is present.
+Do not tell the lane to load `grill-me` or `grill-with-docs`: they are interview
+skills and the unattended lane would stall waiting for a human. The last three
+bullets are the checkable parts of `grill-with-docs`.
 
-Then, for each item it raises, **answer it yourself from source** — read the
-files, run the command, check the API. Every item ends in one of three states:
+Then answer each item yourself from source (read the files, run the command, check
+the docs or API). Every item ends in one state:
 
-- **Resolved** — you found the answer; record it with `file:line`.
+- **Resolved** — record the answer with `file:line`.
 - **Plan changed** — the attack landed; amend the plan and note what changed.
-- **Needs the user** — genuinely a matter of intent, priority, or outside
-  knowledge. This is the only category that survives to round 2.
+- **Needs the user** — intent, priority, spend, or outside knowledge. A fact you
+  could look up never goes here; if nearly all items land here, you are being lazy
+  about verification.
 
-Most items should resolve here. If nearly everything is landing in "needs the
-user", you are being lazy about verification, not thorough about grilling.
+Stop early when a round raises nothing new.
 
-## Round 2 — surface everything the machine could not settle
+## Round 6 — one batch to the user
 
-Round 1 ran without a human on purpose. Round 2 is where that debt gets paid:
-collect **everything** that survived and put it to the user in **one message**.
-Not one at a time — that shape is for open-ended discovery, and this is a fixed
-list whose extent you already know.
-
-**Record each one first**, so the collection survives a dead session:
+Collect everything that survived and put it to the user in **one message**, not one
+at a time. Record each first, so the list survives a dead session:
 
 ```bash
 "$SCRIPTS/run-state.sh" item "$(pwd)" BLOCKED-HUMAN "<the question, in one line>"
 ```
 
-Then present them together. For each item, three things — and the middle one is
-what makes this worth the user's attention:
+For each item: the question; **why the adversary could not settle it** (not in the
+code, intent or priority, or two defensible answers with no way to choose from
+source); your recommendation with reasoning. An item that only needs a repo fact
+does not belong here; a list padded with lookups teaches the user to skim it.
 
-1. the question
-2. **why the adversary could not settle it** — not in the code, a matter of
-   intent or priority, or two defensible answers with no way to choose from
-   source
-3. your recommendation, with reasoning
-
-An item that only needs a fact from the repo does not belong here. Go and read
-the repo. This list is for things that genuinely require the user, and its
-credibility depends on that: a list padded with lookups teaches them to skim it.
-
-**Nothing proceeds to implementation while an item is unanswered.** If the user
-goes quiet, the run stays open with its `BLOCKED-HUMAN` items and
-`/cstack:resolve` picks them up later — that is exactly what that
-state is for.
-
-Format each as:
+Nothing proceeds to implementation while an item is unanswered. If the user goes
+quiet, the run stays open with its `BLOCKED-HUMAN` items for `/cstack:resolve`.
 
 ```
 ❓ Q1 — <title>: <question, with the options if there are options>
 ➡️ <your recommendation, and why>
 ```
 
-## Round 3 — only if the answers reshape the plan
+## Round 7 — only if the answers reshape the plan
 
-If round 2's answers invalidate something structural, amend the plan and run one
-more batched round on the newly-exposed decisions. If they only fill in details,
-stop at two. Three is the ceiling: a fourth round means the plan is wrong at a
-level grilling cannot fix — say so and go back to brainstorming.
+If round 6's answers invalidate something structural, amend the plan and run one
+more batch on the newly exposed decisions; if they only fill in details, stop. Seven
+is the ceiling: another means the plan is wrong at a level grilling cannot fix, so
+say so and reopen the ask with the user.
 
 ## Verdict
 
@@ -108,13 +89,11 @@ Append to the plan file:
 ```markdown
 ## Grill verdict — YYYY-MM-DD
 
-- Rounds: N
+- Rounds: N (self) + N (user)
 - Attacks raised: N — resolved from source: N, changed the plan: N, escalated: N
 - Plan changes: <one line each>
 - Accepted risks: <what we know is unhandled, and why that is acceptable>
 - Unresolved: <anything still open, and what would settle it>
 ```
 
-An empty "accepted risks" section on a non-trivial plan means the grill was
-theatre. Every real plan has something it deliberately does not handle; naming
-it is the difference between a known limitation and a future incident.
+Recount the numbers before writing them. An empty "accepted risks" on a non-trivial plan means the grill was theatre.

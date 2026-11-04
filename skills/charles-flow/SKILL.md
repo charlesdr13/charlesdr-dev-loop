@@ -1,13 +1,13 @@
 ---
 name: charles-flow
-description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a git repo, in Claude Code, Codex or Grok. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. In Claude Code its own subagents explore and implement by default (codex, grok or omp only when asked; luna under Codex, grok under Grok); an isolated reviewer grades the diff against the plan, and only findings a run proves get fixed. Not for small asks: a quick edit is just done.
+description: Use FIRST, before brainstorming, debugging or TDD skills, for any bug report, feature, UI pass, or build/fix-all request in a git repo, in Claude Code, Codex or Grok. Triggers include "parallel agents", "sonnet fleet", "you be the orchestrator and reviewer", "fix all of these", "sdr flagged", "use the flow", "dispatch a fleet". Plan, implement, one isolated review, green, sign-off, close. In Claude Code its own subagents explore and implement by default (codex, grok or omp only when asked); an isolated reviewer grades the diff against the plan and only findings a run proves get fixed. Not for small asks: a quick edit is just done.
 ---
 
 # The flow
 
 Default loop: **plan, implement, one isolated review, green, close.** The
-orchestrator is a strong model; it reads code and makes small edits itself. Lanes
-exist for breadth and parallelism, not as a toll booth.
+orchestrator reads code and makes small edits itself. Lanes exist for breadth and
+parallelism, not as a toll booth.
 
 Small asks skip the flow. `SCRIPTS="$(dirname "$(readlink -f "$(command -v codex-run)")")"`
 (no `codex-run` on PATH: stop, "run cstack's scripts/install-skills.sh"). No `.charles.toml`?
@@ -29,30 +29,30 @@ Feature, debug, polish and fast-flow run the loop below; each command says only 
 
 ## The loop
 
-1. **Understand.** Read the code yourself. Dispatch explore lanes only for broad,
-   unfamiliar areas: several in parallel, each on a different angle, in the
-   background. Baseline green before changing anything:
-   `"$SCRIPTS/green.sh" "$(pwd)"`. Never attribute an
-   existing red to your change.
+1. **Understand.** Read the code yourself. Explore lanes only for broad,
+   unfamiliar areas: several in parallel, one angle each, in the background.
+   Baseline green first: `"$SCRIPTS/green.sh" "$(pwd)"`. An existing red is not
+   yours.
 2. **Anchor, then plan.** If the ask leaves a real fork (scope, user-visible
-   behaviour, an irreversible choice), ask at most 3 questions in one message, each
-   with your recommended default, then carry on with the defaults without waiting;
-   fold late answers into the plan. One plan, `docs/specs/YYYY-MM-DD-<topic>.md`, written as checkable
-   requirements, not steps (see Plans). Do not also write an implementation plan.
+   behaviour, an irreversible choice), or is genuinely open, ask at most 3
+   questions in one message, each with your recommended default, then carry on
+   with the defaults without waiting; fold late answers into the plan. One plan,
+   `docs/specs/YYYY-MM-DD-<topic>.md`, as checkable requirements (see Plans); no
+   separate implementation plan.
 3. **Open the run.** `run-state.sh init "$(pwd)" <flow> "<goal>" --spec docs/specs/<plan>.md`.
 4. **Implement.** Small, obvious edits: do them yourself. Anything bigger goes to
    implement lanes, one per disjoint slice, in parallel worktrees when there are
    2 or more (see Parallel). Dispatch with `--req <IDs>`.
-5. **Review once.** One isolated review against the plan. At most 2 rounds:
+5. **Review once.** One isolated review against the plan, at most 2 rounds:
    round 2 re-checks only round 1's Critical and Required findings. A GAPS verdict
-   that only asks for more tests becomes a `DEFERRED` item, not another round. A
-   third round only for money, auth/security or data-loss changes. Never feed the
-   reviewer the implementer's output.
+   that only asks for more tests becomes a `DEFERRED` item. A third round only for
+   money, auth/security or data-loss changes. Never feed the reviewer the
+   implementer's output.
    **Prove before fixing:** run each `Critical:`/`Required:` finding's `Repro:` in the
-   implemented tree. Fix only proven ones (the run shows the failure); round 2 re-checks
-   only those. Unproven ones become `DEFERRED "unproven: <finding>"`. Check from source
-   instead: findings with no `Repro:` line (a missing requirement or check), and any
-   `Critical:` on money, auth/security or data loss. Sign-off: `review: <n> proven, <m> dropped`.
+   implemented tree. Fix only proven ones; unproven ones become
+   `DEFERRED "unproven: <finding>"`. Check from source instead: findings with no
+   `Repro:` line (a missing requirement or check), and any `Critical:` on money,
+   auth/security or data loss. Sign-off: `review: <n> proven, <m> dropped`.
    In a no-mistakes repo (`git remote get-url no-mistakes` succeeds) skip this
    review: run `green.sh` first, then commit on a feature branch and push through
    `/no-mistakes` with the plan's goal and requirements as `--intent`; its review,
@@ -64,13 +64,11 @@ Record `run-state.sh phase` at implement, review and green, with real output
 (`47 passed, 0 failed`, not "tests pass"). A discovery you cannot finish now is
 `run-state.sh defer "$(pwd)" "<text>"`, not a new dispatch.
 
-Add on demand, not by default:
+On demand, not by default:
 
 - **Grill** (`grill-rounds`): money, auth/security, migrations or destructive
   changes, 10+ requirements, or when the user asks. A missing grill verdict only
   warns; record `Grill waived: <reason>` in the plan when you skip it.
-- **Brainstorm** (`superpowers:brainstorming`): only when the ask is genuinely open
-  and the user is present. End it by writing the plan, not `writing-plans`.
 - **Two parallel reviewers** (sol and terra): only for security- or
   concurrency-sensitive work. They overlap little; take the union.
 
@@ -79,7 +77,7 @@ Add on demand, not by default:
 Write requirements: what must be true when done, which files are in scope, what
 must keep working (the green command), and a nearby file to copy conventions from.
 Checkable against a diff ("tighten card spacing"), never a step ("edit Card.tsx").
-The reviewer grades the diff against this plan, so write it once and well.
+The reviewer grades the diff against this plan.
 
 Requirement IDs are top-level bullets: `-`, optionally `[ ]`, `[x]`, or `[X]`, then `**ID` terminated by `**`, whitespace, or a dot followed by a non-digit or end of line. Example: `- [ ] **R1** — ...`. IDs below `## Sign-off` do not count for dispatch.
 
@@ -134,20 +132,20 @@ picks luna under Codex and grok under Grok when no engine is chosen.
 
 ## Dispatching codex, grok or omp lanes
 
-The Bash tool caps a call at 600s, but over half of real lane runs take longer.
-Explore and implement therefore run as a Bash call with `run_in_background: true`:
+The Bash tool caps a call at 600s, and over half of real lane runs take longer, so
+explore and implement run as a Bash call with `run_in_background: true`:
 
 ```bash
 codex-run --lane <lane> --dir <repo> --timeout 2700 "<task>"
 ```
 
-Do not redirect output, poll, or wrap it in a loop; the harness re-invokes you
-when the process exits. For a fan-out, issue one background call per lane. A review
-expected under about 9 minutes may run foreground with `--timeout 540`; a longer
-one runs in the background with `--timeout 2700`. Never shorten a task to fit the
-cap, and never re-dispatch on top of a RUNNING lane. Use `--fast` only for scoped
-lookups; keep `max` where a wrong answer is expensive. Explorers: 3, at most 5. `codex-run` is on PATH (a SessionStart hook
-links it); never hardcode a path into a checkout.
+No output redirect, polling or wrapper loop; the harness re-invokes you when the
+process exits. A fan-out is one background call per lane. A review expected under
+about 9 minutes may run foreground with `--timeout 540`; a longer one runs in the
+background with `--timeout 2700`. Never shorten a task to fit the cap, and never
+re-dispatch on top of a RUNNING lane. `--fast` only for scoped lookups; keep `max`
+where a wrong answer is expensive. Explorers: 3, at most 5. `codex-run` is on PATH (a
+SessionStart hook links it); never hardcode a path into a checkout.
 
 `--base <ref>` grades `<ref>..working-tree`; required once `HEAD` has moved, or the
 reviewer sees an empty diff.
@@ -195,7 +193,7 @@ green check, so `--no-green` is refused. With a run open, each chunk declares it
 chunk.
 
 Go serial for one chunk, a count below the threshold, undeclared overlap, an invalid manifest, or no `treehouse`. A batch that edits the flow's own
-machinery (`parallel-chunks.sh`, `codex-run.sh`, anything the dispatcher runs) MUST
+machinery (`parallel-chunks.sh`, `codex-run.sh`, anything the dispatcher runs) must
 be serial: Bash reads a script lazily by byte offset, so rewriting a running
 dispatcher kills it.
 
@@ -240,12 +238,13 @@ outcome to the committed plan; `.charles/` (run state, logs) is gitignored.
 
 ## Per-kind notes
 
-- **Debug.** Reproduce and build the feedback loop first (`diagnosing-bugs`); confirm
-  the cause from source, then plan. Review asks "does this fix the cause and nothing else".
+- **Debug.** `commands/debug.md`: build the red loop on the exact symptom, rule out
+  stale code or config, confirm the cause from source, then plan. Review asks "does
+  this fix the cause and nothing else".
 - **Polish.** One explore pass for gaps, must-haves and quality-of-life wins, one
   lens per call. Take the shortlist to the user, plan the survivor.
 - **UI.** `/cstack:ui`. This one is a **router, not a flow**: `impeccable` owns taste. Route to
-  ONE impeccable command; one explore lane for the mechanical audit only (token drift,
+  one impeccable command; one explore lane for the mechanical audit only (token drift,
   off-scale spacing, dead styles with `file:line`); taste disagreements become
   `BLOCKED-HUMAN`. Contrast, focus, tab order and CLS must not regress; review for
   scope creep. Screenshots go to the user, never to a lane.
@@ -256,5 +255,5 @@ outcome to the committed plan; `.charles/` (run state, logs) is gitignored.
 
 ## Failure handling
 
-**Never fall back to doing a failed lane's work inline** (your own step-4 edits are
-not this): report it and let the user decide. Cap green-fix cycles at 3, then `FAILED`, stop.
+Never do a failed lane's work inline (your own step-4 edits are not this): report
+it and let the user decide. Cap green-fix cycles at 3, then `FAILED`, stop.

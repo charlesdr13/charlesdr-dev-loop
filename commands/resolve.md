@@ -10,33 +10,27 @@ Continue the most recent unclosed run. `--list` to choose a different one.
 ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh show "$(pwd)" $ARGUMENTS
 ```
 
-That prints the run's phases with their proof output, its open items, the
-rollback command, and the mechanical dispatch log — including any lane that
-failed, which is the one thing nothing else tracks.
+That prints the run's phases with proof output, open items, the rollback command,
+and the mechanical dispatch log, including any failed lane (which nothing else
+tracks). No open run: say so and stop; do not invent one.
 
-If there is no open run, say so and stop. Do not invent one.
-
-Read the `next expected:` line after the phase list. It identifies where the
-run stopped and the legal next phase(s); treat it as advisory guidance for the
-resume, alongside the recorded proof and open items.
+The `next expected:` line after the phase list shows where the run stopped and the
+legal next phase(s); treat it as advisory.
 
 ## 2. Work the items, in this order
 
-**`BLOCKED-HUMAN` first.** These are usually two minutes of the user's time and
-they are blocking everything downstream. Surface them before anything else, even
-though they are not yours to solve. In the run this feature was built for, the
-whole 17-minute loop ended with a colleague still waiting six hours for an answer
-only the user had.
+**`BLOCKED-HUMAN` first.** Usually minutes of the user's time, and they block
+everything downstream (a colleague once waited six hours on one). Surface them
+before anything else.
 
-**`FAILED` next.** A lane died, so the work is genuinely incomplete. **Confirm
-before re-dispatching** — a stale run may predate changes in the repo, and
-re-running is real money at luna-at-max. Ask, then dispatch.
+**`FAILED` next.** A lane died; the work is incomplete. Confirm with the user
+before re-dispatching: a stale run may predate repo changes, and re-running costs
+real money at luna-at-max.
 
-**`PENDING-DECISION`** — put the decision to the user with your recommendation.
-Record the answer, then act on it.
+**`PENDING-DECISION`**: put it to the user with your recommendation, record the
+answer, then act.
 
-**`DEFERRED`** — report only. These were skipped deliberately; do not quietly
-un-defer them because they are easy.
+**`DEFERRED`**: report only; do not quietly un-defer.
 
 ## 3. Close, or leave it open
 
@@ -47,8 +41,6 @@ phase:
 ${CLAUDE_PLUGIN_ROOT}/scripts/run-state.sh close "$(pwd)" "<one paragraph: what shipped, what did not, what was decided>" --spec docs/specs/<the plan>.md
 ```
 
-A run whose items are all resolved but which died mid-flow is **abandoned, not
-finished** — leave it open. Those are the ones worth seeing again.
-
-If new work comes out of resolving, that is a new run, not an extension of this
-one. Start it with the appropriate flow.
+A run with all items resolved that died mid-flow is abandoned, not finished: leave
+it open. New work that comes out of resolving is a new run under the appropriate
+flow.

@@ -14,6 +14,6 @@ plan the survivor, then the normal loop. Implement per the skill:
 codex-run --lane implement --dir <repo> --req <R1,A3> --timeout 2700 "<task>"
 ```
 
-Review for scope creep, the characteristic failure of polish work.
+Review for scope creep, polish's characteristic failure.
 
 No `.charles.toml`: stop and offer `/cstack:init`.

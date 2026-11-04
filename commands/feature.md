@@ -4,8 +4,7 @@ description: Feature flow — the lean loop (plan, implement, one review, green,
 
 Run the **lean loop** from the `charles-flow` skill on: $ARGUMENTS
 
-Differs from the default only here: write the plan first (brainstorm only if the
-ask is genuinely open and the user is present; grill only for money,
+Differs from the default only here: write the plan first (grill only for money,
 auth/security, migrations or 10+ requirements). Implementation follows the skill's
 Parallel section: `parallel-chunks.sh` for a valid `.chunks.json` with
 `parallel_min_chunks` or more entries, otherwise one implement lane in a Bash call
