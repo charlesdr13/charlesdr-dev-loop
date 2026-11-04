@@ -345,6 +345,8 @@ fi
 
 # --- 2. a plan to grade against -----------------------------------------------
 specs=$(ls "$DIR"/docs/specs/*.md 2>/dev/null | wc -l)
+# A worktree run keeps its spec in the worktree, outside the run root.
+[ "$specs" -eq 0 ] && [ -n "$closing_spec" ] && [ -f "$closing_spec" ] && specs=1
 if [ "${impl:-0}" -gt 0 ] && [ "$specs" -eq 0 ]; then
   say_bad "code was implemented but docs/specs/ is empty — the review lane has nothing to judge against"
 elif [ "$specs" -gt 0 ]; then
